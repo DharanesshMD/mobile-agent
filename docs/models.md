@@ -15,7 +15,7 @@ Checked 27 Oct 2026 with the team's key: `GET /v1/models` returns all nine model
 | SAM 3.1 | `sam-3.1` | Segmentation via `/v1/responses`. Possible UI grounding aid. |
 | Muse Spark Open / Muse Glimmer | open weights | Run on Baseten/Modal (`meta-models/muse-spark-open-1026` on Baseten) for the open-weight bonus. |
 
-Context window is 1,048,576 tokens for Wonder and Spark. Pricing is on the Pricing and rate limits page (not read yet).
+Context window is 1,048,576 tokens for Wonder and Spark. Pricing: see below.
 No text-to-speech in the list, so spoken replies need another route (OS TTS on the client).
 
 ## Gotchas
@@ -33,3 +33,31 @@ Both models returned valid JSON, and the taps (scaled x2) opened Battery on the 
 | muse-wonder-1.0 | 4.4 s | 972 | (270, 905) | Opened Battery, near the row center |
 
 One run each, so not a benchmark. Plan: start with Wonder for the agent loop, compare with Spark on a few screens.
+
+## Pricing and rate limits (dev.meta.ai/docs/pricing-rate-limits, read 27 Oct 2026)
+
+USD per 1M tokens, standard mode:
+
+| Model | Cached input | Input | Output |
+|---|---|---|---|
+| muse-wonder-1.0 | $0.20 | $4.00 | $20.00 |
+| muse-spark-1.3 / 1.2 / 1.1 | $0.15 | $1.25 | $4.25 |
+| muse-spark-1.3 / 1.2 -contributor | $0.002 | $0.10 | $0.20 |
+
+Other: web search grounding $2.50 per 1,000 queries; Muse Image $0.01 per image; Muse Voice Transcribe $0.18 per hour of audio;
+SAM 3.1 $2.50 per 1,000 images. Rate limits are per team: Wonder and Spark 3,000 RPM and 4M TPM; contributor Spark 150 RPM;
+Muse Voice Transcribe 256 concurrent streams.
+
+Measured agent cost: about 1.5K input tokens per step with a 540px screenshot plus the UI list, so Wonder is roughly $0.007 per step
+and Spark about $0.002. The $150 credit is on the order of 20,000 Wonder steps.
+
+## Agent loop results (27 Oct 2026, Android 14 emulator)
+
+| Task | Model | Result | Steps |
+|---|---|---|---|
+| Battery percentage via Settings | muse-wonder-1.0 | Done, 100% (correct) | 5 |
+| Android version + security patch (About phone) | muse-wonder-1.0 | Done, 14 and 2023-09-05, matches `getprop` | 6 |
+| Same task | muse-spark-1.3 | Failed: oscillated scrolling up and down, never tapped the "Android version" row (two runs, 12 and 14 steps) | max |
+
+Conclusion for now: use Wonder as the default agent model. Spark 1.3 at `minimal` reasoning is cheaper but loops, so it is better
+suited to simple one-screen decisions or text-only work. One run per cell, not a benchmark.

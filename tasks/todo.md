@@ -9,5 +9,6 @@
 - [ ] Cloud spike later: Redroid or Cuttlefish on a Linux host
 
 ## Next
-- [ ] Agent loop with Meta model (observe, plan, act, verify)
+- [x] Agent loop with Meta model (observe, plan, act, verify): agent/loop.py, tested live on emulator
+- [ ] Harden loop: memory of seen info, better stuck recovery, richer actions (long press, text field focus)
 - [ ] Web chatbot with live device view

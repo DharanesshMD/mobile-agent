@@ -8,3 +8,6 @@ __pycache__/
 *.apk
 *.img
 spike/out/
+runs/
+.venv/
+*.egg-info/

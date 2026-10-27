@@ -1,0 +1,9 @@
+[project]
+name = "mobile-agent"
+version = "0.1.0"
+description = "Always-on proactive agent that operates a cloud Android device with Meta models"
+requires-python = ">=3.11"
+dependencies = ["pillow>=10"]
+
+[tool.setuptools]
+packages = ["agent"]
