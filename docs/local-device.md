@@ -1,0 +1,37 @@
+# Local Android device (Mac, Apple Silicon)
+
+Day-1 dev device: the official Android emulator, headless, controlled over ADB.
+The agent layer only talks ADB, so this can later be swapped for Redroid or Cuttlefish on a cloud host.
+
+## One-time setup (done on 27 Oct 2026)
+
+SDK root: `/opt/homebrew/share/android-commandlinetools` (installed via Homebrew command-line tools).
+
+```bash
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+sdkmanager --sdk_root=$ANDROID_HOME "emulator" "system-images;android-34;google_apis;arm64-v8a"
+avdmanager create avd -n agent34 -k "system-images;android-34;google_apis;arm64-v8a" -d pixel_6
+```
+
+## Run
+
+```bash
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+export PATH=$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH
+emulator -avd agent34 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot &
+adb wait-for-device   # then poll: adb shell getprop sys.boot_completed  (prints 1 when ready)
+python3 spike/probe.py spike/out
+```
+
+First boot took about a minute. Device: Android 14, 1080x2400.
+
+## Spike result
+
+`spike/probe.py` observes (screenshot + UI tree) and acts (tap, key, intent launch) over ADB, verified on Settings.
+Lesson for the agent loop: UI transitions lag, so wait and re-observe after every action before judging success.
+
+## Notes
+
+- Disk was 28 GB free at setup; the emulator and image use a few GB.
+- `adb shell monkey` failed to launch Settings (exit 251). Launch by intent with `am start -a` instead.
+- Cloud host (Redroid/Cuttlefish) is still unverified and deferred.
