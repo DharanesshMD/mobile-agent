@@ -1,4 +1,4 @@
-"""Chat-first API: bots, messages, live events, action cards, library, and the shared computer."""
+"""Chat-first API: bots, messages, live events, action cards, library, and the shared phone."""
 import asyncio
 import json
 import re
@@ -53,7 +53,7 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch) -> None:
     def bot_state(bot_id: str):
         b = bot_or_404(bot_id)
         return {"bot": b, "messages": db.messages(bot_id, 200), "last_seq": hub.last_seq(bot_id),
-                "jobs": db.jobs(bot_id, 10), "computer": jobs.state()}
+                "jobs": db.jobs(bot_id, 10), "mobile": jobs.state()}
 
     @app.post("/api/bots/{bot_id}/messages", dependencies=[Depends(auth)])
     def post_message(bot_id: str, body: NewMessage):
@@ -156,11 +156,11 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch) -> None:
             raise HTTPException(404, "unknown item")
         return FileResponse(item["path"], media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
-    @app.get("/api/computer/state", dependencies=[Depends(auth)])
-    def computer_state():
+    @app.get("/api/mobile/state", dependencies=[Depends(auth)])
+    def mobile_state():
         return jobs.state()
 
-    @app.post("/api/computer/control", dependencies=[Depends(auth)])
-    def computer_control(body: Control):
+    @app.post("/api/mobile/control", dependencies=[Depends(auth)])
+    def mobile_control(body: Control):
         jobs.take_control() if body.action == "take" else jobs.release_control()
         return jobs.state()

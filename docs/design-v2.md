@@ -23,7 +23,7 @@ I could not transcribe the audio (Whisper is not installed), so this design is b
 
 1. The owner writes or speaks a request in a bot's chat (web or Android).
 2. The orchestrator (Muse Spark 1.3) answers directly if it can: reasoning, drafting, questions, memory lookups.
-3. If the task needs a phone, it calls the `computer_task` tool. That creates a background job, wakes the cloud phone if it sleeps, and returns at once.
+3. If the task needs a phone, it calls the `mobile_task` tool. That creates a background job, wakes the cloud phone if it sleeps, and returns at once.
    The chat shows "Working on it" and a live status line. The owner can keep chatting or leave.
 4. The Mobile Worker (Muse Wonder, the existing graph) drives the phone: observe, plan, act, verify. Only this worker uses Wonder.
 5. When the worker needs something it cannot get from the screen, it pauses and sends a typed request to the orchestrator. The chat shows it as an
@@ -52,7 +52,7 @@ Tools the orchestrator knows (each has a name, description and JSON schema in th
 
 | Tool | Purpose |
 |---|---|
-| `computer_task(goal, app_hint)` | Start a background phone job. Returns a job id. |
+| `mobile_task(goal, app_hint)` | Start a background phone job. Returns a job id. |
 | `ask_user(kind, question, options, field)` | Create an action item. Kinds: `choice`, `confirm`, `text`, `secret`, `file`, `otp`, `handoff`. |
 | `vault_list()` | Names and kinds of stored secrets only. Never values. |
 | `memory_search(query)` / `memory_save(text)` | RAG over past tasks, user facts and library notes. |
@@ -122,11 +122,11 @@ Goal: the container stays deployed, but the phone costs almost nothing when nobo
 
 `GET/POST /api/bots`, `GET /api/bots/{id}/messages`, `POST /api/bots/{id}/messages`, `GET /api/bots/{id}/events` (SSE: messages, status, action items, job state),
 `POST /api/action-items/{id}/answer`, `POST /api/vault` (and list/delete by label), `GET/POST /api/bots/{id}/routines`, `GET /api/bots/{id}/library`,
-`POST /api/computer/control` (take) and `/release`, `GET /api/computer/state` (ready, paused, waking). Existing run, pairing and cloud-account endpoints stay.
+`POST /api/mobile/control` (take) and `/release`, `GET /api/mobile/state` (ready, paused, waking). Existing run, pairing and cloud-account endpoints stay.
 
 ## 10. Milestones (deadline Wed 4 Nov, 9 PM ET; about 7 days left)
 
-1. Today and tomorrow: SQLite store, bots and messages, orchestrator graph on Spark with `computer_task` and `ask_user`, worker jobs in the background, SSE chat.
+1. Today and tomorrow: SQLite store, bots and messages, orchestrator graph on Spark with `mobile_task` and `ask_user`, worker jobs in the background, SSE chat.
 2. New web UI like the reference: sidebar of bots, chat with status lines and action cards, right panel with Details, Library and Mobile, full-screen take control.
 3. Vault with AES-GCM, secret input, sensitive-text detector, `type_secret`, approval cards.
 4. Sleep and wake lifecycle (docker backend plus local stub), routines scheduler, library artifacts.
@@ -146,7 +146,7 @@ Cut line if time runs short: Android client and routines go first; the demo can 
 
 ## 12. Build status (28 Oct 2026): milestones 1 and 2
 
-Done and verified: SQLite store (bots, messages, jobs, action items, library, FTS5 memory), orchestrator on Muse Spark 1.3 (JSON tool protocol: reply, computer_task,
+Done and verified: SQLite store (bots, messages, jobs, action items, library, FTS5 memory), orchestrator on Muse Spark 1.3 (JSON tool protocol: reply, mobile_task,
 ask_user, memory_search, memory_save), worker requests (`need_info`, answered from memory when possible, otherwise asked in chat, and remembered), background job
 manager with a FIFO queue on one shared phone, owner takeover that pauses the worker at the next step, cancel, restart recovery, library screenshots, SSE event stream,
 and the new web UI (bot sidebar, chat, action cards, Details/Library/Mobile, full-screen watch and take control). 49 automated tests pass.

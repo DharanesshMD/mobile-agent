@@ -140,7 +140,7 @@ class OrchestratorTurns(unittest.TestCase):
 
 class Jobs(unittest.TestCase):
     def test_phone_task_runs_in_background_and_reports(self):
-        spark = Spark(act(type="computer_task", goal="Read the Android version", say="On it"),
+        spark = Spark(act(type="mobile_task", goal="Read the Android version", say="On it"),
                       act(type="reply", text="The phone shows Android 14."))
         c, phone, bot, app = setup(spark, Worker(act(type="tap", element=0), act(type="done", answer="Android 14")))
         say(c, bot, "what android version is the phone?")
@@ -157,7 +157,7 @@ class Jobs(unittest.TestCase):
         self.assertIn("finished with status 'done'", spark.calls[-1][1][-1]["content"])
 
     def test_one_job_per_bot(self):
-        spark = Spark(act(type="computer_task", goal="g1", say="ok"), act(type="computer_task", goal="g2", say="ok"))
+        spark = Spark(act(type="mobile_task", goal="g1", say="ok"), act(type="mobile_task", goal="g2", say="ok"))
         c, _, bot, _ = setup(spark, Worker(act(type="handoff", reason="your turn")))
         say(c, bot, "first")
         until(lambda: open_card(c, bot))
@@ -166,13 +166,13 @@ class Jobs(unittest.TestCase):
         self.assertEqual(len(c.get(f"/api/bots/{bot}/jobs").json()), 1)
 
     def test_worker_confirm_card_and_takeover_rules(self):
-        spark = Spark(act(type="computer_task", goal="send it", say="ok"), act(type="reply", text="sent"))
+        spark = Spark(act(type="mobile_task", goal="send it", say="ok"), act(type="reply", text="sent"))
         c, phone, bot, _ = setup(spark, Worker(act(type="ask", question="Send the message?"), act(type="done", answer="sent")))
         say(c, bot, "send it")
         card = until(lambda: open_card(c, bot))
         self.assertEqual((card["meta"]["kind"], card["content"]), ("confirm", "Send the message?"))
         self.assertEqual(c.post("/api/device/tap", json={"fx": 0.5, "fy": 0.5}).status_code, 200)  # paused at a gate: allowed
-        self.assertEqual(c.get("/api/computer/state").json()["state"], "waiting")
+        self.assertEqual(c.get("/api/mobile/state").json()["state"], "waiting")
         c.post(f"/api/items/{card['meta']['item_id']}/answer", json={"approved": True})
         until(lambda: "sent" in texts(c, bot, "assistant"))
         done_card = next(m for m in msgs(c, bot) if m["kind"] == "action_item")
@@ -180,7 +180,7 @@ class Jobs(unittest.TestCase):
 
     def test_need_info_answered_from_memory_without_asking(self):
         db = Database(":memory:")
-        spark = Spark(act(type="computer_task", goal="fill form", say="ok"),
+        spark = Spark(act(type="mobile_task", goal="fill form", say="ok"),
                       act(type="answer_worker", value="Bangalore"), act(type="reply", text="filled"))
         worker = Worker(act(type="need_info", field="city", why="the form asks for a city"), act(type="done", answer="submitted"))
         c, _, bot, app = setup(spark, worker, db=db)
@@ -192,7 +192,7 @@ class Jobs(unittest.TestCase):
         self.assertIn("Bangalore", spark.calls[1][1][0]["content"])  # memory hit was shown to the model
 
     def test_need_info_asks_owner_then_remembers_the_answer(self):
-        spark = Spark(act(type="computer_task", goal="fill form", say="ok"),
+        spark = Spark(act(type="mobile_task", goal="fill form", say="ok"),
                       act(type="ask_user", kind="text", question="Which city should I use?"), act(type="reply", text="filled"))
         worker = Worker(act(type="need_info", field="city", why="form asks"), act(type="done", answer="ok"))
         c, _, bot, app = setup(spark, worker)
@@ -207,7 +207,7 @@ class Jobs(unittest.TestCase):
         self.assertNotIn("Mumbai", texts(c, bot, "user"))  # a worker answer is not replayed as a chat turn
 
     def test_otp_card_types_code_and_never_stores_it(self):
-        spark = Spark(act(type="computer_task", goal="sign in", say="ok"), act(type="reply", text="in"))
+        spark = Spark(act(type="mobile_task", goal="sign in", say="ok"), act(type="reply", text="in"))
         c, phone, bot, app = setup(spark, Worker(act(type="request_otp", app="Gmail"), act(type="done", answer="ok")))
         say(c, bot, "sign in")
         card = until(lambda: open_card(c, bot))
@@ -220,7 +220,7 @@ class Jobs(unittest.TestCase):
         self.assertNotIn("482913", dump)
 
     def test_cancel_at_a_gate_closes_the_card_and_stops(self):
-        spark = Spark(act(type="computer_task", goal="g", say="ok"))
+        spark = Spark(act(type="mobile_task", goal="g", say="ok"))
         c, _, bot, _ = setup(spark, Worker(act(type="handoff", reason="sign in")))
         say(c, bot, "go")
         until(lambda: open_card(c, bot))
@@ -231,15 +231,15 @@ class Jobs(unittest.TestCase):
         self.assertEqual(c.get(f"/api/bots/{bot}/jobs").json()[0]["status"], "cancelled")
 
     def test_owner_control_pauses_the_worker_until_released(self):
-        spark = Spark(act(type="computer_task", goal="tap", say="ok"), act(type="reply", text="finished"))
+        spark = Spark(act(type="mobile_task", goal="tap", say="ok"), act(type="reply", text="finished"))
         c, phone, bot, _ = setup(spark, Worker(act(type="tap", element=0), act(type="done", answer="ok")))
-        self.assertEqual(c.post("/api/computer/control", json={"action": "take"}).json()["state"], "control")
+        self.assertEqual(c.post("/api/mobile/control", json={"action": "take"}).json()["state"], "control")
         say(c, bot, "tap it")
-        until(lambda: c.get("/api/computer/state").json()["job"])
+        until(lambda: c.get("/api/mobile/state").json()["job"])
         time.sleep(0.6)
         self.assertEqual(phone.taps, [])  # the worker waits while the owner is in control
         self.assertEqual(c.post("/api/device/tap", json={"fx": 0.1, "fy": 0.1}).status_code, 200)
-        c.post("/api/computer/control", json={"action": "release"})
+        c.post("/api/mobile/control", json={"action": "release"})
         until(lambda: "finished" in texts(c, bot, "assistant"))
         self.assertIn((540, 1800), phone.taps)
 

@@ -22,8 +22,8 @@
 - [ ] Android client: pairing, consent, sign-in-on-cloud-phone screen with live phone view, starter tasks
 
 ## Design v2 (docs/design-v2.md), pending owner sign-off
-- [x] SQLite store, bots/messages, orchestrator (Spark 1.3) with computer_task + ask_user, background worker jobs, SSE chat
-- [x] Web UI like the reference: bot sidebar, chat with action cards, right panel Details/Library/Computer, full-screen take control
+- [x] SQLite store, bots/messages, orchestrator (Spark 1.3) with mobile_task + ask_user, background worker jobs, SSE chat
+- [x] Web UI like the reference: bot sidebar, chat with action cards, right panel Details/Library/Mobile, full-screen take control
 - [ ] Vault (AES-GCM), secret input, sensitive-text detector, type_secret with approval
 - [ ] Sleep/wake lifecycle (docker pause/stop), routines scheduler, library artifacts
 - [ ] Android client, voice (Muse Voice Transcribe), demo scenarios, 3-minute video

@@ -101,7 +101,7 @@ class Orchestrator:
             if kind == "reply":
                 self.post(bot_id, str(act.get("text", "")).strip() or "Done.")
                 return
-            if kind == "computer_task":
+            if kind == "mobile_task":
                 goal = str(act.get("goal", "")).strip()
                 say = str(act.get("say", "")).strip() or "On it. I'll let you know when it's done."
                 if not goal:

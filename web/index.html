@@ -104,7 +104,7 @@
   .details p { color: var(--dim); font-size: 13.5px; } .details h4 { margin: 16px 0 4px; font-size: 13px; }
   .note { color: var(--dim); font-size: 13px; text-align: center; padding: 18px 8px; }
 
-  /* full-screen computer */
+  /* full-screen mobile view */
   .overlay { position: fixed; inset: 0; background: #07080b; z-index: 50; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 12px; }
   .overlay.on { display: flex; }
   .overlay .close { position: absolute; right: 14px; top: 14px; }
@@ -161,7 +161,7 @@
     <div class="tabs" role="tablist">
       <button role="tab" data-tab="details">Details</button>
       <button role="tab" data-tab="library">Library</button>
-      <button role="tab" data-tab="computer" class="on">Mobile</button>
+      <button role="tab" data-tab="mobile" class="on">Mobile</button>
     </div>
     <div class="tab" id="tab"></div>
   </aside>
@@ -192,7 +192,7 @@ async function api(path, body, method) {
 }
 const tq = () => token ? "token=" + encodeURIComponent(token) : "";
 
-const S = { bots: [], bot: null, msgs: new Map(), es: null, tab: "computer", computer: { state: "ready" }, thinking: false, filter: "", control: null };
+const S = { bots: [], bot: null, msgs: new Map(), es: null, tab: "mobile", mobile: { state: "ready" }, thinking: false, filter: "", control: null };
 
 // ---------- bots ----------
 const initial = (n) => (n || "?").trim().slice(0, 1).toUpperCase();
@@ -229,7 +229,7 @@ $("panelBtn").onclick = () => $("app").classList.toggle("show-panel");
 async function selectBot(id) {
   if (S.es) S.es.close();
   const st = await api(`/api/bots/${id}/state`);
-  S.bot = st.bot; S.msgs = new Map(st.messages.map(m => [m.id, m])); S.thinking = false; S.computer = st.computer;
+  S.bot = st.bot; S.msgs = new Map(st.messages.map(m => [m.id, m])); S.thinking = false; S.mobile = st.mobile;
   renderBots(); renderHeader(); renderFeed(true); renderTab();
   S.es = new EventSource(`/api/bots/${id}/events?after=${st.last_seq}` + (token ? "&" + tq() : ""));
   S.es.onmessage = (e) => onEvent(JSON.parse(e.data));
@@ -239,7 +239,7 @@ function onEvent(ev) {
     const m = ev.message;
     if (m.role === "assistant" && m.kind !== "status") S.thinking = false;
     S.msgs.set(m.id, m); renderFeed(); if (m.kind === "text" || m.kind === "result") loadBotsSoon();
-    if (m.kind === "action_item" && m.meta.status === "open") pollComputer();
+    if (m.kind === "action_item" && m.meta.status === "open") pollMobile();
   } else if (ev.type === "message_delete") { S.msgs.delete(ev.id); renderFeed(); }
   if (S.tab === "library") renderTab();
 }
@@ -321,12 +321,12 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { S.tab
 const STATE_TEXT = { ready: "Ready", working: "Working", waiting: "Waiting for you", control: "You're in control" };
 async function renderTab() {
   const t = $("tab"); if (!S.bot) return;
-  if (S.tab === "computer") {
+  if (S.tab === "mobile") {
     t.replaceChildren();
     const th = el("div", "thumb"), img = el("img"); img.id = "thumbImg"; img.alt = "Live view of the phone"; th.append(img);
     const open = el("button", "open", "Open"); open.onclick = () => openOverlay({}); th.append(open);
     const cap = el("div", "cap"); cap.append(el("div", "", S.bot.name + "'s phone"));
-    const chip = el("div", "chip " + S.computer.state); chip.id = "stateChip"; chip.append(el("i"), el("span", "", STATE_TEXT[S.computer.state] || S.computer.state)); cap.append(chip);
+    const chip = el("div", "chip " + S.mobile.state); chip.id = "stateChip"; chip.append(el("i"), el("span", "", STATE_TEXT[S.mobile.state] || S.mobile.state)); cap.append(chip);
     t.append(th, cap); refreshShot();
   } else if (S.tab === "library") {
     t.replaceChildren(); let items = [];
@@ -352,11 +352,11 @@ async function renderTab() {
 }
 $("lightbox").onclick = () => $("lightbox").classList.remove("on");
 
-// ---------- computer state and live frames ----------
-async function pollComputer() {
-  try { S.computer = await api("/api/computer/state"); } catch { return; }
-  const chip = $("stateChip"); if (chip) { chip.className = "chip " + S.computer.state; chip.lastChild.textContent = STATE_TEXT[S.computer.state] || S.computer.state; }
-  $("phoneChip").className = "chip " + S.computer.state; $("phoneChip").lastChild.textContent = "Phone: " + (STATE_TEXT[S.computer.state] || "").toLowerCase();
+// ---------- mobile state and live frames ----------
+async function pollMobile() {
+  try { S.mobile = await api("/api/mobile/state"); } catch { return; }
+  const chip = $("stateChip"); if (chip) { chip.className = "chip " + S.mobile.state; chip.lastChild.textContent = STATE_TEXT[S.mobile.state] || S.mobile.state; }
+  $("phoneChip").className = "chip " + S.mobile.state; $("phoneChip").lastChild.textContent = "Phone: " + (STATE_TEXT[S.mobile.state] || "").toLowerCase();
   if ($("overlay").classList.contains("on")) renderBar();
 }
 let shotBusy = false;
@@ -369,21 +369,21 @@ async function refreshShot() {
   } catch {}
   shotBusy = false;
 }
-setInterval(pollComputer, 2000);
-(function frames() { if (S.tab === "computer" || $("overlay").classList.contains("on")) refreshShot(); setTimeout(frames, $("overlay").classList.contains("on") ? 1000 : 2500); })();
+setInterval(pollMobile, 2000);
+(function frames() { if (S.tab === "mobile" || $("overlay").classList.contains("on")) refreshShot(); setTimeout(frames, $("overlay").classList.contains("on") ? 1000 : 2500); })();
 
-// ---------- full-screen computer ----------
+// ---------- full-screen mobile view ----------
 function openOverlay(opts) {
   S.control = { held: false, handoff: opts.handoff || null };
   $("overlay").classList.add("on"); refreshShot();
   if (opts.control) takeControl(); else renderBar();
 }
-async function takeControl() { try { await api("/api/computer/control", { action: "take" }); S.control.held = true; } catch (e) { alert(e.message); } pollComputer(); renderBar(); }
+async function takeControl() { try { await api("/api/mobile/control", { action: "take" }); S.control.held = true; } catch (e) { alert(e.message); } pollMobile(); renderBar(); }
 async function releaseControl(done) {
-  try { await api("/api/computer/control", { action: "release" }); } catch {}
+  try { await api("/api/mobile/control", { action: "release" }); } catch {}
   S.control.held = false;
   if (done && S.control.handoff) await api(`/api/items/${S.control.handoff}/answer`, { done: true }).catch(() => {});
-  S.control.handoff = null; pollComputer(); renderBar();
+  S.control.handoff = null; pollMobile(); renderBar();
 }
 function closeOverlay() { if (S.control && S.control.held) releaseControl(false); $("overlay").classList.remove("on"); }
 $("ovClose").onclick = closeOverlay;
@@ -401,7 +401,7 @@ function renderBar() {
     const done = el("button", "", "I'm done"); done.onclick = () => releaseControl(true);
     bar.append(i, done);
   } else {
-    const st = S.computer.state;
+    const st = S.mobile.state;
     bar.append(el("span", "msg-t", st === "working" ? "Watching live: the agent is working" : "Watching live"));
     const b = el("button", "", "Take control"); b.onclick = takeControl; bar.append(b);
   }
@@ -416,7 +416,7 @@ $("ovScreen").addEventListener("click", (e) => {
   api("/api/device/tap", { fx, fy }).then(refreshShot).catch((err) => alert(err.message));
 });
 
-loadBots(); pollComputer();
+loadBots(); pollMobile();
 </script>
 </body>
 </html>

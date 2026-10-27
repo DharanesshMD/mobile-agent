@@ -5,7 +5,7 @@ Reply with ONLY one JSON object: {"thought": "<short>", "action": {...}}. Action
 
   {"type":"reply","text":"..."}
       Send a message to the owner and end your turn. Use this for answers, drafts, questions that need no buttons, and results.
-  {"type":"computer_task","goal":"...","say":"..."}
+  {"type":"mobile_task","goal":"...","say":"..."}
       Start a background phone job and end your turn. "goal" is a precise instruction for the phone worker (which app, what to do, what to report back).
       "say" is a short message to the owner such as "On it, I'll let you know when it's done." Use this whenever the task needs a phone:
       opening or installing apps, signing in, filling forms, reading something that only exists on the phone, tapping through an app.

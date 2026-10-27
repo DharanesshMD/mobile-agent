@@ -59,5 +59,5 @@ thumbnail, Open for full screen, Take control, I'm done).
 - Muse Spark 1.3 is the orchestrator (chat, memory, deciding when to use the phone). Muse Wonder is the phone worker only. See `agent/config.py`, `prompts/`.
 - Tasks that need the phone run as background jobs on one shared phone (FIFO queue). Memory is SQLite full-text search (`data/app.db`).
 - New endpoints: `/api/bots`, `/api/bots/{id}/state|messages|events|jobs|library`, `POST /api/items/{id}/answer`, `POST /api/jobs/{id}/cancel`,
-  `GET /api/computer/state`, `POST /api/computer/control` (take, release).
+  `GET /api/mobile/state`, `POST /api/mobile/control` (take, release).
 - Not built yet: vault, sleep/wake, routines, voice, Android client (see docs/design-v2.md).
