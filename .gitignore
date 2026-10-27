@@ -1,14 +1,40 @@
-.DS_Store
+# secrets and local state
 .env
 .env.*
 !.env.example
-node_modules/
-__pycache__/
-.venv/
-*.apk
-*.img
-spike/out/
-runs/
-.venv/
-*.egg-info/
 data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+
+# python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# generated runs, traces, recordings, logs
+runs/
+spike/out/
+*.log
+*.wav
+*.mov
+*.mp4
+
+# android and emulator artifacts
+*.apk
+*.aab
+*.img
+build/
+.gradle/
+.kotlin/
+local.properties
+android/**/build/
+
+# editors and OS
+.DS_Store
+.idea/
+.vscode/
+node_modules/
