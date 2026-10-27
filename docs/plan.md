@@ -113,3 +113,38 @@ re-observe to verify -> stop on goal, failure budget, or approval needed.
 - Hackathon rule on prior work: keep this repo free of code from earlier projects.
 - Model access errors some participants reported (`model_not_found`): verify model IDs on first call.
 - Always-on voice on Android is battery and policy sensitive; keep push-to-talk as the safe path.
+
+
+## 11. Personal phone client and OTP bridge (added 27 Oct 2026)
+
+The cloud emulator has no SIM, so any app that sends an SMS code (Google sign-in, app logins) needs the owner's real phone.
+An Android client app on the owner's phone relays codes to the agent, only with the owner's approval.
+
+Flow:
+1. The agent reaches a code screen and emits `{"type":"request_otp","app":"...","hint":"..."}`. The graph pauses at an interrupt.
+2. The service notifies the paired phone (WebSocket while the app runs, FCM push later): "Share the latest SMS code for <app>?"
+3. The owner approves on the phone. The client reads the newest matching SMS (or notification), extracts only the digits
+   with a regex, and sends the code over TLS with the device token.
+4. The service types the code into the emulator through ADB. The code is never put in the model prompt, the step trace or
+   logs; the model only learns "code entered". Codes expire after about 90 seconds and are single-use.
+5. The loop continues and verifies the screen.
+
+Same channel carries: approval cards (`ask`), handoff requests ("sign in to Google on the emulator"), push-to-talk audio, and
+status notifications.
+
+Client app (Kotlin, Android, sideloaded for the hackathon, not Play Store distributed):
+- Pairing: short-lived code shown in the web UI, device-bound token stored in the Android Keystore, revocable.
+- Permissions: `RECEIVE_SMS` / `READ_SMS` (sideload only; Google Play restricts SMS permissions), notifications, microphone.
+- Sender allow-list and per-request approval. No background auto-forwarding of codes.
+- Voice: push-to-talk first, wake word later (foreground service). Speech to text via Muse Voice Transcribe; replies spoken with
+  the phone's own TTS (Meta has no TTS model).
+
+Risks to handle:
+- OTP forwarding is sensitive: end-to-end over TLS, approval every time, redaction in logs, short expiry, no storage.
+- Banking and payment codes: do not support in the demo.
+- Google may flag sign-ins from an emulator or new device; use a throwaway demo Google account, never the owner's main one.
+- The owner enters Google passwords themselves through a handoff (live view with takeover typing). The agent never types passwords.
+- Needs a Play Store system image (`google_apis_playstore`); the current local image has no Play Store.
+
+Revised milestones: web chatbot and service (day 3), OTP/pairing protocol and web fake-phone for testing (day 4),
+Android client with SMS relay and push-to-talk (day 5), Play Store install flows (day 6).

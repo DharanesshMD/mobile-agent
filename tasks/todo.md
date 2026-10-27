@@ -12,3 +12,6 @@
 - [x] Agent loop with Meta model (observe, plan, act, verify): agent/loop.py, tested live on emulator
 - [ ] Harden loop: memory of seen info, better stuck recovery, richer actions (long press, text field focus)
 - [ ] Web chatbot with live device view
+- [ ] Service protocol: pair device, request_otp / ask / handoff events over WebSocket
+- [ ] Android client app: pairing, SMS/OTP relay with per-request approval, push-to-talk
+- [ ] Play Store system image (google_apis_playstore) and Google sign-in handoff with a throwaway account
