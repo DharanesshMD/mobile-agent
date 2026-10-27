@@ -3,7 +3,7 @@
 ## Planning
 - [x] Create private repo `DharanesshMD/mobile-agent`
 - [x] Research Android OS options, write docs/plan.md
-- [ ] Confirm track (indie or startup)
+- [x] Confirm track: Indie Developer
 - [ ] Pick Android host and verify binder support
 - [ ] Spike Redroid: boot, ADB connect, screenshot, tap
 

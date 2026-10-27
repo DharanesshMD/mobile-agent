@@ -101,7 +101,7 @@ re-observe to verify -> stop on goal, failure budget, or approval needed.
 
 ## 9. Open questions
 
-- Indie or startup track?
+- ~~Indie or startup track?~~ Decided: Indie Developer track (1st place $150K). Solo or up to 4 teammates; everything must be new work from the event.
 - Which hosting for the Android device (VPS provider, arch)? Needs binder support check.
 - Which demo scenarios are most impressive and safe (no banking, no medical, no political)?
 - Wake word engine for the Android client (on-device open-source detector vs push-to-talk only).
