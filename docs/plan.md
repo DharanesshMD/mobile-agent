@@ -217,3 +217,29 @@ Android OAuth client (package name and SHA-1 of the debug keystore) and a Web OA
 ### Build notes
 Build tooling is present on the Mac (Android platforms 34/35, build-tools, Gradle, JDK 17), so the client can be built from the command line.
 The earlier `android-personal-agent` project has its own Android client; do not copy it (hackathon new-work rule). Write the client fresh.
+
+
+## 13b. Revision: one Google sign-in only (27 Oct 2026)
+
+Requirement from the owner: the user must not sign in to the same Google account twice (once in the app, once on the cloud phone).
+Plain Sign in with Google in the app cannot give the cloud phone that account (see 13), so the two-login design is dropped.
+
+Options that give a single login:
+- A. Sign in once, on the cloud phone (recommended). The app has no separate Google login. It pairs with the server (one-time code),
+  then shows "Sign in to your cloud phone" with the live phone view. The owner signs in to Google there, once, and types the password
+  themselves. The server reads the account from the device (`adb shell dumpsys account` lists `Account {name=<email>, type=com.google}`;
+  currently `Accounts: 0`) and shows "Signed in as <email>" in the app. The consent question becomes: "Sign in to your cloud phone now so the agent
+  can start right away?" Play Store and app installs work. No Google Cloud OAuth setup is needed, which also removes that manual step.
+- B. Sign in once in the app with extra OAuth scopes (Gmail, Calendar, Drive). The server keeps a refresh token and the agent uses APIs.
+  One login, but the cloud phone has no Google account, so no Play Store installs. Could be added later next to A for API-only tasks.
+- C. Copy the session from the owner's phone to the cloud phone. Not supported, breaks Google's terms, rejected.
+
+Decision (pending owner confirmation): A as the default; B optional later.
+
+Changes to the earlier design:
+- App login = pairing code or QR (shown by the server to the owner), then a device-bound token. No ID-token verification, no `GOOGLE_WEB_CLIENT_ID`.
+- Endpoints replaced: `POST /api/pair`, `GET /api/me` (paired device, linked Google email or null), `GET /api/cloud-account`
+  (reads the device account list), `POST /api/cloud-account/start` (provisioning run: open Add account, hand off), `DELETE /api/cloud-account`.
+- Consent is still explicit and revocable; the app still recommends a throwaway account.
+- Risk: Google may refuse or challenge an emulator sign-in. If it does, fall back to B for API tasks or to APK installs.
+- The `dumpsys account` output after a real sign-in is not verified yet; confirm the parsing once an account exists.
