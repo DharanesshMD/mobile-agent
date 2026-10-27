@@ -1,0 +1,35 @@
+# Meta Model API: models and findings
+
+Base URL: `https://api.meta.ai/v1` (OpenAI-style chat completions, plus Responses and Messages).
+Auth: `Authorization: Bearer $META_API_KEY`. Key lives in `.env` (gitignored). Never commit it.
+Checked 27 Oct 2026 with the team's key: `GET /v1/models` returns all nine models below.
+
+| Model | ID | Use here |
+|---|---|---|
+| Muse Wonder (preview) | `muse-wonder-1.0` | Main agent brain. Docs list computer use, tool calling, structured output, vision, audio, video. |
+| Muse Spark 1.3 (recommended) | `muse-spark-1.3` | Cheaper/faster planner. Vision, tools, structured output. Audio not fully supported; use 1.2 for audio. |
+| Muse Spark 1.2 / 1.1 | `muse-spark-1.2`, `muse-spark-1.1` | Fallbacks. 1.2 for audio understanding. |
+| `*-contributor` variants | `muse-spark-1.3-contributor`, ... | Lower price, content may be used for training. Avoid for personal data. |
+| Muse Voice Transcribe | `muse-voice-transcribe-1.0` | Speech to text: `POST /v1/asr/transcribe` or WebSocket `wss://api.meta.ai/v1/asr/realtime`. No speech synthesis. |
+| Muse Image | `muse-image-1.0` | Image generation/editing. Not needed for the agent. |
+| SAM 3.1 | `sam-3.1` | Segmentation via `/v1/responses`. Possible UI grounding aid. |
+| Muse Spark Open / Muse Glimmer | open weights | Run on Baseten/Modal (`meta-models/muse-spark-open-1026` on Baseten) for the open-weight bonus. |
+
+Context window is 1,048,576 tokens for Wonder and Spark. Pricing is on the Pricing and rate limits page (not read yet).
+No text-to-speech in the list, so spoken replies need another route (OS TTS on the client).
+
+## Gotchas
+- Reasoning tokens count against `max_tokens`. With `max_tokens: 20` the reply content came back `null`. Use a large limit
+  (we used 1500) and `reasoning_effort: "minimal"` for fast UI steps.
+- Muse Wonder is unavailable in South Korea. Muse Wonder Full is only in Muse Code, not the API.
+
+## Spike: screenshot grounding (27 Oct 2026)
+Goal "open Battery settings" on a 540x1200 downscaled Settings screenshot, JSON action out.
+Both models returned valid JSON, and the taps (scaled x2) opened Battery on the emulator.
+
+| Model | Latency | Tokens | Tap (540x1200) | Result |
+|---|---|---|---|---|
+| muse-spark-1.3 | 3.2 s | 1098 | (221, 950) | Opened Battery, but near the row boundary |
+| muse-wonder-1.0 | 4.4 s | 972 | (270, 905) | Opened Battery, near the row center |
+
+One run each, so not a benchmark. Plan: start with Wonder for the agent loop, compare with Spark on a few screens.
