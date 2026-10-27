@@ -31,3 +31,21 @@ SMS code (`request_otp`). When the agent is idle or paused you can click the pho
 
 API: `POST /api/runs`, `GET /api/runs/{id}/events` (SSE), `POST /api/runs/{id}/resume`, `POST /api/runs/{id}/cancel`,
 `GET /api/device/screenshot`, `POST /api/device/{tap,type,key,swipe}` (blocked while the agent is acting).
+
+## Pairing and the cloud-phone Google account
+
+With `APP_TOKEN` set, every API call needs a bearer token: the admin `APP_TOKEN`, or a device token from pairing. On start the service
+prints a one-time pairing code (valid 10 minutes). State (paired devices as hashes, the linked account) is kept in `data/state.json`
+(override with `STATE_FILE`), mode 600, gitignored.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/pair {code, name}` | Exchange a pairing code for a device token (5 wrong codes lock pairing for 60 s) |
+| `POST /api/pair/code` | Owner issues another pairing code |
+| `GET /api/devices`, `DELETE /api/devices/{id}` | List and revoke paired devices |
+| `GET /api/me` | Who is calling, the Google account on the cloud phone (or null) |
+| `GET /api/cloud-account` | Reads the real account list from the phone (`dumpsys account`) and syncs it |
+| `POST /api/cloud-account/start {consent:true, email?}` | Starts the sign-in run: the agent opens Add account, types the email, then hands off for the password |
+| `DELETE /api/cloud-account?confirm=true` | Starts a run that removes the account (asks for approval first) |
+
+The device is the source of truth: after a provisioning or removal run the server re-reads the phone's accounts and ignores what the model claims.

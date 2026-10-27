@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -16,15 +17,19 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from agent.graph import Result, build_graph, run as run_graph
+from agent.store import Store
 
 MODELS = {"muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"}
+PAIR_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O/1/I/L
+PAIR_TTL = 600
+EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,255}$")
 TERMINAL = {"done", "failed", "denied", "cancelled", "max_steps", "error"}
 WEB = Path(__file__).resolve().parent.parent / "web"
 
 
 class Run:
-    def __init__(self, goal: str, model: str):
-        self.id, self.goal, self.model = uuid.uuid4().hex[:12], goal, model
+    def __init__(self, goal: str, model: str, kind: str = "task"):
+        self.id, self.goal, self.model, self.kind = uuid.uuid4().hex[:12], goal, model, kind
         self.status, self.answer, self.pending = "running", "", None
         self.events: list[dict] = []
         self.cancel = threading.Event()
@@ -59,7 +64,7 @@ class Run:
         self.emit({"type": "final", "status": res.status, "answer": res.answer, "steps": res.steps})
 
     def summary(self) -> dict:
-        return {"id": self.id, "goal": self.goal, "model": self.model, "status": self.status,
+        return {"id": self.id, "goal": self.goal, "model": self.model, "kind": self.kind, "status": self.status,
                 "answer": self.answer, "pending": self.pending, "events": len(self.events)}
 
 
@@ -73,6 +78,16 @@ class Resume(BaseModel):
     approved: bool | None = None
     done: bool | None = None
     code: str | None = Field(default=None, max_length=12)
+
+
+class Pair(BaseModel):
+    code: str = Field(min_length=4, max_length=20)
+    name: str = Field(default="phone", min_length=1, max_length=60)
+
+
+class CloudAccountStart(BaseModel):
+    consent: bool
+    email: str | None = Field(default=None, max_length=320)
 
 
 class Tap(BaseModel):
@@ -92,19 +107,26 @@ class Swipe(BaseModel):
     direction: str = Field(pattern="^(up|down|left|right)$")
 
 
-def create_app(device, model_factory, token: str | None = None, settle: float = 0.6) -> FastAPI:
+def create_app(device, model_factory, token: str | None = None, settle: float = 0.6, store: Store | None = None) -> FastAPI:
     app = FastAPI(title="Mobile Agent")
+    store = store or Store(None)
     runs: dict[str, Run] = {}
+    codes: dict[str, float] = {}
+    pair_fails = {"n": 0, "until": 0.0}
     graph = build_graph()
     state = {"active": None}
     guard = threading.Lock()
 
-    def auth(authorization: str | None = Header(default=None), token_q: str | None = Query(default=None, alias="token")):
+    def auth(authorization: str | None = Header(default=None), token_q: str | None = Query(default=None, alias="token")) -> dict:
         if not token:
-            return
+            return {"kind": "open", "name": "local"}
         given = (authorization or "").removeprefix("Bearer ").strip() or (token_q or "")
-        if not hmac.compare_digest(given, token):
-            raise HTTPException(401, "invalid token")
+        if given and hmac.compare_digest(given.encode(), token.encode()):
+            return {"kind": "admin", "name": "admin"}
+        dev = store.find_device(given) if given else None
+        if dev:
+            return {"kind": "device", **dev}
+        raise HTTPException(401, "invalid token")
 
     def active() -> Run | None:
         r = state["active"]
@@ -120,11 +142,40 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         if r and r.status != "waiting":
             raise HTTPException(409, "the agent is acting on the phone; wait for it to pause or cancel the run")
 
+    def google_accounts() -> list[str]:
+        fn = getattr(device, "accounts", None)
+        return sorted({n for n, t in (fn() if fn else []) if t == "com.google"})
+
+    def sync_account(r: Run | None = None) -> str | None:
+        """The device is the source of truth: record whichever Google account is really on it."""
+        found = google_accounts()
+        store.set_cloud_account(found[0] if found else None)
+        if r:
+            r.emit({"type": "account", "email": found[0] if found else None, "action": r.kind})
+        return found[0] if found else None
+
+    def start_run(goal: str, model: str, max_steps: int, kind: str = "task") -> Run:
+        with guard:
+            if active():
+                raise HTTPException(409, "a run is already active on this phone")
+            r = Run(goal, model, kind)
+            runs[r.id] = r
+            state["active"] = r
+            for old in list(runs)[:-20]:
+                runs.pop(old, None)
+        threading.Thread(target=worker, args=(r, max_steps), daemon=True).start()
+        return r
+
     def worker(r: Run, max_steps: int) -> None:
         try:
             model = model_factory(r.model)
             res = run_graph(r.goal, device, model, max_steps, trace_dir=f"runs/{time.strftime('%Y%m%d-%H%M%S')}-{r.id}",
                             settle=settle, handler=r.wait_for_owner, emit=r.emit, cancel=r.cancel, graph=graph)
+            if r.kind in ("provision", "deprovision"):
+                try:
+                    sync_account(r)  # verify against the device, not the model's claim
+                except Exception:
+                    pass
             r.finish(res)
         except Exception as e:
             r.finish(Result("error", f"{type(e).__name__}: {str(e)[:200]}"))
@@ -141,16 +192,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     def create_run(body: NewRun):
         if body.model not in MODELS:
             raise HTTPException(400, f"model must be one of {sorted(MODELS)}")
-        with guard:
-            if active():
-                raise HTTPException(409, "a run is already active on this phone")
-            r = Run(body.goal.strip(), body.model)
-            runs[r.id] = r
-            state["active"] = r
-            for old in list(runs)[:-20]:
-                runs.pop(old, None)
-        threading.Thread(target=worker, args=(r, body.max_steps), daemon=True).start()
-        return r.summary()
+        return start_run(body.goal.strip(), body.model, body.max_steps).summary()
 
     @app.get("/api/runs", dependencies=[Depends(auth)])
     def list_runs():
@@ -207,6 +249,92 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         get_run(run_id).stop()
         return {"ok": True}
 
+    def issue_code() -> str:
+        now = time.time()
+        for c in [c for c, exp in codes.items() if exp < now]:
+            codes.pop(c)
+        if len(codes) >= 5:
+            codes.pop(next(iter(codes)))
+        raw = "".join(secrets.choice(PAIR_ALPHABET) for _ in range(8))
+        codes[raw] = now + PAIR_TTL
+        return f"{raw[:4]}-{raw[4:]}"
+
+    app.state.issue_pair_code = issue_code
+
+    @app.post("/api/pair/code")
+    def pair_code(who: dict = Depends(auth)):
+        return {"code": issue_code(), "expires_in": PAIR_TTL}
+
+    @app.post("/api/pair")
+    def pair(body: Pair):
+        now = time.time()
+        if now < pair_fails["until"]:
+            raise HTTPException(429, "too many wrong codes; wait a minute")
+        given = re.sub(r"[^A-Z0-9]", "", body.code.upper())
+        match = next((c for c, exp in codes.items() if exp > now and hmac.compare_digest(c.encode(), given.encode())), None)
+        if not match:
+            pair_fails["n"] += 1
+            if pair_fails["n"] >= 5:
+                pair_fails.update(n=0, until=now + 60)
+            raise HTTPException(401, "invalid or expired pairing code")
+        codes.pop(match)
+        pair_fails["n"] = 0
+        did, tok = store.add_device(body.name.strip())
+        return {"device_id": did, "token": tok}
+
+    @app.get("/api/devices")
+    def list_devices(who: dict = Depends(auth)):
+        return store.devices()
+
+    @app.delete("/api/devices/{device_id}")
+    def revoke_device(device_id: str, who: dict = Depends(auth)):
+        if not store.revoke(device_id):
+            raise HTTPException(404, "unknown device")
+        return {"ok": True}
+
+    @app.get("/api/me")
+    def me(who: dict = Depends(auth)):
+        acct = store.cloud_account()
+        return {"principal": who, "google": acct["email"] if acct else None,
+                "linked_at": acct["linked_at"] if acct else None, "devices": len(store.devices())}
+
+    @app.get("/api/cloud-account")
+    def cloud_account(who: dict = Depends(auth)):
+        email = sync_account()
+        acct = store.cloud_account()
+        return {"linked": email, "linked_at": acct["linked_at"] if acct else None, "consent": store.consent(),
+                "busy": bool(active())}
+
+    @app.post("/api/cloud-account/start")
+    def cloud_account_start(body: CloudAccountStart, who: dict = Depends(auth)):
+        if not body.consent:
+            raise HTTPException(422, "consent is required to set up a Google account on the cloud phone")
+        email = (body.email or "").strip() or None
+        if email and not EMAIL.match(email):
+            raise HTTPException(422, "invalid email")
+        if sync_account():
+            raise HTTPException(409, "a Google account is already signed in on the cloud phone")
+        goal = ("Set up a Google account on this phone. Open the Play Store app and tap Sign in "
+                "(or Settings > Passwords & accounts > Add account > Google). "
+                + (f"When the email field appears, type the email {email} and continue. " if email else "")
+                + "When a password, verification code or any security check appears, use handoff so the owner completes it; "
+                  "never type a password or code yourself. Once the Google account is signed in and visible "
+                  "(for example the Play Store home screen), finish with done.")
+        store.record_consent(email)
+        return start_run(goal, "muse-wonder-1.0", 25, "provision").summary()
+
+    @app.delete("/api/cloud-account")
+    def cloud_account_remove(confirm: bool = False, who: dict = Depends(auth)):
+        if not confirm:
+            raise HTTPException(422, "pass confirm=true to remove the Google account from the cloud phone")
+        email = sync_account()
+        if not email:
+            raise HTTPException(404, "no Google account on the cloud phone")
+        goal = (f"Remove the Google account {email} from this phone: open Settings > Passwords & accounts, select that account, "
+                "tap Remove account and confirm. Finish with done once no Google account is listed.")
+        r = start_run(goal, "muse-wonder-1.0", 20, "deprovision")
+        return {**r.summary(), "reminder": "Also review https://myaccount.google.com/device-activity"}
+
     frame = {"at": 0.0, "jpeg": b""}
     frame_lock = threading.Lock()
 
@@ -260,8 +388,10 @@ def create_default_app() -> FastAPI:
     from agent.device import Device
     from agent.model import MetaClient, load_env
     load_env()
-    return create_app(Device(os.environ.get("ANDROID_SERIAL")), lambda m: MetaClient(m),
-                      token=os.environ.get("APP_TOKEN") or None)
+    app = create_app(Device(os.environ.get("ANDROID_SERIAL")), lambda m: MetaClient(m),
+                     token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")))
+    print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)
+    return app
 
 
 if __name__ == "__main__":

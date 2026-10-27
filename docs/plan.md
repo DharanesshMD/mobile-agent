@@ -243,3 +243,14 @@ Changes to the earlier design:
 - Consent is still explicit and revocable; the app still recommends a throwaway account.
 - Risk: Google may refuse or challenge an emulator sign-in. If it does, fall back to B for API tasks or to APK installs.
 - The `dumpsys account` output after a real sign-in is not verified yet; confirm the parsing once an account exists.
+
+
+## 14. Build status update (27 Oct 2026): pairing and cloud account
+
+Done: `agent/store.py` (hashed device tokens, atomic 600-mode JSON), device account reader (`Device.accounts()` parses `dumpsys account`), pairing with
+single-use 10-minute codes and a lockout after 5 wrong tries, `/api/me`, device list and revoke, `/api/cloud-account` read, start (requires explicit
+consent) and delete (requires `confirm=true`). 33 tests pass, and the endpoints were exercised against the live emulator (401 without a token, pairing,
+code reuse rejected, account read returns none on a fresh image).
+
+Not verified: the exact `dumpsys account` text after a real Google sign-in (the parser targets the standard `Account {name=..., type=com.google}` form);
+Google accepting a sign-in from the emulator; the Android client that calls these endpoints.

@@ -11,3 +11,4 @@ spike/out/
 runs/
 .venv/
 *.egg-info/
+data/

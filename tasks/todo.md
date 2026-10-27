@@ -17,5 +17,6 @@
 - [ ] Android client app: pairing, SMS/OTP relay with per-request approval, push-to-talk
 - [x] Play Store system image and AVD agent34ps; agent hands off at Play Store sign-in (verified)
 - [ ] Sign in with a throwaway Google account (owner), then install and drive an app via the agent
-- [ ] Server: pairing (`/api/pair`), `/api/me`, cloud-account read/start/delete (single Google login on the cloud phone)
+- [x] Server: pairing (`/api/pair`), `/api/me`, cloud-account read/start/delete (single Google login on the cloud phone)
+- [ ] Owner: do the real Google sign-in once on the cloud phone, then confirm the account shows in /api/cloud-account
 - [ ] Android client: pairing, consent, sign-in-on-cloud-phone screen with live phone view, starter tasks

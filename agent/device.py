@@ -15,6 +15,14 @@ class Element:
     clickable: bool
 
 
+ACCOUNT_RE = re.compile(r"Account \{name=([^,}]+), type=([^}]+)\}")
+
+
+def parse_accounts(dumpsys_account: str) -> list[tuple[str, str]]:
+    """(name, type) pairs from `dumpsys account`, e.g. ("me@gmail.com", "com.google")."""
+    return sorted({(m.group(1).strip(), m.group(2).strip()) for m in ACCOUNT_RE.finditer(dumpsys_account)})
+
+
 class Device:
     def __init__(self, serial: str | None = None, adb: str = "adb"):
         self.base = [adb, *(["-s", serial] if serial else [])]
@@ -83,6 +91,9 @@ class Device:
 
     def key(self, name: str) -> None:
         self._run("shell", "input", "keyevent", name)
+
+    def accounts(self) -> list[tuple[str, str]]:
+        return parse_accounts(self._run("shell", "dumpsys", "account").decode(errors="replace"))
 
     def open_app(self, package: str) -> None:
         if package == "com.android.settings":  # Settings has no launcher entry on AOSP-based images
