@@ -11,7 +11,7 @@ The reference is a desktop chat app with a bot list. What it shows, and what we 
 - Centre: the chat. Agent messages, a status line while it works ("Clicking around" with an animated dot), messages relayed between bots
   ("Message from <other bot>"), and an inline question card with a choice button (the action item). Composer: attach, mic, voice.
 - Right panel with three tabs. Details: routines (recurring tasks on a schedule). Library: artifacts the bot produced (screenshots, files) grouped by
-  This week / Older. Computer: a small live thumbnail of the bot's screen with an Open button.
+  This week / Older. Mobile: a small live thumbnail of the bot's screen with an Open button.
 - Open goes full screen with a banner "You're in control" and an "I'm done" button. The owner takes the mouse, then hands control back.
 
 What we change: the screen is an Android phone, not a desktop browser; and the cloud phone sleeps when nobody needs it.
@@ -25,10 +25,10 @@ I could not transcribe the audio (Whisper is not installed), so this design is b
 2. The orchestrator (Muse Spark 1.3) answers directly if it can: reasoning, drafting, questions, memory lookups.
 3. If the task needs a phone, it calls the `computer_task` tool. That creates a background job, wakes the cloud phone if it sleeps, and returns at once.
    The chat shows "Working on it" and a live status line. The owner can keep chatting or leave.
-4. The Computer Worker (Muse Wonder, the existing graph) drives the phone: observe, plan, act, verify. Only this worker uses Wonder.
+4. The Mobile Worker (Muse Wonder, the existing graph) drives the phone: observe, plan, act, verify. Only this worker uses Wonder.
 5. When the worker needs something it cannot get from the screen, it pauses and sends a typed request to the orchestrator. The chat shows it as an
    action item card (section 4). The owner answers in chat; the job resumes.
-6. The owner can click Computer on the right at any moment to watch live, press Open for full screen, take control, and press "I'm done" to give it back.
+6. The owner can click Mobile on the right at any moment to watch live, press Open for full screen, take control, and press "I'm done" to give it back.
 7. When the job ends, the orchestrator writes the result in chat, saves artifacts (key screenshots, files) to the Library, and stores a short memory.
 8. After the idle timeout the phone sleeps (section 7).
 
@@ -37,7 +37,7 @@ I could not transcribe the audio (Whisper is not installed), so this design is b
 | Role | Model | Why |
 |---|---|---|
 | Orchestrator: reasoning, chat replies, tool choice, summaries | `muse-spark-1.3` | Cheaper and fast for text and planning |
-| Computer Worker: screen understanding, tap, swipe, type, drag | `muse-wonder-1.0` | Listed with computer use; in our tests it completed Settings tasks that Spark 1.3 looped on |
+| Mobile Worker: screen understanding, tap, swipe, type, drag | `muse-wonder-1.0` | Listed with computer use; in our tests it completed Settings tasks that Spark 1.3 looped on |
 | Speech to text (mic) | `muse-voice-transcribe-1.0` | Only Meta speech model; no TTS, so spoken replies use the client's own TTS |
 | Search grounding | Spark with search grounding | Priced per 1,000 queries |
 | Retrieval | none from Meta (no embeddings model in the list) | Start with SQLite full-text search (FTS5); add a local embedding model later if needed |
@@ -89,7 +89,7 @@ Threat model: the owner pastes passwords, ID numbers and card details into chat;
 - Deletion: the owner can delete any secret; deletion removes the row. Audit log records label, time, job and app, never the value.
 - Limits: the cloud phone itself will hold the typed value in the app, and a compromised host can read memory. This protects data at rest and from the models.
 
-## 6. Computer panel and takeover
+## 6. Mobile panel and takeover
 
 - Thumbnail: JPEG from the phone every 2 to 3 seconds, cached on the server so many viewers do not load ADB (already built).
 - Open: full-screen view at about 1 frame per second, faster while the owner holds control.
@@ -106,7 +106,7 @@ Goal: the container stays deployed, but the phone costs almost nothing when nobo
 - Idle timer starts when no job is running and no viewer or owner activity for 5 minutes (configurable). Then `docker pause` (freezes all processes, near zero CPU,
   memory kept, resume in under a second). After 60 more minutes: `docker stop` (frees memory; `/data` volume keeps accounts and apps). Wake from stopped means
   `docker start` plus waiting for `sys.boot_completed` (tens of seconds, show "Waking the phone").
-- Wake triggers: a message that needs the phone, a routine firing, the owner opening Computer or taking control, an incoming OTP request.
+- Wake triggers: a message that needs the phone, a routine firing, the owner opening Mobile or taking control, an incoming OTP request.
 - Lifecycle backend is pluggable: `DockerBackend` (pause, unpause, stop, start) for the cloud host; a local emulator backend that only reports state for the Mac.
 - (verify) Redroid needs a Linux kernel with binder; it is not expected to run under Docker Desktop on macOS, so the cloud host must be tested separately.
   `docker pause` on a running Android container is plausible but unverified (clocks and network timeouts after unpause may need handling).
@@ -127,7 +127,7 @@ Goal: the container stays deployed, but the phone costs almost nothing when nobo
 ## 10. Milestones (deadline Wed 4 Nov, 9 PM ET; about 7 days left)
 
 1. Today and tomorrow: SQLite store, bots and messages, orchestrator graph on Spark with `computer_task` and `ask_user`, worker jobs in the background, SSE chat.
-2. New web UI like the reference: sidebar of bots, chat with status lines and action cards, right panel with Details, Library and Computer, full-screen take control.
+2. New web UI like the reference: sidebar of bots, chat with status lines and action cards, right panel with Details, Library and Mobile, full-screen take control.
 3. Vault with AES-GCM, secret input, sensitive-text detector, `type_secret`, approval cards.
 4. Sleep and wake lifecycle (docker backend plus local stub), routines scheduler, library artifacts.
 5. Android client: chat, action items, live view, OTP relay, push-to-talk with Muse Voice Transcribe.
@@ -149,7 +149,7 @@ Cut line if time runs short: Android client and routines go first; the demo can 
 Done and verified: SQLite store (bots, messages, jobs, action items, library, FTS5 memory), orchestrator on Muse Spark 1.3 (JSON tool protocol: reply, computer_task,
 ask_user, memory_search, memory_save), worker requests (`need_info`, answered from memory when possible, otherwise asked in chat, and remembered), background job
 manager with a FIFO queue on one shared phone, owner takeover that pauses the worker at the next step, cancel, restart recovery, library screenshots, SSE event stream,
-and the new web UI (bot sidebar, chat, action cards, Details/Library/Computer, full-screen watch and take control). 49 automated tests pass.
+and the new web UI (bot sidebar, chat, action cards, Details/Library/Mobile, full-screen watch and take control). 49 automated tests pass.
 
 Live check with real models in the browser: "check the phone's Settings and tell me the Android version and security patch" ran in the background (7 steps, 138 s),
 Spark reported "Android version is 14, security patch is September 5, 2023", which matches the device. Take control paused the agent and I'm done resumed it.

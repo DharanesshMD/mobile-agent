@@ -53,7 +53,7 @@ The device is the source of truth: after a provisioning or removal run the serve
 ## Chat-first app (design v2, milestones 1 and 2)
 
 Open http://127.0.0.1:8000. Left: bots (each a conversation). Centre: chat with a live status line while the phone works and action cards when the agent
-needs you (approve, choose, answer, take over the phone, enter a code). Right: Details, Library (screenshots from finished tasks) and Computer (live
+needs you (approve, choose, answer, take over the phone, enter a code). Right: Details, Library (screenshots from finished tasks) and Mobile (live
 thumbnail, Open for full screen, Take control, I'm done).
 
 - Muse Spark 1.3 is the orchestrator (chat, memory, deciding when to use the phone). Muse Wonder is the phone worker only. See `agent/config.py`, `prompts/`.
