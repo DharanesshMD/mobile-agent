@@ -15,4 +15,5 @@
 - [x] FastAPI service + web chatbot: runs, SSE, approvals, handoff, OTP card, takeover (agent/service.py, web/index.html)
 - [ ] Pairing + phone-facing channel (WebSocket/push) so the Android client can receive requests and send OTPs
 - [ ] Android client app: pairing, SMS/OTP relay with per-request approval, push-to-talk
-- [ ] Play Store system image (google_apis_playstore) and Google sign-in handoff with a throwaway account
+- [x] Play Store system image and AVD agent34ps; agent hands off at Play Store sign-in (verified)
+- [ ] Sign in with a throwaway Google account (owner), then install and drive an app via the agent
