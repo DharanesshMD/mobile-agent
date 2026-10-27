@@ -17,3 +17,6 @@
 - [ ] Android client app: pairing, SMS/OTP relay with per-request approval, push-to-talk
 - [x] Play Store system image and AVD agent34ps; agent hands off at Play Store sign-in (verified)
 - [ ] Sign in with a throwaway Google account (owner), then install and drive an app via the agent
+- [ ] Server: `/api/auth/google` (verify ID token, single owner), `/api/me`, cloud-account consent/start/delete endpoints
+- [ ] Owner: create Google Cloud OAuth clients (Android + Web) and set GOOGLE_WEB_CLIENT_ID
+- [ ] Android client: Google sign-in screen, consent screen, finish-sign-in screen with live cloud phone view, starter tasks

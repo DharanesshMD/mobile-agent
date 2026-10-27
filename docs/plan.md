@@ -163,3 +163,57 @@ Done and verified on the Android 14 emulator:
 
 Known gaps: single phone and single owner; in-memory run storage and checkpoints (lost on restart); the phone app that supplies
 OTPs does not exist yet (the web OTP card is a stand-in); Play Store image and Google sign-in handoff untested; about 15-30 s per step on the emulator.
+
+
+## 13. Google sign-in in the client app and the cloud-phone account consent (added 27 Oct 2026)
+
+Requirement: the Android client signs the owner in with Google (SSO). At that moment the app asks whether the same Google account may
+also be set up on the cloud phone, so automation (Play Store installs, Gmail-based apps) can start right away.
+
+### What SSO can and cannot do
+- Sign in with Google (Credential Manager / Google Identity Services) proves who the owner is and gives an ID token (identity only).
+  It does not let another device sign in to that Google account. There is no supported way to copy a signed-in Google session from
+  the owner's phone to a cloud emulator. Moving tokens or cookies across devices breaks Google's terms and can lock the account, so we do not do it.
+- Setting the account up on the cloud phone therefore means a normal Google sign-in on the emulator, done by the owner. The email is
+  known from SSO (the agent may type it); the password is typed by the owner only. Google's "Is this you?" prompt or SMS code then
+  arrives on the owner's real phone, which already runs our app (use the `request_otp` flow for SMS codes).
+- Google can still refuse or add checks for a sign-in from an emulator. Fallback: Gmail and Calendar via OAuth scopes on the server
+  (no device sign-in), and installing apps from APKs without the Play Store.
+
+### Flow
+1. App start: "Continue with Google". The app sends the ID token to `POST /api/auth/google`. The server verifies it (signature,
+   audience = our web client ID, email verified). The first account becomes the owner; any other account is rejected (single owner).
+   The server issues a device-bound token, which replaces the pairing code.
+2. Consent screen right after login: "Use <email> on your cloud phone so the agent can start working right away?"
+   - Yes, use this account
+   - Use a different account (recommended: a throwaway or secondary account)
+   - Not now (the agent works without Google; apps that need it will ask later)
+   It states plainly: the agent will be able to use Play Store and apps on that account; the password is typed by you and is never seen by the app,
+   the server or the model; you can remove the account at any time.
+3. Yes: `POST /api/cloud-account/start {email}`. The server runs a provisioning run on the cloud phone: open Add account, type the
+   email, then `handoff`. The app shows "Finish sign-in on your cloud phone" with the live phone view and touch/keyboard takeover.
+4. The owner types the password. If Google asks for confirmation, the prompt appears on the owner's phone; SMS codes go through `request_otp`.
+5. Verify: the agent checks the Play Store (or Settings > Passwords & accounts) shows the account, and the server records `google_linked = email`.
+6. Kickstart: the app offers starter tasks (for example "Install an app from the Play Store") and queues the chosen one.
+7. Remove: "Disconnect Google from the cloud phone" clears the account on the device (Settings > Passwords & accounts > Remove, or wipe the
+   emulator data) and the app reminds the owner to check myaccount.google.com device activity.
+
+### API additions
+`POST /api/auth/google`, `GET /api/me`, `POST /api/cloud-account/consent {choice, email}`, `POST /api/cloud-account/start`,
+`GET /api/cloud-account`, `DELETE /api/cloud-account`. Consent choices and timestamps are stored; the cloud email must equal the SSO email
+unless the owner chose a different account (the app warns on mismatch).
+
+### Safety rules
+- Passwords are never typed by the agent, never sent to our app or server, never in prompts or logs (existing `handoff` rule).
+- SSO scopes: `openid email profile` only.
+- Recommend a throwaway Google account for the demo. Never use the main account with an automation agent.
+- Consent is explicit and revocable; no silent provisioning.
+
+### Manual setup needed from the owner (cannot be automated)
+In Google Cloud Console: create a project, configure the OAuth consent screen (test mode, add the demo account as a test user), create an
+Android OAuth client (package name and SHA-1 of the debug keystore) and a Web OAuth client (its ID is the server's audience and the app's
+`serverClientId`). Put the web client ID in `.env` as `GOOGLE_WEB_CLIENT_ID`.
+
+### Build notes
+Build tooling is present on the Mac (Android platforms 34/35, build-tools, Gradle, JDK 17), so the client can be built from the command line.
+The earlier `android-personal-agent` project has its own Android client; do not copy it (hackathon new-work rule). Write the client fresh.
