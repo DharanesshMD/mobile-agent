@@ -148,3 +148,18 @@ Risks to handle:
 
 Revised milestones: web chatbot and service (day 3), OTP/pairing protocol and web fake-phone for testing (day 4),
 Android client with SMS relay and push-to-talk (day 5), Play Store install flows (day 6).
+
+
+## 12. Build status (27 Oct 2026)
+
+Done and verified on the Android 14 emulator:
+- LangGraph agent (`agent/graph.py`): observe -> plan -> act / gate / finish. Gates (`ask`, `handoff`, `request_otp`) use `interrupt()`,
+  so a run can wait for the owner and resume. Cancel works at any point. A new agent can be added as another node or sub-graph.
+- FastAPI service (`agent/service.py`): one active run per phone, SSE event stream, resume/cancel, takeover endpoints that are
+  rejected while the agent acts, optional bearer token, screenshot cache so viewers do not compete with the agent for ADB.
+- Web chatbot (`web/index.html`): live phone view, streamed steps, approval / handoff / OTP cards, click-to-tap takeover.
+- OTP codes are typed on the device by the graph's gate node and never enter the model prompt, history, events or API responses (tested).
+- 20 unit tests (fake phone and scripted model). Live run in the browser: approval card, resume, 6 steps, correct answer.
+
+Known gaps: single phone and single owner; in-memory run storage and checkpoints (lost on restart); the phone app that supplies
+OTPs does not exist yet (the web OTP card is a stand-in); Play Store image and Google sign-in handoff untested; about 15-30 s per step on the emulator.

@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mobile Agent</title>
+<style>
+  :root {
+    --bg: #0e1014; --panel: #161a21; --line: #262c36; --text: #e8ebf0; --dim: #8b94a3;
+    --accent: #4c9aff; --ok: #3ecf8e; --warn: #f5b84b; --bad: #ff6b6b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f4f5f8; --panel: #fff; --line: #dde1e8; --text: #151922; --dim: #636c7b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); }
+  .dot.on { background: var(--ok); }
+  main { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 20px; padding: 20px; max-width: 1100px; margin: 0 auto;
+         height: calc(100vh - 54px); }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; height: auto; } }
+  .phone { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .screen { position: relative; border: 2px solid var(--line); border-radius: 26px; overflow: hidden; background: #000;
+            aspect-ratio: 9 / 20; height: min(calc(100vh - 170px), 700px); max-width: 100%; align-self: center; }
+  .screen img { width: 100%; height: 100%; display: block; object-fit: contain; user-select: none; -webkit-user-drag: none; }
+  .screen.control { cursor: pointer; border-color: var(--accent); }
+  .badge { position: absolute; left: 8px; right: 8px; top: 8px; padding: 5px 10px; border-radius: 999px; font-size: 12px; text-align: center;
+           background: rgba(0,0,0,.65); color: #fff; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--bad); }
+  input, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .chat { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+  .feed { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .empty { margin: auto; color: var(--dim); text-align: center; max-width: 34ch; }
+  .msg { padding: 9px 12px; border-radius: 12px; max-width: 92%; word-wrap: anywhere; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
+  .msg.step { background: var(--bg); border: 1px solid var(--line); font-size: 13px; }
+  .msg.step b { color: var(--dim); font-weight: 600; margin-right: 6px; }
+  .msg.step code { font: 12px ui-monospace, monospace; color: var(--dim); display: block; margin-top: 3px; }
+  .msg.final { border: 1px solid var(--ok); }
+  .msg.final.bad { border-color: var(--bad); }
+  .card { border: 1px solid var(--warn); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .card h3 { margin: 0; font-size: 13px; color: var(--warn); text-transform: uppercase; letter-spacing: .04em; }
+  .composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
+  .composer input[type=text] { flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>Mobile Agent</h1>
+  <span id="who" style="color:var(--dim);font-size:13px"></span>
+  <span style="flex:1"></span>
+  <input id="token" type="password" placeholder="Access token" style="width:170px;display:none" aria-label="Access token">
+</header>
+<main>
+  <section class="phone" aria-label="Phone">
+    <div class="screen" id="screen">
+      <img id="shot" alt="Live view of the Android phone">
+      <div class="badge" id="badge"></div>
+    </div>
+    <div class="row" style="justify-content:center">
+      <button data-key="back" title="Back">&#9664;</button>
+      <button data-key="home" title="Home">&#9679;</button>
+      <button data-key="recents" title="Recent apps">&#9632;</button>
+      <button data-swipe="up" title="Scroll down">&#8593;</button>
+      <button data-swipe="down" title="Scroll up">&#8595;</button>
+    </div>
+    <div class="row" id="typebox" style="display:none">
+      <input id="typetext" type="text" placeholder="Type on the phone" style="flex:1" aria-label="Text to type on the phone">
+      <button id="typego">Type</button>
+    </div>
+  </section>
+
+  <section class="chat">
+    <div class="feed" id="feed" aria-live="polite">
+      <div class="empty" id="empty">Tell the phone what to do. For example: open Settings, go to Battery, and tell me the percentage.</div>
+    </div>
+    <form class="composer" id="form">
+      <input type="text" id="goal" placeholder="What should the agent do?" autocomplete="off" aria-label="Goal" required>
+      <select id="model" aria-label="Model">
+        <option value="muse-wonder-1.0">Muse Wonder</option>
+        <option value="muse-spark-1.3">Muse Spark 1.3</option>
+      </select>
+      <button class="primary" id="send">Send</button>
+      <button type="button" class="danger" id="cancel" style="display:none">Stop</button>
+    </form>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const tokenInput = $("token");
+let token = new URLSearchParams(location.hash.slice(1)).get("token") || sessionStorage.getItem("token") || "";
+if (token) { try { sessionStorage.setItem("token", token); } catch {} history.replaceState(null, "", location.pathname); }
+tokenInput.value = token;
+tokenInput.addEventListener("change", () => { token = tokenInput.value.trim(); try { sessionStorage.setItem("token", token); } catch {} poll(); });
+
+let runId = null, runStatus = null, es = null, seen = new Set(), waitKind = null;
+
+const headers = () => ({ "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) });
+async function api(path, body) {
+  const r = await fetch(path, { method: body === undefined ? "GET" : "POST", headers: headers(), body: body === undefined ? undefined : JSON.stringify(body) });
+  if (r.status === 401) { tokenInput.style.display = ""; throw new Error("Access token required"); }
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.statusText); }
+  return r.json();
+}
+
+function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }
+function add(node) { $("empty").style.display = "none"; $("feed").append(node); $("feed").scrollTop = $("feed").scrollHeight; return node; }
+function bubble(cls, text) { return add(el("div", "msg " + cls, text)); }
+
+function describe(a) {
+  switch (a.type) {
+    case "tap": return a.element !== undefined ? `tap element ${a.element}` : `tap (${a.x}, ${a.y})`;
+    case "swipe": return "swipe " + a.direction;
+    case "type": return "type text";
+    case "key": return "press " + a.key;
+    case "open_app": return "open " + a.package;
+    case "open_url": return "open " + a.url;
+    case "request_otp": return "needs a one-time code";
+    default: return a.type;
+  }
+}
+
+function render(ev) {
+  if (seen.has(ev.seq)) return; seen.add(ev.seq);
+  if (ev.type === "step") {
+    const m = bubble("step"); m.append(el("b", "", "Step " + ev.n), document.createTextNode(ev.thought || describe(ev.action)));
+    m.append(el("code", "", describe(ev.action)));
+  } else if (ev.type === "result" && ev.outcome !== "ok") {
+    bubble("step", "Action failed: " + ev.outcome);
+  } else if (ev.type === "waiting") {
+    waitKind = ev.kind; renderCard(ev);
+  } else if (ev.type === "final") {
+    const bad = ev.status !== "done";
+    const m = bubble("final" + (bad ? " bad" : ""), ev.status === "done" ? ev.answer || "Done." : `${ev.status.replace("_", " ")}${ev.answer ? ": " + ev.answer : ""}`);
+    runStatus = ev.status; waitKind = null; es && es.close(); sync();
+  }
+  if (ev.type !== "final") sync();
+}
+
+function renderCard(ev) {
+  const card = el("div", "card");
+  const done = (label) => { card.querySelectorAll("button,input").forEach(b => b.disabled = true); card.append(el("div", "", label)); waitKind = null; sync(); };
+  const send = async (body, label) => { try { await api(`/api/runs/${runId}/resume`, body); done(label); } catch (e) { bubble("step", e.message); } };
+  if (ev.kind === "ask") {
+    card.append(el("h3", "", "Approval needed"), el("div", "", ev.text));
+    const row = el("div", "row"), yes = el("button", "primary", "Approve"), no = el("button", "danger", "Deny");
+    yes.onclick = () => send({ approved: true }, "Approved"); no.onclick = () => send({ approved: false }, "Denied");
+    row.append(yes, no); card.append(row);
+  } else if (ev.kind === "handoff") {
+    card.append(el("h3", "", "Your turn on the phone"), el("div", "", ev.text),
+      el("div", "", "Use the phone view on the left: click to tap, and type below it. Type passwords yourself; the agent never sees them."));
+    const ok = el("button", "primary", "I'm finished, continue"); ok.onclick = () => send({ done: true }, "Handed back to the agent");
+    card.append(ok);
+  } else {
+    card.append(el("h3", "", "One-time code needed"), el("div", "", `${ev.text || "An app"} sent a code. Your phone app normally supplies it; enter it here to test.`));
+    const row = el("div", "row"), code = el("input"); code.inputMode = "numeric"; code.maxLength = 8; code.placeholder = "Code"; code.autocomplete = "one-time-code";
+    code.setAttribute("aria-label", "One-time code");
+    const go = el("button", "primary", "Send code"), no = el("button", "danger", "Decline");
+    go.onclick = () => send({ code: code.value.trim() }, "Code sent to the phone"); no.onclick = () => send({ approved: false }, "Declined");
+    row.append(code, go, no); card.append(row);
+  }
+  add(card);
+}
+
+function listen() {
+  es && es.close();
+  es = new EventSource(`/api/runs/${runId}/events` + (token ? `?token=${encodeURIComponent(token)}` : ""));
+  es.onmessage = (m) => render(JSON.parse(m.data));
+  es.onerror = () => {};
+}
+
+function sync() {
+  const active = runId && !["done", "failed", "denied", "cancelled", "max_steps", "error"].includes(runStatus);
+  const acting = active && !waitKind;
+  $("send").disabled = !!active; $("cancel").style.display = active ? "" : "none";
+  const control = !acting;
+  $("screen").classList.toggle("control", control);
+  $("typebox").style.display = control ? "" : "none";
+  $("badge").textContent = acting ? "Agent is working on the phone" : waitKind === "handoff" ? "Your turn: tap and type on the phone" : "Click the screen to control the phone";
+  document.querySelectorAll("[data-key],[data-swipe]").forEach(b => b.disabled = !control);
+}
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const goal = $("goal").value.trim(); if (!goal) return;
+  try {
+    const r = await api("/api/runs", { goal, model: $("model").value });
+    runId = r.id; runStatus = "running"; seen = new Set(); waitKind = null;
+    bubble("user", goal); $("goal").value = ""; listen(); sync();
+  } catch (err) { bubble("step", err.message); }
+});
+$("cancel").onclick = () => runId && api(`/api/runs/${runId}/cancel`, {}).catch(() => {});
+
+$("screen").addEventListener("click", async (e) => {
+  if (!$("screen").classList.contains("control")) return;
+  const img = $("shot"), r = img.getBoundingClientRect();
+  const ar = img.naturalWidth / img.naturalHeight || 0.45;
+  let w = r.width, h = r.height, ox = 0, oy = 0;       // image is letterboxed by object-fit: contain
+  if (w / h > ar) { w = h * ar; ox = (r.width - w) / 2; } else { h = w / ar; oy = (r.height - h) / 2; }
+  const fx = (e.clientX - r.left - ox) / w, fy = (e.clientY - r.top - oy) / h;
+  if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
+  api("/api/device/tap", { fx, fy }).then(refresh).catch((err) => bubble("step", err.message));
+});
+document.querySelectorAll("[data-key]").forEach(b => b.onclick = () => api("/api/device/key", { key: b.dataset.key }).then(refresh).catch(() => {}));
+document.querySelectorAll("[data-swipe]").forEach(b => b.onclick = () => api("/api/device/swipe", { direction: b.dataset.swipe }).then(refresh).catch(() => {}));
+$("typego").onclick = () => { const t = $("typetext"); if (!t.value) return; api("/api/device/type", { text: t.value }).then(() => { t.value = ""; refresh(); }).catch((err) => bubble("step", err.message)); };
+$("typetext").addEventListener("keydown", (e) => { if (e.key === "Enter") $("typego").click(); });
+
+let busy = false;
+async function refresh() {
+  if (busy) return; busy = true;
+  try {
+    const r = await fetch("/api/device/screenshot?t=" + Date.now(), { headers: token ? { Authorization: "Bearer " + token } : {} });
+    if (r.status === 401) { tokenInput.style.display = ""; throw 0; }
+    if (r.ok) { const u = URL.createObjectURL(await r.blob()); const old = $("shot").src; $("shot").src = u; if (old.startsWith("blob:")) URL.revokeObjectURL(old); $("dot").classList.add("on"); }
+    else $("dot").classList.remove("on");
+  } catch { $("dot").classList.remove("on"); }
+  busy = false;
+}
+function poll() { refresh(); }
+(function loop() { poll(); setTimeout(loop, runId && !["done","failed","denied","cancelled","max_steps","error"].includes(runStatus) && !waitKind ? 2500 : 1000); })();
+sync();
+</script>
+</body>
+</html>

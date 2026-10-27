@@ -18,3 +18,16 @@ uv run python -m unittest discover -s tests
 ```
 
 Each run writes screenshots and model replies to `runs/<timestamp>/` (gitignored).
+
+## Run the service and web chatbot
+
+```bash
+uv run python -m agent.service        # http://127.0.0.1:8000, uses the emulator and .env
+```
+
+Set `APP_TOKEN` to require a bearer token (mandatory if `HOST` is not loopback). The web UI shows a live phone view, streams each
+agent step, and shows cards when the agent needs you: approval (`ask`), a handoff to sign in yourself (`handoff`), or a one-time
+SMS code (`request_otp`). When the agent is idle or paused you can click the phone view to tap, and type or scroll yourself.
+
+API: `POST /api/runs`, `GET /api/runs/{id}/events` (SSE), `POST /api/runs/{id}/resume`, `POST /api/runs/{id}/cancel`,
+`GET /api/device/screenshot`, `POST /api/device/{tap,type,key,swipe}` (blocked while the agent is acting).

@@ -5,7 +5,8 @@ import unittest
 from PIL import Image
 
 from agent.device import Element
-from agent.loop import parse_action, run
+from agent.graph import run
+from agent.loop import parse_action
 
 
 def png(color: int) -> bytes:
@@ -33,6 +34,10 @@ class FakeDevice:
 
     def key(self, name):
         self.keys.append(name)
+        self.i += 1
+
+    def type_text(self, text):
+        self.typed = getattr(self, "typed", []) + [text]
         self.i += 1
 
 
@@ -83,6 +88,40 @@ class LoopTests(unittest.TestCase):
         run("g", FakeDevice([png(i) for i in range(1, 8)]), model, settle=0)
         self.assertNotIn("keep scrolling", model.calls[3])
         self.assertIn("keep scrolling", model.calls[4])
+
+    def test_ask_resumes_when_approved_and_ends_when_denied(self):
+        ask = reply(type="ask", question="Send it?")
+        ok = run("g", FakeDevice([png(1), png(2)]), FakeModel([ask, reply(type="done", answer="sent")]), settle=0,
+                 handler=lambda p: {"approved": True})
+        self.assertEqual((ok.status, ok.answer), ("done", "sent"))
+        no = run("g", FakeDevice([png(1)]), FakeModel([ask]), settle=0, handler=lambda p: {"approved": False})
+        self.assertEqual(no.status, "denied")
+
+    def test_handoff_waits_for_owner_then_continues(self):
+        seen = []
+        model = FakeModel([reply(type="handoff", reason="Sign in to Google"), reply(type="done", answer="x")])
+        res = run("g", FakeDevice([png(1), png(2)]), model, settle=0, handler=lambda p: seen.append(p) or {"done": True})
+        self.assertEqual(res.status, "done")
+        self.assertEqual(seen, [{"kind": "handoff", "text": "Sign in to Google"}])
+        self.assertIn("owner handled", model.calls[1])
+
+    def test_otp_is_typed_on_device_but_never_reaches_model_or_history(self):
+        dev = FakeDevice([png(1), png(2), png(3)])
+        model = FakeModel([reply(type="request_otp", app="Gmail"), reply(type="done", answer="in")])
+        events = []
+        res = run("g", dev, model, settle=0, emit=events.append, handler=lambda p: {"code": "482913"})
+        self.assertEqual(res.status, "done")
+        self.assertEqual(dev.typed, ["482913"])
+        blob = json.dumps([model.calls, res.history, events])
+        self.assertNotIn("482913", blob)
+        self.assertIn("one-time code entered", model.calls[1])
+
+    def test_cancel_stops_before_next_step(self):
+        import threading
+        cancel = threading.Event()
+        cancel.set()
+        res = run("g", FakeDevice([png(1)]), FakeModel([]), settle=0, cancel=cancel)
+        self.assertEqual(res.status, "cancelled")
 
     def test_ask_stops_for_approval(self):
         res = run("g", FakeDevice([png(1)]), FakeModel([reply(type="ask", question="Send it?")]), settle=0)

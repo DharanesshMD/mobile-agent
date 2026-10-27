@@ -3,7 +3,7 @@ import argparse
 import time
 
 from agent.device import Device
-from agent.loop import run
+from agent.graph import run
 from agent.model import MetaClient, load_env
 
 
