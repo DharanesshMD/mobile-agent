@@ -17,6 +17,11 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from agent.graph import Result, build_graph, run as run_graph
+from agent.chat_api import register_chat
+from agent.db import Database
+from agent.hub import Hub
+from agent.jobs import JobManager
+from agent.orchestrator import Orchestrator
 from agent.store import Store
 
 MODELS = {"muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"}
@@ -107,7 +112,8 @@ class Swipe(BaseModel):
     direction: str = Field(pattern="^(up|down|left|right)$")
 
 
-def create_app(device, model_factory, token: str | None = None, settle: float = 0.6, store: Store | None = None) -> FastAPI:
+def create_app(device, model_factory, token: str | None = None, settle: float = 0.6, store: Store | None = None,
+               db: Database | None = None, data_dir: str = "data") -> FastAPI:
     app = FastAPI(title="Mobile Agent")
     store = store or Store(None)
     runs: dict[str, Run] = {}
@@ -141,6 +147,9 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         r = active()
         if r and r.status != "waiting":
             raise HTTPException(409, "the agent is acting on the phone; wait for it to pause or cancel the run")
+        cur = jobs.current
+        if cur and not jobs.held and (jobs.db.get_job(cur.job_id) or {}).get("status") != "waiting":
+            raise HTTPException(409, "the agent is acting on the phone; take control first or wait for it to pause")
 
     def google_accounts() -> list[str]:
         fn = getattr(device, "accounts", None)
@@ -156,7 +165,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
 
     def start_run(goal: str, model: str, max_steps: int, kind: str = "task") -> Run:
         with guard:
-            if active():
+            if active() or jobs.busy():
                 raise HTTPException(409, "a run is already active on this phone")
             r = Run(goal, model, kind)
             runs[r.id] = r
@@ -381,6 +390,16 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         device.swipe(*d)
         return {"ok": True}
 
+    db = db or Database(":memory:")
+    hub = Hub()
+    jobs = JobManager(db, hub, device, model_factory, data_dir=data_dir, settle=settle, external_busy=lambda: bool(active()))
+    orch = Orchestrator(db, hub, model_factory, jobs)
+    jobs.orch = orch
+    if not db.list_bots():
+        db.create_bot("Assistant", "")
+    register_chat(app, auth, db, hub, jobs, orch)
+    app.state.db, app.state.jobs, app.state.orch = db, jobs, orch
+    jobs.start()
     return app
 
 
@@ -389,7 +408,8 @@ def create_default_app() -> FastAPI:
     from agent.model import MetaClient, load_env
     load_env()
     app = create_app(Device(os.environ.get("ANDROID_SERIAL")), lambda m: MetaClient(m),
-                     token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")))
+                     token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
+                     db=Database(os.environ.get("DB_FILE", "data/app.db")))
     print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)
     return app
 

@@ -19,7 +19,7 @@ uv run python -m unittest discover -s tests
 
 Each run writes screenshots and model replies to `runs/<timestamp>/` (gitignored).
 
-## Run the service and web chatbot
+## Run the service and chat UI
 
 ```bash
 uv run python -m agent.service        # http://127.0.0.1:8000, uses the emulator and .env
@@ -49,3 +49,15 @@ prints a one-time pairing code (valid 10 minutes). State (paired devices as hash
 | `DELETE /api/cloud-account?confirm=true` | Starts a run that removes the account (asks for approval first) |
 
 The device is the source of truth: after a provisioning or removal run the server re-reads the phone's accounts and ignores what the model claims.
+
+## Chat-first app (design v2, milestones 1 and 2)
+
+Open http://127.0.0.1:8000. Left: bots (each a conversation). Centre: chat with a live status line while the phone works and action cards when the agent
+needs you (approve, choose, answer, take over the phone, enter a code). Right: Details, Library (screenshots from finished tasks) and Computer (live
+thumbnail, Open for full screen, Take control, I'm done).
+
+- Muse Spark 1.3 is the orchestrator (chat, memory, deciding when to use the phone). Muse Wonder is the phone worker only. See `agent/config.py`, `prompts/`.
+- Tasks that need the phone run as background jobs on one shared phone (FIFO queue). Memory is SQLite full-text search (`data/app.db`).
+- New endpoints: `/api/bots`, `/api/bots/{id}/state|messages|events|jobs|library`, `POST /api/items/{id}/answer`, `POST /api/jobs/{id}/cancel`,
+  `GET /api/computer/state`, `POST /api/computer/control` (take, release).
+- Not built yet: vault, sleep/wake, routines, voice, Android client (see docs/design-v2.md).

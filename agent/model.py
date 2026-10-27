@@ -38,8 +38,11 @@ class MetaClient:
         if image_png:
             url = "data:image/png;base64," + base64.b64encode(image_png).decode()
             content.append({"type": "image_url", "image_url": {"url": url}})
+        return self.chat(system, [{"role": "user", "content": content}], max_tokens)
+
+    def chat(self, system: str, messages: list[dict], max_tokens: int = 2000) -> str:
         body = {"model": self.model, "max_tokens": max_tokens, "reasoning_effort": self.effort,
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}]}
+                "messages": [{"role": "system", "content": system}, *messages]}
         req = urllib.request.Request(f"{self.base}/chat/completions", json.dumps(body).encode(),
                                      {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"})
         for attempt in range(3):

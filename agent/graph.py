@@ -56,6 +56,8 @@ def _emit(config: RunnableConfig, event: dict) -> None:
 
 def observe(state: State, config: RunnableConfig) -> dict:
     c = _c(config)
+    if c.get("pause"):
+        c["pause"]()  # blocks while the owner holds control of the phone
     if c["cancel"].is_set():
         return {"status": "cancelled"}
     if state.get("step", 0) >= c["max_steps"]:
@@ -104,11 +106,19 @@ def gate(state: State, config: RunnableConfig) -> dict:
     c, act, n = _c(config), state["action"], state["step"]
     kind = act["type"]
     text = str(act.get("question") or act.get("reason") or act.get("app") or "")
-    resume = interrupt({"kind": kind, "text": text})
+    payload = {"kind": kind, "text": text}
+    if kind == "need_info":
+        payload = {"kind": kind, "field": str(act.get("field", "")), "text": str(act.get("why", ""))}
+    resume = interrupt(payload)
     if resume.get("cancelled"):
         return {"status": "cancelled"}
     history = state.get("history", [])
-    if kind == "ask":
+    if kind == "need_info":
+        value = str(resume.get("value") or "").strip()
+        if not value:
+            return {"status": "denied", "answer": "owner did not provide " + payload["field"]}
+        history = history + [f"{n}. owner provided {payload['field']}: {value}"]
+    elif kind == "ask":
         if not resume.get("approved"):
             return {"status": "denied", "answer": text}
         history = history + [f"{n}. owner approved: {text}"]
@@ -168,7 +178,7 @@ def build_graph(checkpointer=None):
 def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | None = None,
         on_step: Callable[[int, dict, str], None] | None = None, settle: float = 0.6,
         handler: Callable[[dict], dict] | None = None, emit: Callable[[dict], None] | None = None,
-        cancel: threading.Event | None = None, graph=None) -> Result:
+        cancel: threading.Event | None = None, graph=None, pause: Callable[[], None] | None = None) -> Result:
     """Run a goal to completion. Without a handler, the run stops at the first gate with status needs_approval."""
     w, h = device.size()
 
@@ -181,7 +191,7 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
     config = {"recursion_limit": max_steps * 6 + 20, "configurable": {
         "thread_id": uuid.uuid4().hex, "device": device, "model": model, "size": (w, h), "settle": settle,
         "max_steps": max_steps, "trace": str(trace_dir) if trace_dir else None, "emit": fan_out,
-        "cancel": cancel or threading.Event(),
+        "cancel": cancel or threading.Event(), "pause": pause,
         "system": SYSTEM.replace("WIDTHxHEIGHT", f"{SHOT_WIDTH}x{round(h * SHOT_WIDTH / w)}")}}
     graph = graph or build_graph()
     cmd: dict | Command = {"goal": goal, "step": 0, "history": [], "acts": [], "unchanged": 0}

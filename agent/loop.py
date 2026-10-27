@@ -25,6 +25,7 @@ Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {
   {"type":"ask","question":"..."}          stop and ask the owner before anything consequential
   {"type":"handoff","reason":"..."}        the owner must act on the phone (sign in, password, captcha, 2FA prompt)
   {"type":"request_otp","app":"..."}       a one-time SMS code is needed; the owner's phone supplies it, focus the code field first
+  {"type":"need_info","field":"...","why":"..."}   the screen needs a plain value you do not have (a city, a name, a date); never for passwords or codes
   {"type":"done","answer":"..."}           goal achieved; answer holds any information requested
   {"type":"fail","reason":"..."}           goal cannot be achieved
 
@@ -36,7 +37,7 @@ visible, the row that names it (for example "Android version") often opens a det
 scrolling back and forth."""
 
 KEYS = {"back": "KEYCODE_BACK", "home": "KEYCODE_HOME", "enter": "KEYCODE_ENTER"}
-GATES = {"ask", "handoff", "request_otp"}
+GATES = {"ask", "handoff", "request_otp", "need_info"}
 
 
 def shrink(png: bytes) -> tuple[bytes, float]:
