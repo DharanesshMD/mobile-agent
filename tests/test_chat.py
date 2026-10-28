@@ -296,9 +296,53 @@ class BotManagement(unittest.TestCase):
         self.assertEqual([b["id"] for b in c.get("/api/bots").json()], [first])
         self.assertEqual(c.delete(f"/api/bots/{bot}").status_code, 404)
 
-    def test_the_last_bot_cannot_be_deleted(self):
-        c, _, bot, _ = setup(Spark())
-        self.assertEqual(c.delete(f"/api/bots/{bot}").status_code, 409)
+    def test_deleting_keeps_shared_secrets_and_removes_task_traces(self):
+        import os
+        import pathlib
+        c, _, first, app = setup(Spark())
+        bot = c.post("/api/bots", json={"name": "Temp"}).json()["id"]
+        app.state.vault.put("netflix", "pw")
+        job = app.state.db.create_job(bot, "g")
+        app.state.db.update_job(job["id"], status="done")
+        trace = pathlib.Path(app.state.jobs.data_dir) / "runs" / job["id"]
+        trace.mkdir(parents=True)
+        (trace / "step01.png").write_bytes(b"x")
+        app.state.db.add_message(bot, "user", "text", "hello")
+        pre = c.get(f"/api/bots/{bot}/delete-preview").json()
+        self.assertEqual((pre["messages"], pre["tasks"], pre["secrets"], pre["last"], pre["running"]), (1, 1, 1, False, False))
+        self.assertEqual(c.delete(f"/api/bots/{bot}?erase_secrets=true").status_code, 409)  # shared with the other bot
+        r = c.delete(f"/api/bots/{bot}")
+        self.assertEqual((r.status_code, r.json()["bot"]), (200, None))
+        self.assertFalse(os.path.exists(trace))
+        self.assertEqual([s["label"] for s in c.get("/api/vault").json()], ["netflix"])  # secrets stay
+
+    def test_deleting_the_last_bot_leaves_a_fresh_assistant_and_can_erase_secrets(self):
+        c, _, bot, app = setup(Spark())
+        app.state.vault.put("netflix", "pw")
+        app.state.vault.reveal("netflix", "j", "app")
+        app.state.scheduler.add(bot, "r", "p", {"every_minutes": 5})
+        self.assertTrue(c.get(f"/api/bots/{bot}/delete-preview").json()["last"])
+        r = c.delete(f"/api/bots/{bot}?erase_secrets=true").json()
+        self.assertEqual((r["bot"]["name"], r["erased_secrets"]), ("Assistant", 1))
+        bots = c.get("/api/bots").json()
+        self.assertEqual([b["id"] for b in bots], [r["bot"]["id"]])
+        self.assertNotEqual(bots[0]["id"], bot)
+        self.assertEqual((c.get("/api/vault").json(), c.get("/api/vault/audit").json()), ([], []))
+        self.assertEqual(app.state.db.routines(bot), [])
+
+    def test_last_bot_delete_without_the_erase_option_keeps_secrets(self):
+        c, _, bot, app = setup(Spark())
+        app.state.vault.put("netflix", "pw")
+        c.delete(f"/api/bots/{bot}")
+        self.assertEqual(len(c.get("/api/vault").json()), 1)
+
+    def test_a_late_message_for_a_deleted_bot_is_dropped(self):
+        c, _, _, app = setup(Spark())
+        bot = c.post("/api/bots", json={"name": "Temp"}).json()["id"]
+        c.delete(f"/api/bots/{bot}")
+        app.state.orch.post(bot, "too late")
+        app.state.orch.turn(bot, "note")
+        self.assertEqual(app.state.db._q("select * from messages where bot_id=?", (bot,)), [])
 
 
 class PointerControl(unittest.TestCase):

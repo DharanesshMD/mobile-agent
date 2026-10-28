@@ -80,6 +80,15 @@ class Vault:
         self.on_change()
         return n > 0
 
+    def erase_all(self) -> int:
+        """Delete every secret and the audit trail. Used when the owner wipes everything with the last bot."""
+        with self.db.lock:
+            n = self.db.conn.execute("delete from vault").rowcount
+            self.db.conn.execute("delete from vault_audit")
+            self.db.conn.commit()
+        self.on_change()
+        return n
+
     def reveal(self, label: str, job_id: str | None = None, app: str = "") -> str:
         """Decrypt for use. Writes an audit row (label, job, app, time) and never the value."""
         row = self.db._one("select * from vault where lower(label)=lower(?)", (label.strip(),))

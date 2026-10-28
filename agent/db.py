@@ -86,6 +86,16 @@ class Database:
                     (name.strip()[:60], cur["persona"] if persona is None else persona.strip()[:4000], bot_id))
         return self.get_bot(bot_id)
 
+    def bot_counts(self, bot_id: str) -> dict:
+        """What deleting a bot removes, for the confirmation dialog."""
+        one = lambda sql: self._one(sql, (bot_id,))["n"]
+        return {"messages": one("select count(*) n from messages where bot_id=? and kind in ('text','result')"),
+                "tasks": one("select count(*) n from jobs where bot_id=?"), "routines": one("select count(*) n from routines where bot_id=?"),
+                "memories": one("select count(*) n from memory where bot_id=?"), "screenshots": one("select count(*) n from library where bot_id=?")}
+
+    def job_ids(self, bot_id: str) -> list[str]:
+        return [r["id"] for r in self._q("select id from jobs where bot_id=?", (bot_id,))]
+
     def delete_bot(self, bot_id: str) -> list[str]:
         """Remove a bot and everything it owns. Returns the library file paths so the caller can delete them."""
         with self.lock:

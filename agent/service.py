@@ -424,7 +424,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         finally:
             task.cancel()
             if down is not None:  # the browser went away mid-drag: lift the finger
-                await loop.run_in_executor(None, device.touch, "up", *down["at"])
+                device.touch("up", *down["at"])  # synchronous on purpose: a cancelled task must still lift the finger
 
     @app.post("/api/device/tap", dependencies=[Depends(auth)])
     def tap(body: Tap):

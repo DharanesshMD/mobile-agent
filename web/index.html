@@ -53,6 +53,14 @@
   .botrow .more:hover:not(:disabled), .botrow .more.open { background: #ffffff14; color: var(--text); border-color: transparent; }
   .botrow .more:focus:not(:focus-visible) { outline: none; }
   .botrow:hover .pulse { visibility: hidden; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; width: min(440px, 92vw); box-shadow: 0 24px 60px #000a; }
+  dialog::backdrop { background: #000a; }
+  dialog h3 { margin: 0 0 6px; font-size: 17px; } dialog .sub { color: var(--dim); font-size: 13.5px; margin-bottom: 12px; }
+  dialog .sect { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 14px 0 4px; }
+  dialog ul { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.6; } dialog li.keep { list-style: "\2713  "; color: var(--ok); } dialog li.keep span { color: var(--text); }
+  dialog label.opt { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13.5px; cursor: pointer; }
+  dialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  dialog button.danger.solid { background: var(--bad); color: #fff; border-color: var(--bad); }
   .menu { position: absolute; right: 8px; top: calc(50% + 18px); z-index: 20; min-width: 150px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 5px; display: flex; flex-direction: column; gap: 1px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
   .menu button { background: transparent; border: 0; text-align: left; padding: 8px 10px; border-radius: 8px; font-size: 13.5px; display: flex; align-items: center; gap: 9px; }
   .menu button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
@@ -262,7 +270,7 @@ function openMenu(row, more, bot) {
   ren.innerHTML = '<svg viewBox="0 0 16 16"><path d="M2.5 13.5l.7-3L11 2.7a1.4 1.4 0 012 2L5.5 12.8z"/></svg>Rename';
   del.innerHTML = '<svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>Delete';
   m.setAttribute("role", "menu"); ren.onclick = () => renameBot(bot); del.onclick = () => deleteBot(bot);
-  m.append(ren); if (S.bots.length > 1) m.append(del); row.append(m);
+  m.append(ren, del); row.append(m);
 }
 async function renameBot(bot) {
   const name = prompt("Bot name", bot.name); if (!name || !name.trim()) return;
@@ -273,12 +281,35 @@ async function renameBot(bot) {
     await loadBots();
   } catch (e) { alert(e.message); }
 }
+function askDelete(bot, info) {
+  return new Promise((resolve) => {
+    const dlg = el("dialog"), n = (k, one, many) => info[k] ? `${info[k]} ${info[k] === 1 ? one : many}` : null;
+    dlg.append(el("h3", "", `Delete "${bot.name}"?`), el("div", "sub", info.last ? "This is your only bot, so it will be replaced by a fresh Assistant." : "This cannot be undone."));
+    dlg.append(el("div", "sect", "Removed"));
+    const gone = el("ul"), items = [n("messages", "message", "messages") && n("messages", "message", "messages") + " in the chat", n("tasks", "phone task", "phone tasks") && n("tasks", "phone task", "phone tasks") + " with their screenshots",
+      n("routines", "routine", "routines") && n("routines", "routine", "routines") + " (they stop running)", n("memories", "remembered fact", "remembered facts"), n("screenshots", "library screenshot", "library screenshots")].filter(Boolean);
+    for (const t of items.length ? items : ["Its chat history and settings"]) gone.append(el("li", "", t)); dlg.append(gone);
+    if (info.running) dlg.append(el("div", "sub", "Its running phone task will be stopped first."));
+    dlg.append(el("div", "sect", "Kept"));
+    const keep = el("ul"), li = (t) => { const x = el("li", "keep"); x.append(el("span", "", t)); return x; };
+    keep.append(li(`Saved secrets (${info.secrets}): they belong to you and are shared by all bots`), li("The phone, its apps and the Google account signed in on it")); dlg.append(keep);
+    let box = null;
+    if (info.last && info.secrets) {
+      const lab = el("label", "opt"); box = el("input"); box.type = "checkbox"; lab.append(box, el("span", "", `Also erase all ${info.secrets} saved secrets and their use history`)); dlg.append(lab);
+    }
+    const acts = el("div", "acts"), no = el("button", "", "Cancel"), yes = el("button", "danger solid", "Delete");
+    const done = (ok) => { dlg.close(); dlg.remove(); resolve(ok ? { erase: !!(box && box.checked) } : null); };
+    no.onclick = () => done(false); yes.onclick = () => done(true); dlg.addEventListener("cancel", (e) => { e.preventDefault(); done(false); });
+    acts.append(no, yes); dlg.append(acts); document.body.append(dlg); dlg.showModal(); no.focus();
+  });
+}
 async function deleteBot(bot) {
-  if (!confirm(`Delete "${bot.name}" with its chat, routines, memory and library? This cannot be undone.`)) return;
   try {
-    await api(`/api/bots/${bot.id}`, undefined, "DELETE");
+    const choice = await askDelete(bot, await api(`/api/bots/${bot.id}/delete-preview`)); if (!choice) return;
+    const r = await api(`/api/bots/${bot.id}` + (choice.erase ? "?erase_secrets=true" : ""), undefined, "DELETE");
     S.bots = await api("/api/bots");
-    if (S.bot && S.bot.id === bot.id) { S.bot = null; renderBots(); selectBot(S.bots[0].id); } else renderBots();
+    if (S.bot && S.bot.id === bot.id) { S.bot = null; renderBots(); selectBot(r.bot ? r.bot.id : S.bots[0].id); } else renderBots();
+    if (S.tab === "vault") renderTab();
   } catch (e) { alert(e.message); }
 }
 $("searchBtn").onclick = () => { const b = $("searchBox"); b.hidden = !b.hidden; if (!b.hidden) $("searchInput").focus(); };
@@ -444,7 +475,7 @@ async function renderTab() {
     const acts = el("div", "row"); acts.style.cssText = "display:flex;gap:8px;margin-bottom:6px";
     const ren = el("button", "", "Rename"), del = el("button", "danger", "Delete bot");
     ren.onclick = () => renameBot(S.bot); del.onclick = () => deleteBot(S.bot);
-    acts.append(ren); if (S.bots.length > 1) acts.append(del); d.append(acts);
+    acts.append(ren, del); d.append(acts);
     d.append(el("h4", "", "About"), el("p", "", S.bot.persona || "A general assistant. Ask it anything; it uses the cloud phone when a task needs one."),
       el("h4", "", "Models"), el("p", "", "Chat and planning: Muse Spark 1.3. Phone control (screen, taps, typing): Muse Wonder."),
       el("h4", "", "Routines"), el("p", "", "Routines are set by asking the bot in chat. A routine is a task this bot runs on a schedule. It messages you first with the result and asks when it needs you."));

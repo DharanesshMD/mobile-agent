@@ -176,3 +176,9 @@ places: the orchestrator's `request_secret`, the worker's `need_secret`, and aut
 deletes, and shows recent use. Verification: the orchestrator's `vault_check` and the worker's `need_secret` (continues at once if the label is saved) answer yes or no, never the value.
 
 Routines are created only through chat (the orchestrator's `routine_create`); the API and Details tab only list, run now, pause and delete them.
+
+## Deleting a bot
+Removed: the chat, its phone tasks with their screenshots and traces (`data/runs/<job>`), routines (they stop), remembered facts, library screenshots, open cards. A running phone task is
+stopped first and allowed to finish before its data goes. Kept: saved secrets (they belong to the owner and are shared by all bots), the phone with its apps and Google account.
+The only bot can also be deleted: it is replaced by a fresh Assistant, and the owner may tick "also erase all saved secrets" (secrets and the use history), offered only then because
+other bots depend on them otherwise. The dialog lists the counts first (`GET /api/bots/{id}/delete-preview`). Late messages for a deleted bot are dropped.

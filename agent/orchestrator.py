@@ -33,6 +33,8 @@ class Orchestrator:
 
     # --- helpers -------------------------------------------------------------------------------------------------
     def post(self, bot_id: str, text: str, kind: str = "text", meta: dict | None = None) -> dict:
+        if not self.db.get_bot(bot_id):  # the bot was deleted while a turn or job was finishing
+            return {"id": 0, "role": "assistant", "kind": kind, "content": text, "meta": meta or {}}
         msg = self.db.add_message(bot_id, "assistant", kind, text, meta)
         self.hub.publish(bot_id, {"type": "message", "message": msg})
         return msg
@@ -89,6 +91,8 @@ class Orchestrator:
         """One orchestrator turn: read the chat, decide, act. Runs in a worker thread; never raises."""
         lock = self._locks.setdefault(bot_id, threading.Lock())
         with lock:
+            if not self.db.get_bot(bot_id):
+                return
             try:
                 self._turn(bot_id, note)
             except Exception as e:  # keep the chat usable if the model or network fails

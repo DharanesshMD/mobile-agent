@@ -2,7 +2,9 @@
 import asyncio
 import json
 import re
+import shutil
 import threading
+import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -70,17 +72,36 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
             raise HTTPException(422, "name is required")
         return db.rename_bot(bot_id, body.name, body.persona)
 
-    @app.delete("/api/bots/{bot_id}", dependencies=[Depends(auth)])
-    def delete_bot(bot_id: str):
+    @app.get("/api/bots/{bot_id}/delete-preview", dependencies=[Depends(auth)])
+    def delete_preview(bot_id: str):
+        """What deleting this bot removes and what stays, so the owner can decide with the facts in front of them."""
         bot_or_404(bot_id)
-        if len(db.list_bots()) < 2:
-            raise HTTPException(409, "Keep at least one bot")
+        return {**db.bot_counts(bot_id), "secrets": len(vault.entries()), "last": len(db.list_bots()) < 2,
+                "running": bool(jobs.active_for(bot_id))}
+
+    @app.delete("/api/bots/{bot_id}", dependencies=[Depends(auth)])
+    def delete_bot(bot_id: str, erase_secrets: bool = Query(default=False)):
+        """Removes the bot's chat, tasks (with their screenshots and traces), routines, memory and library. Saved secrets belong to the owner and are
+        shared by all bots, so they stay, unless this is the last bot and the owner asks to erase them too. Deleting the last bot leaves a fresh Assistant."""
+        bot_or_404(bot_id)
+        last = len(db.list_bots()) < 2
+        if erase_secrets and not last:
+            raise HTTPException(409, "Secrets are shared with your other bots; erase them when deleting the last bot")
         active = jobs.active_for(bot_id)
-        if active:
+        if active:  # stop the phone task and let it finish before its data is removed
             jobs.cancel(active["id"])
+            for _ in range(60):
+                if not jobs.active_for(bot_id) and not (jobs.current and jobs.current.bot_id == bot_id):
+                    break
+                time.sleep(0.25)
+        job_ids = db.job_ids(bot_id)
         for path in db.delete_bot(bot_id):
             Path(path).unlink(missing_ok=True)
-        return {"ok": True}
+        for jid in job_ids:  # screenshots and prompts of its tasks
+            shutil.rmtree(Path(jobs.data_dir) / "runs" / jid, ignore_errors=True)
+        erased = vault.erase_all() if erase_secrets else 0
+        fresh = db.create_bot("Assistant", "") if last else None
+        return {"ok": True, "bot": fresh, "erased_secrets": erased}
 
     @app.get("/api/bots/{bot_id}/state", dependencies=[Depends(auth)])
     def bot_state(bot_id: str):
