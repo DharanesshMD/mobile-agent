@@ -34,7 +34,7 @@ Rubric: Impact 30, Meta tooling 25, Demo 25, Technical depth 20. Deadline Wed 4 
 P0, this week:
 - [ ] Re-verify dark theme, calculator (not installed), storage with the new actions; build a scenario runner (`scripts/scenarios.py`) that prints pass/fail, steps and time for about 8 tasks
 - [x] Vault (AES-GCM), masked secret input, sensitive-text detector, `type_secret` with approval (agent/vault.py, agent/sensitive.py; 19 tests)
-- [ ] Routines and proactive behaviour: scheduler (daily time or every N minutes), the bot messages you first with results and asks when it needs you
+- [x] Routines and proactive behaviour: scheduler (daily time or every N minutes), the bot messages you first (agent/routines.py; chat, API and Details-tab UI; 10 tests)
 - [ ] Voice: mic button records, Muse Voice Transcribe turns it into text (Meta tooling score), spoken replies later via the browser/phone TTS
 - [ ] Pick and rehearse two hero demo scenarios (owner to choose; safe topics only), polish the UI around them
 

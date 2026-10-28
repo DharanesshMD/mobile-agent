@@ -35,11 +35,21 @@ class NewSecret(BaseModel):
     bot_id: str | None = None
 
 
+class NewRoutine(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    prompt: str = Field(min_length=1, max_length=1000)
+    schedule: dict
+
+
+class RoutinePatch(BaseModel):
+    enabled: bool
+
+
 class Control(BaseModel):
     action: str = Field(pattern="^(take|release)$")
 
 
-def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault) -> None:
+def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> None:
     def bot_or_404(bot_id: str) -> dict:
         b = db.get_bot(bot_id)
         if not b:
@@ -201,3 +211,40 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault) -> None:
     @app.get("/api/vault/audit", dependencies=[Depends(auth)])
     def vault_audit():
         return vault.audit()
+
+    @app.get("/api/bots/{bot_id}/routines", dependencies=[Depends(auth)])
+    def routines_list(bot_id: str):
+        bot_or_404(bot_id)
+        return db.routines(bot_id)
+
+    @app.post("/api/bots/{bot_id}/routines", dependencies=[Depends(auth)])
+    def routines_add(bot_id: str, body: NewRoutine):
+        bot_or_404(bot_id)
+        try:
+            return scheduler.add(bot_id, body.name, body.prompt, body.schedule)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    def routine_or_404(rid: str) -> dict:
+        r = db.get_routine(rid)
+        if not r:
+            raise HTTPException(404, "unknown routine")
+        return r
+
+    @app.patch("/api/routines/{rid}", dependencies=[Depends(auth)])
+    def routines_patch(rid: str, body: RoutinePatch):
+        r = routine_or_404(rid)
+        from agent.routines import next_run
+        return db.routine_update(rid, enabled=int(body.enabled), next_run=next_run(r["schedule"], scheduler.clock()))
+
+    @app.post("/api/routines/{rid}/run", dependencies=[Depends(auth)])
+    def routines_run(rid: str):
+        r = routine_or_404(rid)
+        threading.Thread(target=scheduler.fire, args=(r, True), kwargs={}, daemon=True).start()
+        return {"ok": True}
+
+    @app.delete("/api/routines/{rid}", dependencies=[Depends(auth)])
+    def routines_delete(rid: str):
+        routine_or_404(rid)
+        db.routine_delete(rid)
+        return {"ok": True}

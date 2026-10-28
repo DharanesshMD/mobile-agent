@@ -162,3 +162,9 @@ A choice card and cancel also worked live.
 
 Known issues: about 20 s per phone step (emulator plus model latency); cancel takes effect at the next step; the live thumbnail polls every 2.5 s; one choice card was answered
 during testing without a deliberate click from me (cause unknown, possibly my automated click on a neighbouring tab); the web UI has no vault, voice or routines yet.
+
+## Routines (built)
+`agent/routines.py`: a routine is `{name, prompt, schedule}` with `every_minutes` (5 to 10080) or `daily_at` (HH:MM, server local time). A scheduler thread ticks every 15 s,
+claims due routines (next run moves first, so no double fire), and gives the orchestrator a system note; the bot replies or starts a phone job, so it messages the owner first.
+After downtime a routine fires once. The orchestrator can create, list and delete routines in chat; the Details tab has the form, Run now, Pause and Delete.
+Not built: per-routine time zones, retry after a failed phone job, a notification when the browser tab is closed (needs the Android client or web push).

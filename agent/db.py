@@ -22,6 +22,8 @@ create table if not exists library(id text primary key, bot_id text not null, jo
 create table if not exists vault(id text primary key, owner text not null, label text not null, kind text not null, nonce blob not null,
   ciphertext blob not null, created real);
 create table if not exists vault_audit(id integer primary key autoincrement, secret_id text, label text, job_id text, app text, at real);
+create table if not exists routines(id text primary key, bot_id text not null, name text not null, prompt text not null, schedule text not null,
+  enabled integer not null default 1, next_run real, last_run real, created real);
 create virtual table if not exists memory using fts5(text, bot_id unindexed, created unindexed);
 """
 
@@ -30,7 +32,7 @@ def _row(r: sqlite3.Row | None) -> dict | None:
     if r is None:
         return None
     d = dict(r)
-    for k in ("meta", "payload"):
+    for k in ("meta", "payload", "schedule"):
         if k in d and isinstance(d[k], str):
             d[k] = json.loads(d[k] or "{}")
     return d
@@ -172,3 +174,32 @@ class Database:
             return []
         rows = self._q("select text from memory where memory match ? and bot_id=? order by bm25(memory) limit ?", (q, bot_id, limit))
         return [r["text"] for r in rows]
+
+    # routines
+    def routine_add(self, bot_id: str, name: str, prompt: str, schedule: dict, next_run: float) -> dict:
+        rid = uuid.uuid4().hex[:10]
+        self._x("insert into routines(id,bot_id,name,prompt,schedule,enabled,next_run,created) values(?,?,?,?,?,1,?,?)",
+                (rid, bot_id, name, prompt, json.dumps(schedule), next_run, time.time()))
+        return self.get_routine(rid)
+
+    def get_routine(self, rid: str) -> dict | None:
+        return self._one("select * from routines where id=?", (rid,))
+
+    def routines(self, bot_id: str) -> list[dict]:
+        return self._q("select * from routines where bot_id=? order by created", (bot_id,))
+
+    def routine_update(self, rid: str, **fields) -> dict | None:
+        cols = {"enabled", "next_run", "last_run"}
+        sets = {k: v for k, v in fields.items() if k in cols}
+        if sets:
+            self._x(f"update routines set {', '.join(f'{k}=?' for k in sets)} where id=?", (*sets.values(), rid))
+        return self.get_routine(rid)
+
+    def routine_delete(self, rid: str) -> bool:
+        with self.lock:
+            n = self.conn.execute("delete from routines where id=?", (rid,)).rowcount
+            self.conn.commit()
+        return n > 0
+
+    def routines_due(self, now: float) -> list[dict]:
+        return self._q("select * from routines where enabled=1 and next_run<=?", (now,))

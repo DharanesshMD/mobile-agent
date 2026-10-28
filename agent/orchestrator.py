@@ -25,7 +25,7 @@ def parse_decision(text: str) -> dict:
 
 class Orchestrator:
     def __init__(self, db: Database, hub: Hub, model_factory, jobs, vault=None):
-        self.vault = vault
+        self.vault, self.routines = vault, None  # routines (the scheduler) is attached by the app
         self.db, self.hub, self.model_factory, self.jobs = db, hub, model_factory, jobs
         self._locks: dict[str, threading.Lock] = {}
         self._system = (PROMPTS / "orchestrator.md").read_text()
@@ -120,6 +120,10 @@ class Orchestrator:
             if kind == "ask_user":
                 self.make_item(bot_id, None, act)
                 return
+            if kind in ("routine_create", "routine_list", "routine_delete"):
+                msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
+                               {"role": "user", "content": f"[tool result for {kind}] {self._routine_tool(bot_id, kind, act)}"}]
+                continue
             if kind in ("memory_search", "memory_save"):
                 if kind == "memory_save":
                     self.db.memory_add(bot_id, str(act.get("text", "")))
@@ -133,6 +137,26 @@ class Orchestrator:
             self.post(bot_id, str(act.get("text", "")).strip() or "I'm not sure how to do that yet.")
             return
         self.post(bot_id, "I got stuck deciding what to do. Could you tell me more?")
+
+    def _routine_tool(self, bot_id: str, kind: str, act: dict) -> str:
+        from agent.routines import describe
+        if self.routines is None:
+            return "routines are not available"
+        try:
+            if kind == "routine_create":
+                r = self.routines.add(bot_id, str(act.get("name", "")), str(act.get("prompt", "")), act.get("schedule") or {})
+                return f"created '{r['name']}' ({describe(r['schedule'])}); tell the owner it is set"
+            rows = self.db.routines(bot_id)
+            if kind == "routine_list":
+                return "; ".join(f"{r['name']} ({describe(r['schedule'])}{'' if r['enabled'] else ', paused'})" for r in rows) or "no routines"
+            name = str(act.get("name", "")).strip().lower()
+            hit = next((r for r in rows if r["name"].lower() == name), None)
+            if not hit:
+                return f"no routine named '{act.get('name', '')}'; existing: " + (", ".join(r["name"] for r in rows) or "none")
+            self.db.routine_delete(hit["id"])
+            return f"deleted '{hit['name']}'"
+        except ValueError as e:
+            return f"error: {e}"
 
     def job_finished(self, bot_id: str, job: dict) -> None:
         status, result = job["status"], job["result"]
