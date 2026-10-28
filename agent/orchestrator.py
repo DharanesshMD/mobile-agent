@@ -2,6 +2,7 @@
 import json
 import re
 import threading
+import time
 from pathlib import Path
 
 from agent.config import ORCHESTRATOR_MODEL
@@ -10,6 +11,7 @@ from agent.hub import Hub
 
 PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
 MAX_TOOL_LOOPS = 4
+MAX_SEARCHES_PER_TURN = 3
 MAX_BOT_CHAIN = 3  # the asking bot plus at most two more
 
 
@@ -66,7 +68,7 @@ class Orchestrator:
 
     def _context(self, bot_id: str) -> str:
         bot = self.db.get_bot(bot_id)
-        parts = [self._system]
+        parts = [self._system, f"Today is {time.strftime('%A %d %B %Y')} (server local time)."]
         if bot["persona"]:
             parts.append("Persona and instructions for this bot:\n" + bot["persona"])
         labels = self.vault.labels() if self.vault else []
@@ -112,6 +114,7 @@ class Orchestrator:
         system, msgs = self._context(bot_id), self._history(bot_id)
         if note:
             msgs = msgs + [{"role": "user", "content": f"[system note, not from the owner] {note}"}]
+        searches = 0
         for _ in range(MAX_TOOL_LOOPS):
             act = self._decide(model, system, msgs)
             if act is None:
@@ -139,6 +142,12 @@ class Orchestrator:
             if kind == "ask_user":
                 self.make_item(bot_id, None, act)
                 return
+            if kind == "web_search":
+                searches += 1
+                result = self._web_search(model, bot_id, str(act.get("query", "")), searches)
+                msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
+                               {"role": "user", "content": f"[tool result for web_search] {result}"}]
+                continue
             if kind == "ask_bot":
                 msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
                                {"role": "user", "content": f"[tool result for ask_bot] {self._ask_bot(bot_id, act, chain or (bot_id,))}"}]
@@ -198,6 +207,23 @@ class Orchestrator:
             return f"deleted '{hit['name']}'"
         except ValueError as e:
             return f"error: {e}"
+
+    def _web_search(self, model, bot_id: str, query: str, count: int) -> str:
+        """Meta's web search grounding through the Responses API. Returns the grounded answer plus source URLs for the model to cite."""
+        query = " ".join(query.split())[:300]
+        if len(query) < 3:
+            return "error: a search query is required"
+        if count > MAX_SEARCHES_PER_TURN:
+            return "error: search limit for this turn reached; answer with what you have"
+        if not hasattr(model, "search"):
+            return "error: web search is not available"
+        self.post(bot_id, f"Searched the web: {query}", "bot_note", {"search": query})
+        try:
+            r = model.search(query)
+        except Exception as e:
+            return f"error: the search failed ({type(e).__name__}); say so and answer from what you know"
+        sources = "\n".join(f"- {s['title'] or s['url']}: {s['url']}" for s in r["sources"][:5])
+        return f"{r['text'] or '(no answer text)'}\n\nSources:\n{sources or '(none)'}"
 
     def _find_bot(self, name: str, exclude: tuple) -> dict | str:
         """A bot by name (exact, else unique prefix), or an error string for the model."""

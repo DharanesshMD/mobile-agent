@@ -78,3 +78,27 @@ class Retries(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SearchParsing(unittest.TestCase):
+    def test_search_returns_the_last_message_and_deduplicated_sources(self):
+        from agent.model import MetaClient
+        m = MetaClient("muse-spark-1.3", api_key="k")
+        seen = {}
+
+        def fake_post(path, body):
+            seen["path"], seen["body"] = path, body
+            return {"usage": {"input_tokens": 100, "output_tokens": 10, "input_tokens_details": {"cached_tokens": 40}},
+                    "output": [{"type": "message", "content": [{"type": "output_text", "text": "I'll search.", "annotations": []}]},
+                               {"type": "web_search_call", "results": [{"title": "A", "url": "https://a.example", "snippet": "about a"},
+                                                                       {"title": "B", "url": "https://b.example", "snippet": "about b"}]},
+                               {"type": "message", "content": [{"type": "output_text", "text": "The answer.", "annotations": [
+                                   {"type": "url_citation", "url": "https://b.example", "title": "B cited"}]}]}]}
+        m._post = fake_post
+        r = m.search("q")
+        self.assertEqual(r["text"], "The answer.")
+        self.assertEqual([s["url"] for s in r["sources"]], ["https://b.example", "https://a.example"])  # cited first
+        self.assertEqual(r["sources"][0]["snippet"], "about b")
+        self.assertEqual(seen["path"], "/responses")
+        self.assertEqual(seen["body"]["tools"], [{"type": "web_search", "search_context_size": "low"}])
+        self.assertEqual(m.tokens, {"prompt": 100, "completion": 10, "cached": 40})

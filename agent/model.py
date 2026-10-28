@@ -41,15 +41,12 @@ class MetaClient:
             content.append({"type": "image_url", "image_url": {"url": url}})
         return self.chat(system, [{"role": "user", "content": content}], max_tokens)
 
-    def chat(self, system: str, messages: list[dict], max_tokens: int = 2000) -> str:
-        body = {"model": self.model, "max_tokens": max_tokens, "reasoning_effort": self.effort,
-                "messages": [{"role": "system", "content": system}, *messages]}
-        req = urllib.request.Request(f"{self.base}/chat/completions", json.dumps(body).encode(),
+    def _post(self, path: str, body: dict) -> dict:
+        req = urllib.request.Request(f"{self.base}{path}", json.dumps(body).encode(),
                                      {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"})
         for attempt in range(3):
             try:
-                data = json.load(urllib.request.urlopen(req, timeout=120))
-                break
+                return json.load(urllib.request.urlopen(req, timeout=120))
             except urllib.error.HTTPError as e:
                 if e.code in (429, 500, 502, 503) and attempt < 2:
                     time.sleep(2 ** attempt)
@@ -60,8 +57,38 @@ class MetaClient:
                     time.sleep(2 ** attempt)
                     continue
                 raise ModelError(str(e)) from e
-        usage = data.get("usage", {})
-        self.tokens["prompt"] += usage.get("prompt_tokens", 0)
-        self.tokens["completion"] += usage.get("completion_tokens", 0)
-        self.tokens["cached"] += (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+        raise ModelError("unreachable")
+
+    def _count(self, usage: dict) -> None:
+        self.tokens["prompt"] += usage.get("prompt_tokens", usage.get("input_tokens", 0))
+        self.tokens["completion"] += usage.get("completion_tokens", usage.get("output_tokens", 0))
+        details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
+        self.tokens["cached"] += details.get("cached_tokens", 0)
+
+    def chat(self, system: str, messages: list[dict], max_tokens: int = 2000) -> str:
+        body = {"model": self.model, "max_tokens": max_tokens, "reasoning_effort": self.effort,
+                "messages": [{"role": "system", "content": system}, *messages]}
+        data = self._post("/chat/completions", body)
+        self._count(data.get("usage", {}))
         return data["choices"][0]["message"].get("content") or ""
+
+    def search(self, query: str, size: str = "low") -> dict:
+        """Web search grounding (Responses API only; $2.50 per 1,000 queries). Returns {"text", "sources": [{"title", "url", "snippet"}]}:
+        the grounded answer, then the pages it cited followed by other pages it considered."""
+        data = self._post("/responses", {"model": self.model, "input": query, "include": ["web_search_call.results"],
+                                         "tools": [{"type": "web_search", "search_context_size": size}]})
+        self._count(data.get("usage", {}))
+        texts, cited, seen = [], [], []
+        for item in data.get("output", []):
+            if item.get("type") == "message":
+                texts.append("")
+                for block in item.get("content", []):
+                    texts[-1] += block.get("text", "")  # the model narrates its searching in earlier messages; only the last one is the answer
+                    cited += [{"title": a.get("title", ""), "url": a["url"], "snippet": ""} for a in block.get("annotations", []) if a.get("url")]
+            elif item.get("type") == "web_search_call":
+                seen += [{"title": r.get("title", ""), "url": r["url"], "snippet": r.get("snippet", "")} for r in item.get("results", []) if r.get("url")]
+        by_url: dict[str, dict] = {}
+        for src in cited + seen:
+            by_url.setdefault(src["url"], src)
+        snippets = {r["url"]: r["snippet"] for r in seen}
+        return {"text": (texts[-1] if texts else "").strip(), "sources": [{**v, "snippet": v["snippet"] or snippets.get(v["url"], "")} for v in by_url.values()][:6]}

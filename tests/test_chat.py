@@ -476,3 +476,47 @@ class NewBotGreeting(unittest.TestCase):
         c.post("/api/bots", json={"name": "Quiet", "persona": "x"})
         time.sleep(0.3)
         self.assertEqual(spark.calls, [])
+
+
+class WebSearch(unittest.TestCase):
+    class SearchSpark(Spark):
+        def __init__(self, *a, fail=False):
+            super().__init__(*a)
+            self.queries, self.fail = [], fail
+
+        def search(self, query):
+            self.queries.append(query)
+            if self.fail:
+                raise RuntimeError("down")
+            return {"text": "Python 3.15.2 was released on 25 Oct 2026.", "sources": [{"title": "Python.org", "url": "https://www.python.org/downloads/", "snippet": ""}]}
+
+    def test_search_result_and_sources_reach_the_model_and_the_chat_shows_what_was_searched(self):
+        spark = self.SearchSpark(act(type="web_search", query="  latest   python version "), act(type="reply", text="3.15.2 (https://www.python.org/downloads/)"))
+        c, _, bot, _ = setup(spark)
+        say(c, bot, "what is the newest python?")
+        until(lambda: any("3.15.2" in t for t in texts(c, bot, "assistant")))
+        self.assertEqual(spark.queries, ["latest python version"])
+        result = spark.calls[1][1][-1]["content"]
+        self.assertIn("[tool result for web_search] Python 3.15.2 was released", result)
+        self.assertIn("https://www.python.org/downloads/", result)
+        notes = [m["content"] for m in msgs(c, bot) if m["kind"] == "bot_note"]
+        self.assertEqual(notes, ["Searched the web: latest python version"])
+        self.assertIn("Today is ", spark.calls[0][0])  # the model knows the date so it can judge what is current
+
+    def test_failed_and_empty_searches_are_reported_not_raised(self):
+        spark = self.SearchSpark(act(type="web_search", query="a"), act(type="web_search", query="first"), act(type="web_search", query="second"),
+                                 act(type="reply", text="done"), fail=True)
+        c, _, bot, _ = setup(spark)
+        say(c, bot, "search a lot")
+        until(lambda: "done" in texts(c, bot, "assistant"))
+        blob = json.dumps(spark.calls[-1][1])
+        self.assertIn("a search query is required", blob)
+        self.assertIn("the search failed (RuntimeError)", blob)
+        self.assertEqual(spark.queries, ["first", "second"])  # the too-short query never reached the API
+
+    def test_a_model_without_search_support_is_handled(self):
+        spark = Spark(act(type="web_search", query="weather today"), act(type="reply", text="I could not search."))
+        c, _, bot, _ = setup(spark)
+        say(c, bot, "weather?")
+        until(lambda: "I could not search." in texts(c, bot, "assistant"))
+        self.assertIn("web search is not available", json.dumps(spark.calls[1][1]))

@@ -61,3 +61,9 @@ and Spark about $0.002. The $150 credit is on the order of 20,000 Wonder steps.
 
 Conclusion for now: use Wonder as the default agent model. Spark 1.3 at `minimal` reasoning is cheaper but loops, so it is better
 suited to simple one-screen decisions or text-only work. One run per cell, not a benchmark.
+
+## Web search grounding (28 Oct 2026)
+Responses API only (`POST /v1/responses`, `tools: [{"type": "web_search", "search_context_size": "low"}]`, `include: ["web_search_call.results"]`); it is not available through Chat Completions.
+The model searches and browses by itself, narrates in earlier `message` items (we keep only the last) and cites with `url_citation` annotations. Measured with muse-spark-1.3 on one question
+("latest stable Python"): low context 9 s, 16.5K input tokens, 0.8K output (about $0.024 with the token price plus the $0.0025 search fee); medium 16 s and 32.8K input tokens, high would cost more.
+So `MetaClient.search` defaults to low. Each bot turn may search up to three times (`web_search` action in the orchestrator).
