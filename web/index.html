@@ -46,12 +46,18 @@
   .bot .n { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .bot .p { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .botrow { position: relative; }
-  .botrow .more { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; padding: 0; border-radius: 8px; opacity: 0; line-height: 1; }
-  .botrow:hover .more, .botrow .more:focus-visible, .botrow .more.open { opacity: 1; }
+  .botrow .bot { padding-right: 42px; }
+  .botrow .more { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; padding: 0; border: 0; border-radius: 8px; display: grid; place-items: center; color: var(--dim); background: transparent; opacity: 0; transition: opacity .12s, background .12s; }
+  .botrow .more svg { width: 16px; height: 16px; fill: currentColor; }
+  .botrow:hover .more, .botrow .more.open, .botrow .more:focus-visible { opacity: 1; }
+  .botrow .more:hover:not(:disabled), .botrow .more.open { background: #ffffff14; color: var(--text); border-color: transparent; }
+  .botrow .more:focus:not(:focus-visible) { outline: none; }
   .botrow:hover .pulse { visibility: hidden; }
-  .menu { position: absolute; right: 8px; top: calc(50% + 16px); z-index: 20; min-width: 130px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px; display: flex; flex-direction: column; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
-  .menu button { background: transparent; border-color: transparent; text-align: left; padding: 7px 10px; }
-  .menu button:hover { background: var(--raise); }
+  .menu { position: absolute; right: 8px; top: calc(50% + 18px); z-index: 20; min-width: 150px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 5px; display: flex; flex-direction: column; gap: 1px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+  .menu button { background: transparent; border: 0; text-align: left; padding: 8px 10px; border-radius: 8px; font-size: 13.5px; display: flex; align-items: center; gap: 9px; }
+  .menu button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .menu button:hover { background: var(--raise); border-color: transparent; }
+  .menu button.danger:hover { background: #ff5d6c1f; }
   .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); animation: pulse 1.2s ease-in-out infinite; flex: none; }
   .pulse.wait { background: var(--accent); }
   @keyframes pulse { 50% { opacity: .35; transform: scale(.8); } }
@@ -225,8 +231,9 @@ function renderBots() {
     const t = el("div", "t"); t.append(el("div", "n", b.name), el("div", "p", b.last || "No messages yet")); btn.append(t);
     if (b.active) btn.append(el("span", "pulse" + (b.active === "waiting" ? " wait" : "")));
     btn.onclick = () => { selectBot(b.id); $("app").classList.remove("show-side"); };
-    const row = el("div", "botrow"), more = el("button", "ghost more", "\u22EF");
-    more.title = more.ariaLabel = "Bot options";
+    const row = el("div", "botrow"), more = el("button", "more");
+    more.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></svg>';
+    more.setAttribute("aria-label", "Bot options");
     more.onclick = (e) => { e.stopPropagation(); openMenu(row, more, b); };
     row.append(btn, more); list.append(row);
   }
@@ -236,8 +243,10 @@ document.addEventListener("click", closeMenu); document.addEventListener("keydow
 function openMenu(row, more, bot) {
   const was = more.classList.contains("open"); closeMenu(); if (was) return;
   more.classList.add("open");
-  const m = el("div", "menu"), ren = el("button", "", "Rename"), del = el("button", "danger", "Delete");
-  ren.onclick = () => renameBot(bot); del.onclick = () => deleteBot(bot);
+  const m = el("div", "menu"), ren = el("button"), del = el("button", "danger");
+  ren.innerHTML = '<svg viewBox="0 0 16 16"><path d="M2.5 13.5l.7-3L11 2.7a1.4 1.4 0 012 2L5.5 12.8z"/></svg>Rename';
+  del.innerHTML = '<svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>Delete';
+  m.setAttribute("role", "menu"); ren.onclick = () => renameBot(bot); del.onclick = () => deleteBot(bot);
   m.append(ren); if (S.bots.length > 1) m.append(del); row.append(m);
 }
 async function renameBot(bot) {
