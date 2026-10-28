@@ -92,3 +92,28 @@ Findings:
 
 Settings: `PHONE_IMAGE` (always, adaptive, never) and `PHONE_IMAGE_WIDTH` (default 360). Run the set with `uv run python scripts/scenarios.py --label name`; results are saved to `runs/scenarios/`.
 Cached input tokens grow as the same system prompt is reused (about half of prompt tokens in the final run were cached), which makes the real cost lower than the table suggests.
+
+## Android intent fast paths (28 Oct 2026)
+One validated `intent` action does in a single step what used to take many taps. Kinds: set_alarm, set_timer, dial, compose_sms, compose_email, insert_contact,
+insert_event (calendar), maps_search, navigate, share_text, camera. Values are validated (hour and minute ranges, phone and email formats, lengths, the event time
+is converted using the phone's own time zone) and shell-quoted, so text with quotes, `$()` or non-English characters reaches the app unchanged (tested through a real
+shell split). `am start` reports errors in its output with exit code 0, so the output is checked.
+
+Safety design: only `set_alarm` and `set_timer` complete on their own. `compose_sms`, `compose_email`, `insert_contact` and `insert_event` only prefill a screen: the
+worker still taps Send or Save and must `ask` the owner before anything is sent. `dial` opens the dialer and never places the call. The result text tells the model which
+case it is.
+
+Live results (same phone, defaults 360 px, image every step):
+| Scenario | Without intents | With intents |
+|---|---|---|
+| Add a contact (name + number, save) | 11 steps, 46 s (earlier runs ran out of steps) | 3 to 5 steps, 18 to 19 s |
+| Set an alarm (verified from `dumpsys alarm`: 05:17) | not measured | 2 steps, 7 s |
+| Open the dialer with a number, no call | not measured | 2 steps, 6 s |
+| Directions in Maps (first-run screens needed UI taps) | not measured | 6 steps, 20 to 25 s |
+| Send a text (must stop for approval) | stopped and asked | still stops and asks |
+
+Full set of 11 scenarios: 11/11 pass, 36 steps, 141.5 s. On the original 8: 26 steps and 103 s, against 30 steps and 114 s before. The system prompt grew by a few hundred tokens
+(cached after the first call), so prompt tokens per step are slightly higher.
+
+Not verified: timers (the Clock app keeps only its nearest timer as a system alarm, so a new timer cannot be told apart), calendar events (the Calendar app shows a first-run
+screen before it can save, and no account is signed in), and email (no mail account). The intents open the right forms; the worker handles the rest through the UI.

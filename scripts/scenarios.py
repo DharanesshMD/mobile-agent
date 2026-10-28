@@ -35,6 +35,12 @@ def delete_test_contacts(dev: Device) -> None:
         sh(dev, "content", "delete", "--uri", "content://com.android.contacts/raw_contacts", "--where", f"_id={m.group(1)}")
 
 
+def top_activity(dev: Device) -> str:
+    out = sh(dev, "dumpsys", "activity", "activities")
+    m = re.search(r"topResumedActivity=ActivityRecord\{\S+ u0 (\S+)", out)
+    return m.group(1) if m else ""
+
+
 SCENARIOS = [
     dict(id="dark_theme", max_steps=10,
          goal="Open Settings, go to Display and turn on Dark theme. Tell me when it is on.",
@@ -58,6 +64,16 @@ SCENARIOS = [
          setup=delete_test_contacts,
          check=lambda d, r: "5550001111" in contact_digits(d),
          cleanup=delete_test_contacts),
+    dict(id="set_alarm", max_steps=6,
+         goal="Set an alarm for 5:17 AM called Standup.",
+         check=lambda d, r: r.status == "done" and "05:17:00" in (d.next_alarm() or "")),
+    dict(id="dial_ready", max_steps=6,
+         goal="Open the phone dialer with 5551234567 already typed in. Do not place the call.",
+         check=lambda d, r: "dialer" in top_activity(d).lower()),
+    dict(id="maps_directions", max_steps=8,
+         goal="Open Maps and show directions to Chennai Airport.",
+         setup=lambda d: None,
+         check=lambda d, r: "maps" in top_activity(d).lower()),
     dict(id="app_missing", max_steps=8,
          goal="Open the Calculator app, compute 1234 times 56, and tell me the result.",
          check=lambda d, r: r.status in ("needs_approval", "failed") and r.steps <= 5),

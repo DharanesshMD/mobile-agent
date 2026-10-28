@@ -227,5 +227,24 @@ class Device:
     def open_url(self, url: str) -> None:
         self._run("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", shlex.quote(url))
 
+    def start_intent(self, args: list[str]) -> None:
+        """`am start` with pre-quoted arguments. am reports failures in its output, not always in the exit code."""
+        out = self._run("shell", "am", "start", *args).decode(errors="replace")
+        if "Error" in out:
+            raise ValueError(out.strip().splitlines()[-1][:160])
+
+    def timezone(self) -> str:
+        tz = self._run("shell", "getprop", "persist.sys.timezone").decode().strip()
+        return tz or "UTC"
+
+    def next_alarm(self) -> str | None:
+        """Time of the next alarm clock from `dumpsys alarm` (for example '2026-10-29 06:45:00'), or None."""
+        m = re.search(r"Next alarm clock information:.*?time:\d+ = (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)",
+                      self._run("shell", "dumpsys", "alarm").decode(errors="replace"), re.S)
+        return m.group(1) if m else None
+
+    def has_timer(self) -> bool:
+        return "com.android.deskclock.action.TIMER_EXPIRED" in self._run("shell", "dumpsys", "alarm").decode(errors="replace")
+
     def open_intent(self, action: str) -> None:
         self._run("shell", "am", "start", "-a", action)

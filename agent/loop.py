@@ -6,7 +6,7 @@ import time
 
 from PIL import Image, ImageChops, ImageStat
 
-from agent.apps import SETTINGS_PAGES, match_apps
+from agent.apps import SETTINGS_PAGES, build_intent, match_apps
 
 SHOT_WIDTH = 540
 
@@ -22,6 +22,10 @@ Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {
   {"type":"scroll","direction":"down|up|left|right"}  reveal more content in that direction: "down" shows what is further down the page
   {"type":"swipe","direction":"up|down|left|right"}   raw finger swipe (the finger moves in that direction); prefer "scroll"
   {"type":"find_app","query":"calculator"} list installed apps matching a name; use the package it returns with open_app
+  {"type":"intent","kind":"set_alarm|set_timer|dial|compose_sms|compose_email|insert_contact|insert_event|maps_search|navigate|share_text|camera", ...}
+                                           do it without tapping through the app. Fields by kind: set_alarm hour (0-23), minute, label?; set_timer seconds, label?;
+                                           dial number; compose_sms number, body; compose_email to, subject, body; insert_contact name, phone, email?;
+                                           insert_event title, start "YYYY-MM-DD HH:MM", minutes?, location?; maps_search query; navigate destination; share_text text
   {"type":"open_settings","page":"wifi|bluetooth|display|sound|battery|apps|storage|location|security|privacy|accounts|add_account|date_time|language|keyboard|accessibility|airplane_mode|nfc|network|data_usage|notifications|do_not_disturb|about_phone|developer_options|default_apps"}
                                            jump straight to a Settings page (much faster than hunting through menus)
   {"type":"key","key":"back|home|enter"}
@@ -37,7 +41,9 @@ Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {
 
 Rules: verify on the screen that the goal is met before "done". Never send messages, pay, delete, purchase, or
 change account/security settings without first using "ask". Never type a password or a verification code yourself:
-use "handoff" for passwords and "request_otp" for SMS codes. To open an app, call find_app first, then open_app with a returned package. If find_app says the app is not installed, do not hunt for it: use "ask"
+use "handoff" for passwords and "request_otp" for SMS codes. Prefer "intent" over tapping when a kind fits. set_alarm and set_timer finish by themselves (the result confirms them). compose_sms, compose_email,
+insert_contact and insert_event only PREFILL a screen: you still tap Send or Save, and you must "ask" the owner before anything is sent. dial never places the call.
+To open an app, call find_app first, then open_app with a returned package. If find_app says the app is not installed, do not hunt for it: use "ask"
 to offer installing it from the Play Store when signed in, otherwise "fail". For anything in Settings, use open_settings first, then tap the
 exact toggle or row. If the screen did not change after an action, try a
 different approach instead of repeating it. Prefer element ids over coordinates. If a value you need is not
@@ -130,6 +136,14 @@ def execute(device, act: dict, elements, scale: float, size: tuple[int, int]) ->
     elif kind == "find_app":
         found = match_apps(str(act.get("query", "")), device.launcher_apps())
         return ("installed: " + ", ".join(found)) if found else f"no installed app matches '{act.get('query', '')}' (it is not installed)"
+    elif kind == "intent":
+        args, note = build_intent(str(act.get("kind", "")), act, getattr(device, "timezone", lambda: "UTC")())
+        device.start_intent(args)
+        if act["kind"] == "set_alarm" and hasattr(device, "next_alarm"):
+            note += f"; next alarm on the phone: {device.next_alarm() or 'none found'}"
+        if act["kind"] == "set_timer" and hasattr(device, "has_timer"):
+            note += "; a timer is running" if device.has_timer() else "; could not confirm the timer"
+        return note
     elif kind == "open_settings":
         page = str(act.get("page", "")).lower().replace(" ", "_").replace("-", "_")
         if page not in SETTINGS_PAGES:
