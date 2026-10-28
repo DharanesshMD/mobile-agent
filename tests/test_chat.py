@@ -320,3 +320,37 @@ class PointerControl(unittest.TestCase):
             self.assertEqual(post("/api/device/key", {"key": k}), 200)
             self.assertEqual(keys[-1], code)
         self.assertEqual(post("/api/device/key", {"key": "power"}), 422)
+
+
+class LiveTouch(unittest.TestCase):
+    def test_touch_stream_reaches_the_phone_in_order_and_lifts_on_disconnect(self):
+        c, phone, _, _ = setup(Spark())
+        events = []
+        phone.touch = lambda kind, x, y: events.append((kind, x, y))
+        with c.websocket_connect("/api/device/touch") as ws:
+            ws.send_json({"t": "move", "fx": 0.5, "fy": 0.5})  # no finger down yet: ignored
+            ws.send_json({"t": "down", "fx": 0.5, "fy": 0.5})
+            ws.send_json({"t": "move", "fx": 0.5, "fy": 0.25})
+            ws.send_json({"t": "bogus", "fx": 0.5, "fy": 0.5})
+            ws.send_json({"t": "move", "fx": 2, "fy": 0.5})  # out of range: ignored
+            ws.send_json({"t": "up", "fx": 0.5, "fy": 0.2})
+            until(lambda: len(events) >= 3)
+        self.assertEqual(events[0], ("down", 540, 1200))
+        self.assertEqual(events[-1], ("up", 540, 480))
+        self.assertTrue(all(e[0] in ("down", "move", "up") for e in events))
+        events.clear()
+        with c.websocket_connect("/api/device/touch") as ws:
+            ws.send_json({"t": "down", "fx": 0.1, "fy": 0.2})
+            until(lambda: events)
+        until(lambda: events[-1] == ("up", 108, 480))  # browser closed mid-drag: the finger is lifted where it was
+
+    def test_touch_stream_needs_the_token_when_one_is_set(self):
+        from starlette.websockets import WebSocketDisconnect
+        tmp = __import__("tempfile").mkdtemp()
+        app = create_app(Phone(), lambda m: None, token="s3cret", settle=0, db=Database(":memory:"), data_dir=tmp)
+        c = TestClient(app)
+        with self.assertRaises(WebSocketDisconnect):
+            with c.websocket_connect("/api/device/touch") as ws:
+                ws.receive_json()
+        with c.websocket_connect("/api/device/touch?token=s3cret") as ws:
+            ws.send_json({"t": "down", "fx": 0.5, "fy": 0.5})

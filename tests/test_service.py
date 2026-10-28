@@ -41,6 +41,9 @@ class Phone:
     def swipe(self, *a):
         self.i += 1
 
+    def touch(self, kind, x, y):
+        self.i += 1
+
 
 class Script:
     def __init__(self, *actions):

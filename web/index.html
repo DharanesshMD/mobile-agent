@@ -475,7 +475,7 @@ async function refreshShot() {
     if (r.ok) { const u = URL.createObjectURL(await r.blob()), old = img.src; img.src = u; if (old.startsWith("blob:")) URL.revokeObjectURL(old); }
   } catch {}
   shotBusy = false;
-  if (shotAgain) { shotAgain = false; refreshShot(); }
+  if (shotAgain || S.dragging) { shotAgain = false; refreshShot(); }
 }
 // After the owner acts on the phone, look again quickly a few times while the screen animates to its new state.
 const burst = () => [60, 250, 600, 1100].forEach(ms => setTimeout(refreshShot, ms));
@@ -488,14 +488,15 @@ setInterval(pollMobile, 2000);
 
 // ---------- full-screen mobile view ----------
 function openOverlay(opts) {
+  if (opts.control) setTimeout(() => holding() && openTouch(), 300);
   S.control = { held: false, handoff: opts.handoff || null };
   $("overlay").classList.add("on"); refreshShot();
   if (opts.control) takeControl(); else renderBar();
 }
-async function takeControl() { try { await api("/api/mobile/control", { action: "take" }); S.control.held = true; } catch (e) { alert(e.message); } pollMobile(); renderBar(); }
+async function takeControl() { try { await api("/api/mobile/control", { action: "take" }); S.control.held = true; openTouch(); } catch (e) { alert(e.message); } pollMobile(); renderBar(); }
 async function releaseControl(done) {
   try { await api("/api/mobile/control", { action: "release" }); } catch {}
-  S.control.held = false;
+  S.control.held = false; if (touchWs) { touchWs.close(); touchWs = null; }
   if (done && S.control.handoff) await api(`/api/items/${S.control.handoff}/answer`, { done: true }).catch(() => {});
   S.control.handoff = null; pollMobile(); renderBar();
 }
@@ -538,18 +539,39 @@ function ripple(e, cls) {
   const sc = $("ovScreen"), r = sc.getBoundingClientRect(), d = el("div", "tap " + (cls || ""));
   d.style.left = (e.clientX - r.left) + "px"; d.style.top = (e.clientY - r.top) + "px"; sc.append(d); setTimeout(() => d.remove(), 450);
 }
-let drag = null;
+// Live touch: the finger follows the mouse over a WebSocket (down, move, up), so dragging is real time. If the socket is not
+// available the older "send one swipe on release" path below is used.
+let touchWs = null, drag = null, pending = null, raf = 0;
+function openTouch() {
+  if (touchWs && touchWs.readyState <= 1) return touchWs;
+  try { touchWs = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/device/touch" + (token ? "?" + tq() : "")); } catch { touchWs = null; }
+  return touchWs;
+}
+const liveTouch = () => touchWs && touchWs.readyState === 1;
+const sendTouch = (t, f) => touchWs.send(JSON.stringify({ t, fx: f.fx, fy: f.fy }));
 $("ovScreen").addEventListener("pointerdown", (e) => {
   if (!holding() || e.button !== 0) return;
   const f = frac(e, false); if (!f) return;
-  drag = { ...f, x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
+  openTouch();
+  drag = { ...f, x: e.clientX, y: e.clientY, t: performance.now(), moved: false, live: liveTouch(), last: f };
   $("ovScreen").setPointerCapture(e.pointerId); $("ovScreen").focus(); e.preventDefault();
+  if (drag.live) { sendTouch("down", f); S.dragging = true; refreshShot(); }
 });
-$("ovScreen").addEventListener("pointermove", (e) => { if (drag && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 8) drag.moved = true; });
-$("ovScreen").addEventListener("pointercancel", () => { drag = null; });
+$("ovScreen").addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 8) drag.moved = true;
+  if (!drag.live || !drag.moved) return;
+  pending = frac(e, true);
+  if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (pending && drag) { drag.last = pending; sendTouch("move", pending); } pending = null; });
+});
+$("ovScreen").addEventListener("pointercancel", () => { if (drag && drag.live) sendTouch("up", drag.last); drag = null; S.dragging = false; });
 $("ovScreen").addEventListener("pointerup", (e) => {
-  if (!drag) return; const d = drag; drag = null;
+  if (!drag) return; const d = drag; drag = null; S.dragging = false;
   const dt = performance.now() - d.t;
+  if (d.live) {
+    const end = d.moved ? frac(e, true) : d; if (d.moved) { pending = null; sendTouch("move", end); }
+    sendTouch("up", end); if (!d.moved) ripple(e, dt >= 450 ? "long" : ""); burst(); return;
+  }
   if (!d.moved && dt < 450) { ripple(e); phone("/api/device/tap", { fx: d.fx, fy: d.fy }); }
   else if (!d.moved) { ripple(e, "long"); phone("/api/device/swipe", { fx1: d.fx, fy1: d.fy, fx2: d.fx, fy2: d.fy, ms: Math.min(1500, Math.round(dt)) }); }  // press and hold
   else { const t = frac(e, true); ripple(e); phone("/api/device/swipe", { fx1: d.fx, fy1: d.fy, fx2: t.fx, fy2: t.fy, ms: Math.min(900, Math.max(80, Math.round(dt))) }); }

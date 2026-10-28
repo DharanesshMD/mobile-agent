@@ -186,6 +186,18 @@ class Device:
     def tap(self, x: int, y: int) -> None:
         self._run("shell", "input", "tap", str(x), str(y))
 
+    def touch(self, kind: str, x: int, y: int) -> None:
+        """One live touch event (down, move or up) for follow-the-finger dragging. uiautomator2 injects it in about 18 ms;
+        `input motionevent` (Android 12+) is the fallback."""
+        d = self._u2_device()
+        if d is not None:
+            try:
+                getattr(d.touch, kind)(x, y)
+                return
+            except Exception:
+                pass
+        self._run("shell", "input", "motionevent", kind.upper(), str(x), str(y))
+
     def swipe(self, x1: int, y1: int, x2: int, y2: int, ms: int = 300) -> None:
         self._run("shell", "input", "swipe", *map(str, (x1, y1, x2, y2, ms)))
 

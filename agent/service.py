@@ -11,7 +11,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -379,6 +379,52 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
 
     def stale() -> None:
         frame["at"] = 0.0  # the next viewer request captures the result of the action
+
+    @app.websocket("/api/device/touch")
+    async def touch_socket(ws: WebSocket):
+        """Live touch stream for follow-the-finger dragging: {"t": "down|move|up", "fx", "fy"}. Consecutive moves are collapsed so the
+        phone always gets the newest position instead of falling behind."""
+        given = ws.query_params.get("token", "")
+        if token and not ((given and hmac.compare_digest(given.encode(), token.encode())) or (given and store.find_device(given))):
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+        inbox: asyncio.Queue = asyncio.Queue()
+
+        async def reader() -> None:
+            try:
+                while True:
+                    inbox.put_nowait(await ws.receive_json())
+            except (WebSocketDisconnect, RuntimeError, ValueError):
+                inbox.put_nowait(None)
+
+        task, down = asyncio.create_task(reader()), None
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                ev = await inbox.get()
+                while ev is not None and ev.get("t") == "move" and not inbox.empty() and inbox._queue[0] is not None and inbox._queue[0].get("t") == "move":
+                    ev = inbox.get_nowait()  # a newer move supersedes this one
+                if ev is None:
+                    break
+                try:
+                    kind, fx, fy = ev["t"], float(ev["fx"]), float(ev["fy"])
+                    if kind not in ("down", "move", "up") or not (0 <= fx <= 1 and 0 <= fy <= 1) or (kind != "down" and down is None):
+                        continue
+                    if kind == "down":
+                        takeover_allowed()
+                    w, h = await loop.run_in_executor(None, device.size) if down is None else down["size"]
+                    x, y = round(fx * w), round(fy * h)
+                    await loop.run_in_executor(None, device.touch, kind, x, y)
+                    down = {"size": (w, h), "at": (x, y)} if kind != "up" else None
+                    if kind == "up":
+                        stale()
+                except Exception:  # a bad event or a failed injection must not end the stream
+                    continue
+        finally:
+            task.cancel()
+            if down is not None:  # the browser went away mid-drag: lift the finger
+                await loop.run_in_executor(None, device.touch, "up", *down["at"])
 
     @app.post("/api/device/tap", dependencies=[Depends(auth)])
     def tap(body: Tap):
