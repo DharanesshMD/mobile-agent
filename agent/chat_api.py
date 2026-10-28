@@ -30,12 +30,6 @@ class Answer(BaseModel):
     done: bool | None = None
 
 
-class NewRoutine(BaseModel):
-    name: str = Field(min_length=1, max_length=60)
-    prompt: str = Field(min_length=1, max_length=1000)
-    schedule: dict
-
-
 class RoutinePatch(BaseModel):
     enabled: bool
 
@@ -219,14 +213,6 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     def routines_list(bot_id: str):
         bot_or_404(bot_id)
         return db.routines(bot_id)
-
-    @app.post("/api/bots/{bot_id}/routines", dependencies=[Depends(auth)])
-    def routines_add(bot_id: str, body: NewRoutine):
-        bot_or_404(bot_id)
-        try:
-            return scheduler.add(bot_id, body.name, body.prompt, body.schedule)
-        except ValueError as e:
-            raise HTTPException(422, str(e)) from None
 
     def routine_or_404(rid: str) -> dict:
         r = db.get_routine(rid)

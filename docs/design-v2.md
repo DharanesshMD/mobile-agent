@@ -174,3 +174,5 @@ There is no direct "add secret" form or API. A credential enters only through an
 straight to the vault, the card turns into "Saved as '<label>'" and its input disappears; the value is never kept on the item, in messages or in logs. Cards come from three
 places: the orchestrator's `request_secret`, the worker's `need_secret`, and automatically when a pasted secret is redacted from chat. The Vault tab only lists labels and kinds,
 deletes, and shows recent use. Verification: the orchestrator's `vault_check` and the worker's `need_secret` (continues at once if the label is saved) answer yes or no, never the value.
+
+Routines are created only through chat (the orchestrator's `routine_create`); the API and Details tab only list, run now, pause and delete them.

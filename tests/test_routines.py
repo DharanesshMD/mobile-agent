@@ -82,12 +82,10 @@ class Firing(unittest.TestCase):
 
 
 class Api(unittest.TestCase):
-    def test_crud_and_validation(self):
-        c, _, bot, _ = setup(Spark())
-        r = c.post(f"/api/bots/{bot}/routines", json={"name": "Morning", "prompt": "say hi", "schedule": {"daily_at": "08:00"}})
-        self.assertEqual(r.status_code, 200)
-        rid = r.json()["id"]
-        self.assertEqual(c.post(f"/api/bots/{bot}/routines", json={"name": "x", "prompt": "y", "schedule": {"every_minutes": 1}}).status_code, 422)
+    def test_manage_but_not_create_through_the_api(self):
+        c, _, bot, app = setup(Spark())
+        self.assertEqual(c.post(f"/api/bots/{bot}/routines", json={"name": "x", "prompt": "y", "schedule": {"daily_at": "08:00"}}).status_code, 405)
+        rid = app.state.scheduler.add(bot, "Morning", "say hi", {"daily_at": "08:00"})["id"]
         self.assertEqual([x["name"] for x in c.get(f"/api/bots/{bot}/routines").json()], ["Morning"])
         self.assertEqual(c.patch(f"/api/routines/{rid}", json={"enabled": False}).json()["enabled"], 0)
         self.assertEqual(c.delete(f"/api/routines/{rid}").status_code, 200)
@@ -95,8 +93,8 @@ class Api(unittest.TestCase):
 
     def test_bot_reaches_out_first_when_a_routine_runs_now(self):
         spark = Spark(act(type="reply", text="Good morning! Nothing urgent."))
-        c, _, bot, _ = setup(spark)
-        rid = c.post(f"/api/bots/{bot}/routines", json={"name": "Morning", "prompt": "greet me", "schedule": {"daily_at": "08:00"}}).json()["id"]
+        c, _, bot, app = setup(spark)
+        rid = app.state.scheduler.add(bot, "Morning", "greet me", {"daily_at": "08:00"})["id"]
         c.post(f"/api/routines/{rid}/run")
         until(lambda: "Good morning! Nothing urgent." in texts(c, bot, "assistant"))
         self.assertEqual(texts(c, bot, "user"), [])  # the owner never messaged
