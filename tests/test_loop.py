@@ -73,8 +73,11 @@ class LoopTests(unittest.TestCase):
     def test_xy_tap_is_scaled_to_device_pixels(self):
         dev = FakeDevice([png(1), png(2), png(2)])
         model = FakeModel([reply(type="tap", x=100, y=200), reply(type="done", answer="ok")])
-        run("g", dev, model, settle=0)
+        run("g", dev, model, settle=0, image_width=540)
         self.assertEqual(dev.taps, [(200, 400)])  # 1080 / 540 = 2x
+        dev2 = FakeDevice([png(1), png(2), png(2)])
+        run("g", dev2, FakeModel([reply(type="tap", x=100, y=200), reply(type="done", answer="ok")]), settle=0)
+        self.assertEqual(dev2.taps, [(300, 600)])  # default width 360: 1080 / 360 = 3x
 
     def test_invalid_json_is_retried_once_then_fails(self):
         res = run("g", FakeDevice([png(1)]), FakeModel(["nope", "still nope"]), settle=0)
@@ -143,3 +146,42 @@ class LoopTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImageUse(unittest.TestCase):
+    class Spy(FakeModel):
+        def __init__(self, replies):
+            super().__init__(replies)
+            self.images = []
+
+        def complete(self, system, prompt, image=None, max_tokens=0):
+            self.images.append(image is not None)
+            return super().complete(system, prompt, image, max_tokens)
+
+    class Rich(FakeDevice):
+        def elements(self):
+            return [Element(i, f"row {i}", (540, 100 + i * 50), True) for i in range(6)]
+
+    def run_three(self, mode, replies):
+        model = self.Spy(replies)
+        res = run("g", self.Rich([png(i) for i in range(1, 10)]), model, settle=0, image_mode=mode)
+        return res, model
+
+    def test_adaptive_sends_an_image_first_then_text_only_then_verifies_before_done(self):
+        replies = [reply(type="tap", element=0), reply(type="tap", element=1), reply(type="done", answer="x"), reply(type="done", answer="x")]
+        res, model = self.run_three("adaptive", replies)
+        self.assertEqual(res.status, "done")
+        # step 1 sees the image, step 2 is text only, step 3 decides "done" from text and is then re-checked with the image
+        self.assertEqual(model.images, [True, False, False, True])
+
+    def test_verification_can_overrule_a_text_only_done(self):
+        replies = [reply(type="tap", element=0), reply(type="tap", element=1), reply(type="done", answer="x"),
+                   reply(type="tap", element=2), reply(type="done", answer="really done")]
+        res, model = self.run_three("adaptive", replies)
+        self.assertEqual((res.status, res.answer), ("done", "really done"))
+
+    def test_always_never_differ(self):
+        _, always = self.run_three("always", [reply(type="tap", element=0), reply(type="done", answer="x")])
+        self.assertEqual(always.images, [True, True])
+        _, never = self.run_three("never", [reply(type="tap", element=0), reply(type="done", answer="x")])
+        self.assertEqual(never.images[:2], [False, False])

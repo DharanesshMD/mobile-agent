@@ -15,11 +15,29 @@ class Element:
     label: str
     center: tuple[int, int]
     clickable: bool
+    state: str = ""  # for example "off", "on", "scrollable", "text field": what a screenshot would otherwise show
 
 
 from agent.apps import parse_launcher_packages
 
 ACCOUNT_RE = re.compile(r"Account \{name=([^,}]+), type=([^}]+)\}")
+
+
+def _node_state(node) -> str:
+    bits = []
+    if node.get("checkable") == "true":
+        bits.append("on" if node.get("checked") == "true" else "off")
+    if node.get("selected") == "true":
+        bits.append("selected")
+    if node.get("scrollable") == "true":
+        bits.append("scrollable")
+    if node.get("class", "").endswith("EditText"):
+        bits.append("text field")
+    if node.get("focused") == "true":
+        bits.append("focused")
+    if node.get("enabled") == "false":
+        bits.append("disabled")
+    return ", ".join(bits)
 
 
 def parse_accounts(dumpsys_account: str) -> list[tuple[str, str]]:
@@ -38,6 +56,7 @@ class Device:
         self.use_u2 = (os.environ.get("PHONE_READER", "u2") != "adb") if use_u2 is None else use_u2
         self._u2 = None
         self._u2_failed = False
+        self.keyboard_open = False
 
     def _u2_device(self):
         if not self.use_u2 or self._u2_failed:
@@ -88,7 +107,7 @@ class Device:
                 pass  # fall through to adb for this call
         return self._run("exec-out", "screencap", "-p")
 
-    def elements(self, limit: int = 60) -> list[Element]:
+    def elements(self, limit: int = 70) -> list[Element]:
         root = None
         d = self._u2_device()
         if d is not None:
@@ -102,10 +121,16 @@ class Device:
                 self._stop_service_via_adb()
                 root = self._dump()
         out: list[Element] = []
+        self.keyboard_open = False
         if root is None:
             return out
         seen: set[tuple] = set()
+        height = max((int(b[3]) for b in (re.findall(r"\d+", n.get("bounds", "")) for n in root.iter("node")) if len(b) == 4), default=0)
         for node in root.iter("node"):
+            pkg = (node.get("package") or "").lower()
+            if "inputmethod" in pkg:  # keyboard keys would crowd the list and push real fields off it
+                self.keyboard_open = True
+                continue
             m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
             label = node.get("text") or node.get("content-desc") or ""
             clickable = node.get("clickable") == "true"
@@ -114,13 +139,15 @@ class Device:
             x1, y1, x2, y2 = map(int, m.groups())
             if x2 <= x1 or y2 <= y1:
                 continue
+            if pkg == "com.android.systemui" and height and y2 <= height * 0.06:  # clock, signal and battery icons
+                continue
             center = ((x1 + x2) // 2, (y1 + y2) // 2)
             key = (label, center)
             if key in seen:
                 continue
             seen.add(key)
             label = label or node.get("resource-id", "").split("/")[-1] or node.get("class", "").split(".")[-1]
-            out.append(Element(len(out), label, center, clickable))
+            out.append(Element(len(out), label, center, clickable, _node_state(node)))
             if len(out) >= limit:
                 break
         return out
@@ -151,6 +178,15 @@ class Device:
         self._run("shell", "input", "swipe", *map(str, (x1, y1, x2, y2, ms)))
 
     def type_text(self, text: str) -> None:
+        """Appends to the focused field. uiautomator2 is about 4x faster than `adb input text`, bypasses keyboard autocorrect and
+        suggestions, and handles non-ASCII text (Tamil, accents); adb is the fallback."""
+        d = self._u2_device()
+        if d is not None:
+            try:
+                d.send_keys(text)
+                return
+            except Exception:
+                pass
         self._run("shell", "input", "text", shlex.quote(text.replace(" ", "%s")))
 
     def key(self, name: str) -> None:

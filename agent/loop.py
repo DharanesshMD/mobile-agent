@@ -11,8 +11,9 @@ from agent.apps import SETTINGS_PAGES, match_apps
 SHOT_WIDTH = 540
 
 SYSTEM = """You operate an Android phone to accomplish the user's goal, one action per turn.
-Each turn you receive a screenshot (WIDTHxHEIGHT pixels), a list of on-screen UI elements with ids and
-centre coordinates in screenshot pixels, and a short history of your previous actions.
+Each turn you receive a list of on-screen UI elements with ids, centre coordinates in screenshot pixels (WIDTHxHEIGHT) and state
+(for example [off], [on], [scrollable], [text field]), a short history of your previous actions, and usually a screenshot. When no
+screenshot is attached, rely on the element list and use element ids, not coordinates.
 
 Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {...}} where action is one of:
   {"type":"tap","element":<id>}            tap a listed element (preferred)
@@ -47,10 +48,10 @@ KEYS = {"back": "KEYCODE_BACK", "home": "KEYCODE_HOME", "enter": "KEYCODE_ENTER"
 GATES = {"ask", "handoff", "request_otp", "need_info"}
 
 
-def shrink(png: bytes) -> tuple[bytes, float]:
+def shrink(png: bytes, width: int = SHOT_WIDTH) -> tuple[bytes, float]:
     img = Image.open(io.BytesIO(png)).convert("RGB")
-    scale = img.width / SHOT_WIDTH
-    img = img.resize((SHOT_WIDTH, round(img.height / scale)), Image.LANCZOS)
+    scale = img.width / width
+    img = img.resize((width, round(img.height / scale)), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
     return buf.getvalue(), scale
@@ -65,6 +66,16 @@ def oscillating(acts: list[dict]) -> bool:
     return d[0] == d[2] and d[1] == d[3] and d[0] != d[1]
 
 
+def need_image(mode: str, step: int, elements, unchanged: int, acts: list[dict], history: list[str]) -> bool:
+    """Whether to attach the screenshot this turn. Adaptive: look when the text view is likely not enough."""
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    return (step <= 1 or len(elements) < 5 or unchanged > 0 or oscillating(acts)
+            or (bool(history) and "-> error" in history[-1]) or (bool(acts) and acts[-1]["type"] == "wait"))
+
+
 def parse_action(text: str) -> dict:
     """Extract {"thought","action"} from model text; raises ValueError when invalid."""
     m = re.search(r"\{.*\}", text, re.S)
@@ -77,14 +88,17 @@ def parse_action(text: str) -> dict:
     return obj
 
 
-def build_prompt(goal: str, history: list[str], elements, scale: float, unchanged: int, acts: list[dict]) -> str:
+def build_prompt(goal: str, history: list[str], elements, scale: float, unchanged: int, acts: list[dict],
+                 keyboard: bool = False) -> str:
     listing = "\n".join(f"{e.id}: {e.label!r} at ({round(e.center[0] / scale)},{round(e.center[1] / scale)})"
-                        f"{' [clickable]' if e.clickable else ''}" for e in elements) or "(UI element list unavailable right now: use screenshot coordinates)"
+                        f"{' [clickable]' if e.clickable else ''}{f' [{e.state}]' if getattr(e, 'state', '') else ''}"
+                        for e in elements) or "(UI element list unavailable right now: use screenshot coordinates)"
     hint = f"\nWARNING: the screen has not changed for {unchanged} action(s); change approach." if unchanged else ""
     if oscillating(acts):
         hint += ("\nWARNING: you keep scrolling up and down without progress. Stop scrolling; tap a row that "
                  "could open the detail you need, or use the search field.")
     return (f"Goal: {goal}\n\nRecent actions:\n" + ("\n".join(history[-6:]) or "(none)")
+            + ("\n\nOn-screen keyboard: open (its keys are not listed; use type to enter text, key back to close it)." if keyboard else "")
             + f"\n\nUI elements:\n{listing}{hint}\n\nChoose the next action.")
 
 
@@ -104,6 +118,9 @@ def execute(device, act: dict, elements, scale: float, size: tuple[int, int]) ->
         device.type_text(str(act["text"]))
     elif kind in ("swipe", "scroll"):
         cx, cy, dx, dy = w // 2, h // 2, w // 3, h // 3
+        if getattr(device, "keyboard_open", False):
+            # A swipe that starts over the keyboard is read as glide typing and inserts random words, so stay in the content above it.
+            cy, dy = round(h * 0.30), round(h * 0.18)
         direction = act["direction"]
         if kind == "scroll":  # "scroll down" reveals lower content, so the finger moves up
             direction = {"down": "up", "up": "down", "left": "right", "right": "left"}[direction]

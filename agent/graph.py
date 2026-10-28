@@ -19,7 +19,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from agent.device import Element
-from agent.loop import GATES, SHOT_WIDTH, SYSTEM, build_prompt, execute, parse_action, shrink
+from agent.config import IMAGE_MODE, IMAGE_WIDTH
+from agent.loop import GATES, SYSTEM, build_prompt, execute, need_image, parse_action, shrink
 from agent.loop import settle as settle_screen
 
 
@@ -85,19 +86,25 @@ def observe(state: State, config: RunnableConfig) -> dict:
         (png, shot_ms), (elements, tree_ms) = f_shot.result(), f_tree.result()
     digest = hashlib.sha1(png).hexdigest()
     unchanged = state.get("unchanged", 0) + 1 if digest == state.get("last_hash") else 0
-    small, scale = shrink(png)
-    prompt = build_prompt(state["goal"], state.get("history", []), elements, scale, unchanged, state.get("acts", []))
-    ms = {"shot": shot_ms, "tree": tree_ms, "observe": round((time.time() - t0) * 1000)}
-    return {"step": state.get("step", 0) + 1, "last_hash": digest, "unchanged": unchanged,
-            "obs": {"png": small, "scale": scale, "elements": [asdict(e) for e in elements], "prompt": prompt, "ms": ms}}
+    small, scale = shrink(png, c["image_width"])
+    step = state.get("step", 0) + 1
+    send = need_image(c["image_mode"], step, elements, unchanged, state.get("acts", []), state.get("history", []))
+    prompt = build_prompt(state["goal"], state.get("history", []), elements, scale, unchanged, state.get("acts", []),
+                          getattr(dev, "keyboard_open", False))
+    ms = {"shot": shot_ms, "tree": tree_ms, "observe": round((time.time() - t0) * 1000), "image": send}
+    return {"step": step, "last_hash": digest, "unchanged": unchanged,
+            "obs": {"png": small, "send_image": send, "scale": scale, "elements": [asdict(e) for e in elements],
+                    "prompt": prompt, "ms": ms}}
 
 
 def plan(state: State, config: RunnableConfig) -> dict:
     c, obs = _c(config), state["obs"]
     prompt, parsed = obs["prompt"], None
     t0 = time.time()
+    tokens0 = dict(getattr(c["model"], "tokens", {}) or {})
+    image = obs["png"] if obs.get("send_image", True) else None
     for _ in range(2):
-        reply = c["model"].complete(c["system"], prompt, obs["png"])
+        reply = c["model"].complete(c["system"], prompt, image)
         try:
             parsed = parse_action(reply)
             break
@@ -105,8 +112,22 @@ def plan(state: State, config: RunnableConfig) -> dict:
             prompt += "\n\nYour last reply was not valid JSON. Reply with only the JSON object."
     if parsed is None:
         return {"status": "failed", "answer": "model returned invalid JSON twice"}
+    if image is None and parsed["action"].get("type") == "done":
+        # Decided from text alone: look at the screen once before accepting "done".
+        check = (obs["prompt"] + "\n\nYou are about to finish with: " + json.dumps(parsed["action"])
+                 + "\nCheck the screenshot. Reply with the final JSON: keep done (correct the answer if it is wrong) "
+                   "or choose another action if the goal is not actually met.")
+        try:
+            second = parse_action(c["model"].complete(c["system"], check, obs["png"]))
+            obs["ms"]["verified"] = True
+            parsed = second
+        except Exception:
+            pass
     act, thought, n = parsed["action"], str(parsed.get("thought", "")), state["step"]
     obs["ms"]["model"] = round((time.time() - t0) * 1000)
+    tokens1 = getattr(c["model"], "tokens", {}) or {}
+    for k in ("prompt", "completion", "cached"):
+        obs["ms"]["t_" + k] = tokens1.get(k, 0) - tokens0.get(k, 0)
     if c.get("trace"):
         t = Path(c["trace"])
         t.mkdir(parents=True, exist_ok=True)
@@ -157,7 +178,7 @@ def gate(state: State, config: RunnableConfig) -> dict:
 
 def act(state: State, config: RunnableConfig) -> dict:
     c, obs, a, n = _c(config), state["obs"], state["action"], state["step"]
-    elements = [Element(e["id"], e["label"], tuple(e["center"]), e["clickable"]) for e in obs["elements"]]
+    elements = [Element(e["id"], e["label"], tuple(e["center"]), e["clickable"], e.get("state", "")) for e in obs["elements"]]
     t0 = time.time()
     try:
         info = execute(c["device"], a, elements, obs["scale"], c["size"])
@@ -203,9 +224,11 @@ def build_graph(checkpointer=None):
 def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | None = None,
         on_step: Callable[[int, dict, str], None] | None = None, settle: float = 0.4,
         handler: Callable[[dict], dict] | None = None, emit: Callable[[dict], None] | None = None,
-        cancel: threading.Event | None = None, graph=None, pause: Callable[[], None] | None = None) -> Result:
+        cancel: threading.Event | None = None, graph=None, pause: Callable[[], None] | None = None,
+        image_mode: str | None = None, image_width: int | None = None) -> Result:
     """Run a goal to completion. Without a handler, the run stops at the first gate with status needs_approval."""
     w, h = device.size()
+    image_mode, image_width = image_mode or IMAGE_MODE, image_width or IMAGE_WIDTH
 
     def fan_out(event: dict) -> None:
         if event["type"] == "step" and on_step:
@@ -216,8 +239,8 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
     config = {"recursion_limit": max_steps * 6 + 20, "configurable": {
         "thread_id": uuid.uuid4().hex, "device": device, "model": model, "size": (w, h), "settle": settle,
         "max_steps": max_steps, "trace": str(trace_dir) if trace_dir else None, "emit": fan_out,
-        "cancel": cancel or threading.Event(), "pause": pause,
-        "system": SYSTEM.replace("WIDTHxHEIGHT", f"{SHOT_WIDTH}x{round(h * SHOT_WIDTH / w)}")}}
+        "cancel": cancel or threading.Event(), "pause": pause, "image_mode": image_mode, "image_width": image_width,
+        "system": SYSTEM.replace("WIDTHxHEIGHT", f"{image_width}x{round(h * image_width / w)}")}}
     graph = graph or build_graph()
     cmd: dict | Command = {"goal": goal, "step": 0, "history": [], "acts": [], "unchanged": 0}
     while True:

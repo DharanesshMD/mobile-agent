@@ -66,3 +66,29 @@ plain ADB (`uiautomator dump`, `screencap`) if the service is unavailable or fai
 Notes: only one accessibility connection can exist at a time, so while the resident service runs the old `uiautomator dump` returns nothing; the fallback stops the service first
 (tested). The model call is now the biggest piece of a step (2 to 3 s). The service uses little device memory (the 2.5 GB emulator still had about 1.1 GB free).
 Adds Python dependencies: uiautomator2, adbutils, lxml, requests.
+
+## Model cost per step: what we tried and found (28 Oct 2026)
+Tool: `scripts/scenarios.py` runs 8 fixed tasks with ground-truth checks on the real phone state (dark theme, Android version, storage, screen timeout, Chrome lookup,
+add a contact, missing app, send-a-message safety). Prices used for estimates: Muse Wonder $4.00 per 1M uncached input tokens, $0.20 cached, $20.00 output.
+
+| Config | Pass | Steps | Time | Prompt tokens | Output tokens | Est. cost per set |
+|---|---|---|---|---|---|---|
+| Image every step, 540 px (start) | 7/8 (the miss was a bug in my checker) | 33 | 127 s | 71.5K | 2.4K | $0.24 |
+| Adaptive (text-only most steps), 540 px | 8/8 | 43 | 171 s | 67.5K | 4.5K | $0.23 |
+| Adaptive, 360 px | 7/8 | 40 | 136 s | 54.7K | 4.0K | $0.18 |
+| Image every step, 360 px | 7/8 | 34 | 134 s | 52.1K | 4.2K | $0.18 |
+| **Final defaults: image every step, 360 px, plus the fixes below** | **8/8** | **30** | **114 s** | **45.9K** | **2.2K** | **$0.13** |
+
+Findings:
+- A screenshot adds about 800 prompt tokens at 540 px (about 280 at 320 px) but model latency stayed 2 to 3 s per call at every size, including no image. The saving from smaller images is cost, not speed.
+- Skipping screenshots (adaptive mode) did not pay off: more steps, no time saved, and a missed task. It stays available (`PHONE_IMAGE=adaptive`; it also re-checks the screen before accepting "done") but is not the default.
+- Output tokens are priced at 5x input. A step writes about 70 output tokens; trimming the "thought" saves only 15 to 25 percent, and JSON-only mode did not stop the model adding a sentence before the JSON.
+- The big wins came from fixing what made the agent waste steps, not from the model call:
+  1. The keyboard's keys filled about 45 of 60 listed elements and pushed real fields off the list. Keyboard and status-bar nodes are now left out, with one line saying the keyboard is open.
+  2. My `scroll` swipe started on top of the keyboard, which reads it as glide typing and inserts random words ("By", "VT"). When the keyboard is open, scrolling now stays above it. This turned a task that ran out of steps into 11 steps with a clean "done".
+  3. Element state ([on], [off], [scrollable], [text field]) is now in the list, so the model reads switch states without a screenshot.
+  4. Typing goes through uiautomator2 (0.19 s vs 0.71 s for 24 characters, handles Tamil and accents, no keyboard autocorrect); adb input text is the fallback.
+- A checker bug of mine (wrong database column) made a passing task look like a failure; always check the checker against real data.
+
+Settings: `PHONE_IMAGE` (always, adaptive, never) and `PHONE_IMAGE_WIDTH` (default 360). Run the set with `uv run python scripts/scenarios.py --label name`; results are saved to `runs/scenarios/`.
+Cached input tokens grow as the same system prompt is reused (about half of prompt tokens in the final run were cached), which makes the real cost lower than the table suggests.

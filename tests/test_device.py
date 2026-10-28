@@ -1,4 +1,5 @@
 import unittest
+import xml.etree.ElementTree as ET
 from unittest import mock
 
 from agent.device import Device
@@ -63,6 +64,11 @@ class FakeU2:
     def stop_uiautomator(self):
         self.stopped = True
 
+    def send_keys(self, text):
+        if getattr(self, "keys_fail", False):
+            raise RuntimeError("no ime")
+        self.typed = getattr(self, "typed", []) + [text]
+
 
 class ResidentReader(unittest.TestCase):
     def device(self, u2, adb_dump=b"", use_u2=True):
@@ -94,3 +100,57 @@ class ResidentReader(unittest.TestCase):
         self.assertEqual(len(d.elements()), 2)
         self.assertEqual(d.screenshot(), b"\x89PNG-adb")
         self.assertEqual(u2.shots, 0)
+
+
+class FilteredTree(unittest.TestCase):
+    XML = ('<hierarchy>'
+           '<node package="com.android.systemui" text="11:48" bounds="[0,0][720,60]"/>'
+           '<node package="com.android.settings" text="Phone" bounds="[0,300][720,400]" clickable="true"/>'
+           '<node package="com.google.android.inputmethod.latin" text="q" bounds="[0,1000][70,1100]" clickable="true"/>'
+           '<node package="com.google.android.inputmethod.latin" text="w" bounds="[70,1000][140,1100]" clickable="true"/>'
+           '<node package="com.android.systemui" text="Notifications" bounds="[0,700][720,800]" clickable="true"/>'
+           '<node package="com.android.settings" text="" bounds="[0,1500][720,1600]"/>'
+           '</hierarchy>')
+
+    def device(self, xml):
+        d = Device(use_u2=False)
+        d._dump = lambda *a, **k: ET.fromstring(xml)
+        return d
+
+    def test_keyboard_keys_and_status_bar_are_left_out_and_the_keyboard_is_flagged(self):
+        d = self.device(self.XML)
+        labels = [e.label for e in d.elements()]
+        self.assertEqual(labels, ["Phone", "Notifications"])  # real content stays, even from systemui below the status bar
+        self.assertTrue(d.keyboard_open)
+
+    def test_no_keyboard_flag_without_keyboard_nodes(self):
+        d = self.device('<hierarchy><node package="com.android.settings" text="Phone" bounds="[0,300][720,400]" clickable="true"/></hierarchy>')
+        d.elements()
+        self.assertFalse(d.keyboard_open)
+
+    def test_prompt_mentions_the_keyboard(self):
+        from agent.loop import build_prompt
+        self.assertIn("On-screen keyboard: open", build_prompt("g", [], [], 1.0, 0, [], keyboard=True))
+        self.assertNotIn("On-screen keyboard", build_prompt("g", [], [], 1.0, 0, []))
+
+
+class Typing(unittest.TestCase):
+    def test_types_through_the_resident_service_including_unicode(self):
+        u2 = FakeU2()
+        d = Device(use_u2=True)
+        d._u2 = u2
+        calls = []
+        d._run = lambda *a: calls.append(a) or b""
+        d.type_text("வணக்கம் é")
+        self.assertEqual(u2.typed, ["வணக்கம் é"])
+        self.assertEqual(calls, [])  # adb was not needed
+
+    def test_falls_back_to_adb_input_text(self):
+        u2 = FakeU2()
+        u2.keys_fail = True
+        d = Device(use_u2=True)
+        d._u2 = u2
+        calls = []
+        d._run = lambda *a: calls.append(a) or b""
+        d.type_text("hello world")
+        self.assertEqual(calls, [("shell", "input", "text", "hello%sworld")])

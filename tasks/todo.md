@@ -50,6 +50,7 @@ P2:
 - [x] Light profile: Mac GPU rendering, 720x1600, animations off (about half the CPU)
 - [x] Reference study of the desktop agent app (docs/reference-desktop-agent.md)
 - [x] Resident screen reader via uiautomator2 (observe 2.9 s to 0.6 s, step 7.0 s to 4.1 s), adb fallback
-- [ ] Model is now the biggest cost per step (2 to 3 s): send the screenshot only when needed (text-only when the UI tree is rich), smaller screenshot
+- [x] Model cost per step: 360 px default, keyboard/status-bar filtered, element state, uiautomator2 typing, scroll above keyboard (8/8 scenarios, about 45% cheaper)
+- [ ] Next on cost: fewer steps per task (intent fast paths), trim the system prompt, try an earlier model tier for easy steps
 - [ ] Android intent fast paths: alarm, timer, SMS compose, contact and calendar insert, maps, dial, share
 - [ ] Cloud device: Redroid (container, no VM) on a Linux host; test binder support first

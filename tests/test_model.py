@@ -22,6 +22,8 @@ class FakeResponse:
 
 
 OK = {"choices": [{"message": {"content": "hi"}}], "usage": {"prompt_tokens": 3, "completion_tokens": 1}}
+CACHED = {"choices": [{"message": {"content": "hi"}}],
+          "usage": {"prompt_tokens": 10, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 7}}}
 
 
 class Retries(unittest.TestCase):
@@ -40,7 +42,13 @@ class Retries(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", urlopen), mock.patch("time.sleep"):
             c = self.client()
             self.assertEqual(c.chat("s", [{"role": "user", "content": "x"}]), "hi")
-            self.assertEqual(c.tokens, {"prompt": 3, "completion": 1})
+            self.assertEqual(c.tokens, {"prompt": 3, "completion": 1, "cached": 0})
+
+    def test_cached_prompt_tokens_are_counted(self):
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse(CACHED)):
+            c = self.client()
+            c.chat("s", [{"role": "user", "content": "x"}])
+            self.assertEqual(c.tokens["cached"], 7)
 
     def test_gives_up_after_three_attempts_with_a_model_error(self):
         with mock.patch("urllib.request.urlopen", side_effect=http.client.RemoteDisconnected("closed")) as m, mock.patch("time.sleep"):

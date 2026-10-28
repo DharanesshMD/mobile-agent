@@ -30,7 +30,7 @@ class MetaClient:
         self.effort = effort
         self.api_key = api_key or os.environ.get("META_API_KEY", "")
         self.base = (base or os.environ.get("META_API_BASE") or "https://api.meta.ai/v1").rstrip("/")
-        self.tokens = {"prompt": 0, "completion": 0}
+        self.tokens = {"prompt": 0, "completion": 0, "cached": 0}
         if not self.api_key:
             raise ModelError("META_API_KEY is not set (put it in .env)")
 
@@ -63,4 +63,5 @@ class MetaClient:
         usage = data.get("usage", {})
         self.tokens["prompt"] += usage.get("prompt_tokens", 0)
         self.tokens["completion"] += usage.get("completion_tokens", 0)
+        self.tokens["cached"] += (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
         return data["choices"][0]["message"].get("content") or ""
