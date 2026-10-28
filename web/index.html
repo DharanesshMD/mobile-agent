@@ -113,6 +113,12 @@
   .composer form { display: flex; align-items: flex-end; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 6px 8px; }
   .composer form:focus-within { border-color: var(--accent); }
   .composer textarea { flex: 1; resize: none; border: 0; background: transparent; padding: 8px 6px; max-height: 160px; outline: none; }
+  .mic svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+  .mic .t { display: none; }
+  .mic.rec { width: auto; padding: 0 12px; border-radius: 999px; background: #ff5d6c22; color: var(--bad); border-color: #ff5d6c66; gap: 7px; grid-auto-flow: column; animation: rec 1.3s ease-in-out infinite; }
+  .mic.rec .t { display: inline; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .mic.busy { opacity: .7; } .mic.busy svg { animation: spin 1s linear infinite; }
+  @keyframes rec { 50% { box-shadow: 0 0 0 5px #ff5d6c1c; } } @keyframes spin { to { transform: rotate(360deg); } }
   .composer .icon { width: 34px; height: 34px; padding: 0; border-radius: 50%; display: grid; place-items: center; }
 
   /* right panel */
@@ -206,7 +212,7 @@
       <form id="form">
         <button type="button" class="ghost icon" disabled title="Attachments come later" aria-label="Attach">+</button>
         <textarea id="text" rows="1" placeholder="Message" aria-label="Message"></textarea>
-        <button type="button" class="ghost icon" disabled title="Voice comes later" aria-label="Voice">&#127908;</button>
+        <button type="button" class="ghost icon mic" id="micBtn" title="Speak (click to start and stop)" aria-label="Speak a message"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0010 0M8 12.5v2"/></svg><span class="t"></span></button>
         <button class="primary icon" id="send" aria-label="Send">&#10148;</button>
       </form>
     </div>
@@ -509,6 +515,62 @@ $("form").addEventListener("submit", async (e) => {
   try { const m = await api(`/api/bots/${S.bot.id}/messages`, { text }); S.msgs.set(m.id, m); renderFeed(true); }
   catch (err) { S.thinking = false; toast(err.message); ta.value = text; }
 });
+
+// ---------- speech to text (Muse Voice Transcribe) ----------
+// The browser records, converts to the 16 kHz mono 16-bit WAV the API requires, and the server forwards it. The text lands in the box for review; nothing is sent automatically.
+const MAX_REC_SECONDS = 180;
+function wavFromPcm(pcm, rate) {
+  const buf = new ArrayBuffer(44 + pcm.length * 2), v = new DataView(buf), w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); v.setUint32(4, 36 + pcm.length * 2, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i])) * 0x7fff, true);
+  return buf;
+}
+async function toWav(blob) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  try {
+    const audio = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(audio.duration * 16000)), 16000), src = off.createBufferSource();
+    src.buffer = audio; src.connect(off.destination); src.start();  // a mono destination mixes any channel layout down
+    const pcm = (await off.startRendering()).getChannelData(0);
+    return { wav: new Blob([wavFromPcm(pcm, 16000)], { type: "audio/wav" }), seconds: pcm.length / 16000, peak: pcm.reduce((m, x) => Math.max(m, Math.abs(x)), 0) };
+  } finally { ctx.close(); }
+}
+async function transcribeBlob(blob) {
+  const { wav, seconds, peak } = await toWav(blob);
+  if (seconds < 0.4) throw new Error("That was too short. Hold on a bit longer while you speak.");
+  if (peak < 0.01) throw new Error("I could not hear anything. Check your microphone.");
+  const r = await fetch("/api/transcribe", { method: "POST", headers: { "Content-Type": "audio/wav", ...auth() }, body: wav });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(typeof e.detail === "string" ? e.detail : "Transcription failed"); }
+  return (await r.json()).text;
+}
+const mic = $("micBtn"); let recorder = null;
+function micState(state, label) { mic.classList.toggle("rec", state === "rec"); mic.classList.toggle("busy", state === "busy"); mic.disabled = state === "busy"; mic.querySelector(".t").textContent = label || ""; }
+async function toggleMic() {
+  if (recorder) { recorder.stop(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) { toast("This browser cannot record audio here (it needs https or localhost)."); return; }
+  let stream; try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+  catch { toast("Microphone access was blocked. Allow it in the browser to speak."); return; }
+  const chunks = [], mr = new MediaRecorder(stream), t0 = Date.now(); let cancelled = false;
+  const tick = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); micState("rec", `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`); if (s >= MAX_REC_SECONDS) mr.stop(); }, 250);
+  mr.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  mr.onstop = async () => {
+    clearInterval(tick); stream.getTracks().forEach(t => t.stop()); recorder = null; document.removeEventListener("keydown", esc);
+    if (cancelled) { micState("idle"); return; }
+    micState("busy");
+    try {
+      const text = await transcribeBlob(new Blob(chunks, { type: mr.mimeType }));
+      if (text) { ta.value = (ta.value && !/\s$/.test(ta.value) ? ta.value + " " : ta.value) + text; ta.dispatchEvent(new Event("input")); }
+      else toast("I did not catch any words.");
+      ta.focus();
+    } catch (e) { toast(e.message); }
+    micState("idle");
+  };
+  const esc = (e) => { if (e.key === "Escape") { cancelled = true; mr.stop(); } };
+  document.addEventListener("keydown", esc);
+  recorder = mr; mr.start(); micState("rec", "0:00");
+}
+mic.onclick = toggleMic;
 
 // ---------- right panel ----------
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { S.tab = b.dataset.tab; document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b)); renderTab(); });

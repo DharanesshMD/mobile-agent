@@ -102,3 +102,46 @@ class SearchParsing(unittest.TestCase):
         self.assertEqual(seen["path"], "/responses")
         self.assertEqual(seen["body"]["tools"], [{"type": "web_search", "search_context_size": "low"}])
         self.assertEqual(m.tokens, {"prompt": 100, "completion": 10, "cached": 40})
+
+
+class TranscribeRequest(unittest.TestCase):
+    def test_multipart_request_and_transcript(self):
+        from agent.model import MetaClient
+        m = MetaClient("muse-voice-transcribe-1.0", api_key="k")
+        seen = {}
+
+        class Resp:
+            status_code, text = 200, ""
+            def json(self): return {"transcript": "  hello there  ", "turns": []}
+
+        def fake_post(url, headers, timeout, files):
+            seen.update(url=url, headers=headers, files=files)
+            return Resp()
+
+        with mock.patch("httpx.post", fake_post):
+            self.assertEqual(m.transcribe(b"RIFFxxxxWAVE"), "hello there")
+        self.assertTrue(seen["url"].endswith("/asr/transcribe"))
+        self.assertEqual(seen["headers"], {"Authorization": "Bearer k"})
+        settings = json.loads(seen["files"]["request"][1])
+        self.assertEqual(settings, {"mode": "PUSH_TO_TALK", "model": "muse-voice-transcribe-1.0", "audioEncoding": "WAV"})
+        self.assertEqual(seen["files"]["audio"][2], "audio/wav")
+
+    def test_http_errors_become_model_errors_after_retries_for_rate_limits(self):
+        from agent.model import MetaClient
+        m = MetaClient("muse-voice-transcribe-1.0", api_key="k")
+        calls = []
+
+        class Resp:
+            def __init__(self, code): self.status_code, self.text = code, "nope"
+            def json(self): return {"transcript": "ok"}
+
+        def fake_post(url, headers, timeout, files):
+            calls.append(1)
+            return Resp(429 if len(calls) < 2 else 200)
+
+        with mock.patch("httpx.post", fake_post), mock.patch("time.sleep"):
+            self.assertEqual(m.transcribe(b"x"), "ok")
+        self.assertEqual(len(calls), 2)  # one 429, then success
+        with mock.patch("httpx.post", lambda *a, **k: Resp(400)):
+            with self.assertRaises(ModelError):
+                m.transcribe(b"x")

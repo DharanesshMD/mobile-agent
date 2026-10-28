@@ -42,7 +42,7 @@ def setup(spark, *workers, db=None):
     queue = list(workers)
 
     def factory(name):
-        if name == "muse-spark-1.3":
+        if name in ("muse-spark-1.3", "muse-voice-transcribe-1.0"):
             return spark
         assert name == "muse-wonder-1.0", name
         return queue.pop(0)
@@ -533,3 +533,55 @@ class RotateApi(unittest.TestCase):
         self.assertEqual((r.status_code, r.json()["orientation"]), (200, "landscape"))
         self.assertEqual(c.get("/api/mobile/state").json()["orientation"], "landscape")
         self.assertEqual(c.post("/api/device/rotate", json={"orientation": "sideways"}).status_code, 422)
+
+
+def wav_bytes(seconds=1.0, rate=16000):
+    import struct
+    n = int(seconds * rate)
+    return (b"RIFF" + struct.pack("<I", 36 + n * 2) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+            + b"data" + struct.pack("<I", n * 2) + b"\x00\x01" * n)
+
+
+class Transcribe(unittest.TestCase):
+    class Hearing(Spark):
+        def __init__(self, text="open youtube", fail=False):
+            super().__init__()
+            self.text, self.fail, self.heard = text, fail, []
+
+        def transcribe(self, wav):
+            self.heard.append(len(wav))
+            if self.fail:
+                raise RuntimeError("api down")
+            return self.text
+
+    def test_wav_goes_to_the_transcribe_model_and_the_text_comes_back_unsaved(self):
+        spark = self.Hearing("open youtube and search for jazz")
+        c, _, bot, app = setup(spark)
+        wav = wav_bytes()
+        r = c.post("/api/transcribe", content=wav, headers={"Content-Type": "audio/wav"})
+        self.assertEqual((r.status_code, r.json()), (200, {"text": "open youtube and search for jazz"}))
+        self.assertEqual(spark.heard, [len(wav)])
+        self.assertEqual(msgs(c, bot), [])  # speech never becomes a message until the owner sends it
+        self.assertEqual(app.state.db._q("select * from messages"), [])
+
+    def test_rejects_non_wav_tiny_and_oversized_audio_before_calling_the_model(self):
+        spark = self.Hearing()
+        c, _, _, _ = setup(spark)
+        post = lambda body: c.post("/api/transcribe", content=body, headers={"Content-Type": "audio/wav"}).status_code
+        self.assertEqual(post(b"not audio" * 200), 422)
+        self.assertEqual(post(b"RIFF"), 422)
+        self.assertEqual(post(b"RIFF" + b"\x00" * 4 + b"WAVE" + b"\x00" * (21 * 1024 * 1024)), 413)
+        self.assertEqual(spark.heard, [])
+
+    def test_a_model_failure_is_a_clean_error(self):
+        c, _, _, _ = setup(self.Hearing(fail=True))
+        r = c.post("/api/transcribe", content=wav_bytes(), headers={"Content-Type": "audio/wav"})
+        self.assertEqual(r.status_code, 502)
+        self.assertNotIn("api down", r.text)
+
+    def test_needs_the_token_when_one_is_set(self):
+        tmp = __import__("tempfile").mkdtemp()
+        app = create_app(Phone(), lambda m: self.Hearing(), token="s3cret", settle=0, db=Database(":memory:"), data_dir=tmp)
+        c = TestClient(app)
+        self.assertEqual(c.post("/api/transcribe", content=wav_bytes()).status_code, 401)
+        self.assertEqual(c.post("/api/transcribe", content=wav_bytes(), headers={"Authorization": "Bearer s3cret"}).status_code, 200)

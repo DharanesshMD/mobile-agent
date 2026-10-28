@@ -7,11 +7,15 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent import sensitive
+from agent.config import TRANSCRIBE_MODEL
+
+
+MAX_AUDIO_BYTES = 20 * 1024 * 1024  # 10 minutes of 16 kHz mono 16-bit audio is about 19 MB
 
 
 class NewBot(BaseModel):
@@ -295,3 +299,18 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         db.routine_delete(rid)
         scheduler.on_change(r["bot_id"])
         return {"ok": True}
+
+    @app.post("/api/transcribe", dependencies=[Depends(auth)])
+    async def transcribe(request: Request):
+        """Speech to text for the chat microphone. The page sends a mono 16-bit WAV (16 kHz) as the raw body; the text goes back to the page so the
+        owner can read and edit it before sending, so nothing is stored here."""
+        wav = await request.body()
+        if len(wav) > MAX_AUDIO_BYTES:
+            raise HTTPException(413, "That recording is too long (limit 10 minutes)")
+        if len(wav) < 1000 or wav[:4] != b"RIFF" or wav[8:12] != b"WAVE":
+            raise HTTPException(422, "Send a WAV recording")
+        try:
+            text = await asyncio.get_running_loop().run_in_executor(None, lambda: orch.model_factory(TRANSCRIBE_MODEL).transcribe(wav))
+        except Exception as e:
+            raise HTTPException(502, f"Transcription failed ({type(e).__name__}). Please try again.") from None
+        return {"text": text}

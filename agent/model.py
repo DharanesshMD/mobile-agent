@@ -92,3 +92,25 @@ class MetaClient:
             by_url.setdefault(src["url"], src)
         snippets = {r["url"]: r["snippet"] for r in seen}
         return {"text": (texts[-1] if texts else "").strip(), "sources": [{**v, "snippet": v["snippet"] or snippets.get(v["url"], "")} for v in by_url.values()][:6]}
+
+    def transcribe(self, wav: bytes) -> str:
+        """Speech to text with Muse Voice Transcribe (`POST /v1/asr/transcribe`, multipart). The audio must be a mono 16-bit PCM WAV at 16 or 24 kHz,
+        at most 10 minutes and 32 MB; push-to-talk mode returns one transcript for the whole clip."""
+        import httpx
+        settings = json.dumps({"mode": "PUSH_TO_TALK", "model": self.model, "audioEncoding": "WAV"})
+        for attempt in range(3):
+            try:
+                r = httpx.post(f"{self.base}/asr/transcribe", headers={"Authorization": f"Bearer {self.api_key}"}, timeout=120,
+                               files={"request": (None, settings, "application/json"), "audio": ("speech.wav", wav, "audio/wav")})
+            except httpx.HTTPError as e:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise ModelError(str(e)) from e
+            if r.status_code in (429, 500, 502, 503) and attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            if r.status_code != 200:
+                raise ModelError(f"HTTP {r.status_code}: {r.text[:300]}")
+            return str(r.json().get("transcript", "")).strip()
+        raise ModelError("unreachable")

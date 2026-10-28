@@ -67,3 +67,9 @@ Responses API only (`POST /v1/responses`, `tools: [{"type": "web_search", "searc
 The model searches and browses by itself, narrates in earlier `message` items (we keep only the last) and cites with `url_citation` annotations. Measured with muse-spark-1.3 on one question
 ("latest stable Python"): low context 9 s, 16.5K input tokens, 0.8K output (about $0.024 with the token price plus the $0.0025 search fee); medium 16 s and 32.8K input tokens, high would cost more.
 So `MetaClient.search` defaults to low. Each bot turn may search up to three times (`web_search` action in the orchestrator).
+
+## Speech to text (28 Oct 2026)
+`POST /v1/asr/transcribe` with `multipart/form-data`: a `request` part (JSON: `mode` PUSH_TO_TALK, `model` muse-voice-transcribe-1.0, `audioEncoding` WAV) and an `audio` part (mono 16-bit PCM WAV, 16 or 24 kHz,
+at most 10 minutes and 32 MB). The response has `transcript` (plus `turns` in other modes). Measured: a 5 second spoken sentence came back correctly in 3 s. Price $0.18 per hour of audio.
+The chat microphone records in the browser (MediaRecorder), converts to 16 kHz mono WAV with an OfflineAudioContext, posts it to `/api/transcribe`, and puts the text in the message box for review.
+Nothing is stored; audio is capped at 3 minutes in the page. The browser pane inside the Claude desktop app blocks the microphone, so use a normal browser at http://localhost:8000.
