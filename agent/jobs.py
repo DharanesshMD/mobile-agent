@@ -209,6 +209,8 @@ class JobManager:
         else:
             text = payload.get("text", "")
             spec = {"type_secret": {"kind": "confirm", "question": text},
+                    "need_secret": {"kind": "secret", "label": payload.get("label"), "secret_kind": payload.get("secret_kind"),
+                                    "question": text or f"I need your {payload.get('label')} to continue. Enter it here to save it securely."},
                     "ask": {"kind": "confirm", "question": text},
                     "handoff": {"kind": "handoff", "question": text or "Please take over the phone for this step."},
                     "request_otp": {"kind": "otp", "question": f"{text or 'An app'} sent a one-time code. Enter it here."}}[kind]

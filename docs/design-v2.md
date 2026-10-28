@@ -168,3 +168,9 @@ during testing without a deliberate click from me (cause unknown, possibly my au
 claims due routines (next run moves first, so no double fire), and gives the orchestrator a system note; the bot replies or starts a phone job, so it messages the owner first.
 After downtime a routine fires once. The orchestrator can create, list and delete routines in chat; the Details tab has the form, Run now, Pause and Delete.
 Not built: per-routine time zones, retry after a failed phone job, a notification when the browser tab is closed (needs the Android client or web push).
+
+## Vault update: credentials only through a secure input card
+There is no direct "add secret" form or API. A credential enters only through an action card of kind `secret` (masked input, plus a name when none was given). The value goes
+straight to the vault, the card turns into "Saved as '<label>'" and its input disappears; the value is never kept on the item, in messages or in logs. Cards come from three
+places: the orchestrator's `request_secret`, the worker's `need_secret`, and automatically when a pasted secret is redacted from chat. The Vault tab only lists labels and kinds,
+deletes, and shows recent use. Verification: the orchestrator's `vault_check` and the worker's `need_secret` (continues at once if the label is saved) answer yes or no, never the value.

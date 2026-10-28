@@ -23,6 +23,11 @@ Reply with ONLY one JSON object: {"thought": "<short>", "action": {...}}. Action
       List this bot's routines; the result is shown to you next turn.
   {"type":"routine_delete","name":"..."}
       Delete a routine by name; the result is shown to you next turn.
+  {"type":"request_secret","label":"netflix password","kind":"password|card|id|note","question":"..."}
+      Show the owner a secure input card to save a credential (password, card or ID number) and end your turn. This is the ONLY way credentials are collected:
+      never ask for them in chat. The value is encrypted and you never see it. Use a short specific label.
+  {"type":"vault_check","label":"..."}
+      Check whether a secret with that label is saved (you only get yes/no and its kind, never the value); the result is shown to you next turn. Do this before a task that needs a credential.
 
 Rules:
 - Be brief and plain. One or two sentences unless the owner asks for detail.

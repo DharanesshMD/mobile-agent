@@ -151,6 +151,13 @@ def gate(state: State, config: RunnableConfig) -> dict:
     payload = {"kind": kind, "text": text}
     if kind == "need_info":
         payload = {"kind": kind, "field": str(act.get("field", "")), "text": str(act.get("why", ""))}
+    if kind == "need_secret":
+        label, secrets = str(act.get("label", "")).strip(), c.get("secrets")
+        if not label:
+            return {"history": state.get("history", []) + [f"{n}. need_secret -> error: a label is required"]}
+        if secrets and label.lower() in [x.lower() for x in secrets.labels()]:
+            return {"history": state.get("history", []) + [f"{n}. secret '{label}' is already saved: use type_secret"]}
+        payload = {"kind": kind, "label": label, "secret_kind": str(act.get("kind", "password")), "text": str(act.get("why", ""))}
     if kind == "type_secret":
         label, app, secrets = str(act.get("label", "")), str(act.get("app", "")), c.get("secrets")
         if not secrets or label.lower() not in [x.lower() for x in secrets.labels()]:
@@ -172,6 +179,10 @@ def gate(state: State, config: RunnableConfig) -> dict:
         history = history + [f"{n}. owner approved: {text}"]
     elif kind == "handoff":
         history = history + [f"{n}. owner handled on the phone: {text}"]
+    elif kind == "need_secret":
+        if not resume.get("saved"):
+            return {"status": "denied", "answer": f"owner did not save '{label}'"}
+        history = history + [f"{n}. owner saved secret '{resume['saved']}': use type_secret to enter it"]
     elif kind == "type_secret":
         if not resume.get("approved"):
             return {"status": "denied", "answer": f"owner did not allow using '{label}'"}

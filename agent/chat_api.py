@@ -25,14 +25,9 @@ class Answer(BaseModel):
     value: str | None = Field(default=None, max_length=500)
     choice: str | None = Field(default=None, max_length=80)
     code: str | None = Field(default=None, max_length=12)
+    secret: str | None = Field(default=None, max_length=2000, repr=False)
+    label: str | None = Field(default=None, max_length=60)
     done: bool | None = None
-
-
-class NewSecret(BaseModel):
-    label: str = Field(min_length=1, max_length=60)
-    value: str = Field(min_length=1, max_length=2000, repr=False)
-    kind: str = Field(default="password", pattern="^(password|card|id|note)$")
-    bot_id: str | None = None
 
 
 class NewRoutine(BaseModel):
@@ -80,6 +75,10 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         text, kinds = sensitive.redact(body.text.strip())  # secrets never reach the log or a model
         msg = db.add_message(bot_id, "user", "text", text, {"sensitive": kinds} if kinds else None)
         hub.publish(bot_id, {"type": "message", "message": msg})
+        if kinds:  # offer a secure input for what was hidden, so the owner never has to paste it in chat again
+            sk = {"card number": "card", "ID number": "id", "password": "password"}.get(kinds[0], "note")
+            orch.make_item(bot_id, None, {"kind": "secret", "secret_kind": sk, "question": f"I hid a {', '.join(kinds)} from your message. To let me use it, "
+                                          "enter it here with a name. It is encrypted, never shown again, and I only type it after you approve each use."})
         threading.Thread(target=orch.turn, args=(bot_id,), daemon=True).start()
         return msg
 
@@ -131,6 +130,19 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
             resume = {"value": text}
         elif kind == "handoff":
             label, resume, user_text = "Done", {"done": True}, "Done"
+        elif kind == "secret":  # the value goes straight into the vault: never stored on the item, echoed or logged
+            if body.approved is False:
+                label, resume = "Declined", {"saved": ""}
+            else:
+                name = (payload.get("label") or body.label or "").strip()
+                if not name or not body.secret:
+                    raise HTTPException(422, "a name and a value are required")
+                try:
+                    rec = vault.put(name, body.secret, payload.get("secret_kind") or "password")
+                except ValueError as e:
+                    raise HTTPException(409, str(e)) from None
+                label, resume = f"Saved as '{rec['label']}'", {"saved": rec["label"]}
+            user_text = None
         else:  # otp: the code goes to the phone and is never stored, echoed or logged
             if body.approved is False:
                 label, resume = "Declined", {"code": ""}
@@ -142,13 +154,15 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
 
         if item["job_id"] and not jobs.resume(item["job_id"], resume):
             raise HTTPException(409, "the task is no longer waiting for this")
-        db.close_item(item_id, "answered", None if kind == "otp" else label)
+        db.close_item(item_id, "answered", None if kind in ("otp", "secret") else label)
         if item["message_id"]:
             m = db.get_message(item["message_id"])
             upd = db.update_message(item["message_id"], meta={**m["meta"], "status": "answered", "answer": label})
             hub.publish(item["bot_id"], {"type": "message", "message": upd})
         if field and kind in ("text", "choice"):
             db.memory_add(item["bot_id"], f"Owner said {field}: {resume['value']}")
+        if not item["job_id"] and kind == "secret" and resume["saved"]:
+            threading.Thread(target=orch.turn, args=(item["bot_id"], f"The owner saved the secret '{resume['saved']}' in the vault. Continue with what they wanted."), daemon=True).start()
         if not item["job_id"] and user_text:
             msg = db.add_message(item["bot_id"], "user", "text", user_text)
             hub.publish(item["bot_id"], {"type": "message", "message": msg})
@@ -190,17 +204,6 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     @app.get("/api/vault", dependencies=[Depends(auth)])
     def vault_list():
         return vault.entries()
-
-    @app.post("/api/vault", dependencies=[Depends(auth)])
-    def vault_add(body: NewSecret):
-        try:
-            rec = vault.put(body.label, body.value, body.kind)
-        except ValueError as e:
-            raise HTTPException(409, str(e)) from None
-        if body.bot_id and db.get_bot(body.bot_id):
-            msg = db.add_message(body.bot_id, "assistant", "text", f"Saved '{rec['label']}' to the vault. I can type it on the phone once you approve each use.")
-            hub.publish(body.bot_id, {"type": "message", "message": msg})
-        return rec
 
     @app.delete("/api/vault/{secret_id}", dependencies=[Depends(auth)])
     def vault_delete(secret_id: str):

@@ -143,6 +143,41 @@ class Worker_(unittest.TestCase):
         self.assertIn("no saved secret", model.calls[1])
 
 
+class NeedSecret(unittest.TestCase):
+    def test_saved_label_continues_without_asking_the_owner(self):
+        _, v = fresh()
+        v.put("bank", SECRET)
+        asked: list = []
+        model = FakeModel([reply(type="need_secret", label="Bank", why="sign in"), reply(type="done", answer="ok")])
+        res = run("g", FakeDevice([png(1), png(2)]), model, settle=0, handler=lambda p: asked.append(p) or {}, secrets=SecretUse(v, "j"))
+        self.assertEqual((res.status, asked), ("done", []))
+        self.assertIn("secret 'Bank' is already saved", model.calls[1])
+
+    def test_missing_label_asks_for_a_secure_input_then_continues_to_type_secret(self):
+        _, v = fresh()
+        seen: list = []
+
+        def handler(p):
+            seen.append(p)
+            if p["kind"] == "need_secret":
+                v.put(p["label"], SECRET, p["secret_kind"])  # what the secure input card does
+                return {"saved": p["label"]}
+            return {"approved": True}
+
+        dev = FakeDevice([png(1), png(2), png(3), png(4)])
+        model = FakeModel([reply(type="need_secret", label="bank", kind="card", why="pay"), reply(type="type_secret", label="bank"), reply(type="done", answer="ok")])
+        res = run("g", dev, model, settle=0, handler=handler, secrets=SecretUse(v, "j"))
+        self.assertEqual((res.status, dev.typed), ("done", [SECRET]))
+        self.assertEqual([p["kind"] for p in seen], ["need_secret", "type_secret"])
+        self.assertEqual(seen[0]["secret_kind"], "card")
+        self.assertNotIn(SECRET, json.dumps([model.calls, res.history, seen]))
+
+    def test_declined_secret_input_ends_the_run(self):
+        _, v = fresh()
+        res = run("g", FakeDevice([png(1)]), FakeModel([reply(type="need_secret", label="bank")]), settle=0, handler=lambda p: {"saved": ""}, secrets=SecretUse(v, "j"))
+        self.assertEqual(res.status, "denied")
+
+
 class Api(unittest.TestCase):
     def test_pasted_card_is_redacted_before_the_log_and_the_model(self):
         spark = Spark(act(type="reply", text="Please add it from the Vault panel."))
@@ -153,36 +188,61 @@ class Api(unittest.TestCase):
         until(lambda: "Please add it from the Vault panel." in texts(c, bot, "assistant"))
         self.assertNotIn("4111", json.dumps(msgs(c, bot)) + json.dumps(spark.calls) + json.dumps(app.state.db._q("select * from messages")))
 
-    def test_vault_api_never_returns_values_and_confirms_in_chat(self):
+    def test_secret_card_saves_to_the_vault_and_never_keeps_the_value(self):
         c, _, bot, app = setup(Spark())
-        r = c.post("/api/vault", json={"label": "netflix", "value": SECRET, "kind": "password", "bot_id": bot})
+        item = app.state.orch.make_item(bot, None, {"kind": "secret", "secret_kind": "password", "question": "Enter it"})
+        self.assertEqual(item["payload"]["label"], "")
+        url = f"/api/items/{item['id']}/answer"
+        self.assertEqual(c.post(url, json={"secret": SECRET}).status_code, 422)  # a name is needed
+        r = c.post(url, json={"secret": SECRET, "label": "netflix"})
         self.assertEqual(r.status_code, 200)
-        self.assertNotIn(SECRET, r.text)
-        self.assertNotIn(SECRET, json.dumps(msgs(c, bot)))
-        self.assertIn("Saved 'netflix' to the vault.", texts(c, bot, "assistant")[-1])
+        self.assertNotIn(SECRET, json.dumps(msgs(c, bot)) + json.dumps(app.state.db._q("select * from items")) + r.text)
+        card = next(m for m in msgs(c, bot) if m["kind"] == "action_item")
+        self.assertEqual((card["meta"]["status"], card["meta"]["answer"]), ("answered", "Saved as 'netflix'"))
         lst = c.get("/api/vault")
-        self.assertEqual([s["label"] for s in lst.json()], ["netflix"])
+        self.assertEqual([x["label"] for x in lst.json()], ["netflix"])
         self.assertNotIn(SECRET, lst.text + c.get("/api/vault/audit").text)
-        self.assertEqual(c.post("/api/vault", json={"label": "Netflix", "value": "x"}).status_code, 409)
-        self.assertEqual(c.post("/api/vault", json={"label": "k", "value": "x", "kind": "weird"}).status_code, 422)
-        self.assertEqual(c.delete(f"/api/vault/{r.json()['id']}").status_code, 200)
-        self.assertEqual(c.delete(f"/api/vault/{r.json()['id']}").status_code, 404)
+        self.assertEqual(app.state.vault.reveal("netflix"), SECRET)
+        self.assertEqual(c.post("/api/vault", json={"label": "x", "value": "y"}).status_code, 405)  # no direct way in
+        dup = app.state.orch.make_item(bot, None, {"kind": "secret", "label": "Netflix"})
+        self.assertEqual(c.post(f"/api/items/{dup['id']}/answer", json={"secret": "other"}).status_code, 409)
+        self.assertEqual(c.delete(f"/api/vault/{lst.json()[0]['id']}").status_code, 200)
+        self.assertEqual(c.get("/api/vault").json(), [])
 
-    def test_orchestrator_sees_labels_only(self):
-        spark = Spark(act(type="reply", text="ok"))
-        c, _, bot, _ = setup(spark)
-        c.post("/api/vault", json={"label": "netflix password", "value": SECRET})
-        say(c, bot, "hi")
-        until(lambda: spark.calls)
-        system = spark.calls[0][0]
-        self.assertIn("netflix password", system)
+    def test_declining_a_secret_card_saves_nothing(self):
+        c, _, bot, app = setup(Spark())
+        item = app.state.orch.make_item(bot, None, {"kind": "secret", "label": "bank"})
+        c.post(f"/api/items/{item['id']}/answer", json={"approved": False})
+        self.assertEqual(c.get("/api/vault").json(), [])
+
+    def test_pasting_a_secret_in_chat_offers_a_secure_input_card(self):
+        c, _, bot, _ = setup(Spark(act(type="reply", text="ok")))
+        say(c, bot, "my card is 4111 1111 1111 1111")
+        card = until(lambda: open_card(c, bot))
+        self.assertEqual((card["meta"]["kind"], card["meta"]["secret_kind"]), ("secret", "card"))
+        self.assertNotIn("4111", json.dumps(msgs(c, bot)))
+
+    def test_orchestrator_requests_and_verifies_secrets_without_seeing_values(self):
+        spark = Spark(act(type="vault_check", label="netflix"), act(type="request_secret", label="netflix", kind="password"),
+                      act(type="vault_check", label="Netflix"), act(type="request_secret", label="netflix"), act(type="reply", text="Already saved."))
+        c, _, bot, app = setup(spark)
+        say(c, bot, "log me into netflix")
+        card = until(lambda: open_card(c, bot))
+        self.assertIn("[tool result for vault_check] 'netflix' is not saved; saved: nothing", json.dumps(spark.calls[1][1]))
+        self.assertEqual((card["meta"]["kind"], card["meta"]["label"]), ("secret", "netflix"))
+        c.post(f"/api/items/{card['meta']['item_id']}/answer", json={"secret": SECRET})
+        until(lambda: spark.calls and len(spark.calls) >= 3)  # the orchestrator is told the owner saved it
+        say(c, bot, "again")
+        until(lambda: "Already saved." in texts(c, bot, "assistant"))
+        self.assertIn("'netflix' is saved (password)", json.dumps(spark.calls))
+        self.assertIn("already saved", json.dumps(spark.calls))
         self.assertNotIn(SECRET, json.dumps(spark.calls))
 
     def test_end_to_end_secret_card_then_typing(self):
         spark = Spark(act(type="mobile_task", goal="sign in to bank using the saved secret 'bank'", say="ok"), act(type="reply", text="signed in"))
         worker = Worker(act(type="type_secret", label="bank", app="Chase"), act(type="done", answer="ok"))
         c, phone, bot, app = setup(spark, worker)
-        c.post("/api/vault", json={"label": "bank", "value": SECRET})
+        app.state.vault.put("bank", SECRET)
         say(c, bot, "sign in")
         card = until(lambda: open_card(c, bot))
         self.assertEqual(card["meta"]["kind"], "confirm")

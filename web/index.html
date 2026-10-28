@@ -274,7 +274,7 @@ function renderFeed(jump) {
       feed.append(el("div", "msg " + m.role, m.content));
       if (m.meta && m.meta.sensitive) {
         const h = el("div", "hint", "Hidden before sending: " + m.meta.sensitive.join(", ") + ".");
-        const b = el("button", "ghost", "Save it to the vault"); b.onclick = () => document.querySelector('.tabs button[data-tab="vault"]').click(); h.append(b); feed.append(h);
+        feed.append(h);
       }
     }
   }
@@ -289,7 +289,7 @@ function statusLine(m) {
 }
 
 // ---------- action cards ----------
-const KIND = { confirm: "Needs your approval", choice: "Your choice", text: "Quick question", handoff: "Your turn on the phone", otp: "One-time code" };
+const KIND = { confirm: "Needs your approval", choice: "Your choice", text: "Quick question", handoff: "Your turn on the phone", otp: "One-time code", secret: "Secure input" };
 function card(m) {
   const meta = m.meta, open = meta.status === "open";
   const c = el("div", "card" + (meta.status === "answered" ? " done" : meta.status === "cancelled" ? " cancelled" : ""));
@@ -307,6 +307,13 @@ function card(m) {
   } else if (meta.kind === "handoff") {
     c.append(el("div", "ans", "Use the live phone view. Type passwords yourself; the agent never sees them."));
     const b = el("button", "primary", "Take control"); b.onclick = () => openOverlay({ control: true, handoff: meta.item_id }); row.append(b);
+  } else if (meta.kind === "secret") {
+    const nm = el("input"), v = el("input"), b = el("button", "primary", "Save securely"), d = el("button", "danger", "Decline");
+    nm.placeholder = "Name, e.g. netflix password"; nm.maxLength = 60; nm.setAttribute("aria-label", "Name");
+    v.type = "password"; v.autocomplete = "off"; v.placeholder = "Value"; v.setAttribute("aria-label", "Secret value");
+    const go = () => { if (!v.value || (!meta.label && !nm.value.trim())) return; const body = { secret: v.value, label: nm.value.trim() }; v.value = ""; v.disabled = b.disabled = true; send(body).finally(() => { v.disabled = b.disabled = false; }); };
+    b.onclick = go; d.onclick = () => send({ approved: false }); v.onkeydown = (e) => e.key === "Enter" && go();
+    if (!meta.label) row.append(nm); row.append(v, b, d);
   } else {
     const i = el("input"); i.inputMode = "numeric"; i.maxLength = 8; i.placeholder = "Code"; i.autocomplete = "one-time-code"; i.setAttribute("aria-label", "One-time code");
     const b = el("button", "primary", "Send code"), d = el("button", "danger", "Decline");
@@ -342,17 +349,7 @@ async function renderTab() {
     t.append(th, cap); refreshShot();
   } else if (S.tab === "vault") {
     t.replaceChildren(); const v = el("div", "vault");
-    v.append(el("div", "note", "Secrets are encrypted. The agent types one only after you approve each use, and never sees the value."));
-    const f = el("form"), label = el("input"), kind = el("select"), val = el("input"), add = el("button", "primary", "Save to vault");
-    label.placeholder = "Label, e.g. netflix password"; label.maxLength = 60; label.setAttribute("aria-label", "Label");
-    for (const k of ["password", "card", "id", "note"]) kind.append(new Option(k, k)); kind.setAttribute("aria-label", "Kind");
-    val.type = "password"; val.placeholder = "Secret value"; val.autocomplete = "off"; val.setAttribute("aria-label", "Secret value");
-    f.onsubmit = async (e) => {
-      e.preventDefault(); if (!label.value.trim() || !val.value) return;
-      try { await api("/api/vault", { label: label.value.trim(), value: val.value, kind: kind.value, bot_id: S.bot.id }); renderTab(); }
-      catch (err) { alert(err.message); } finally { val.value = ""; }
-    };
-    f.append(label, kind, val, add); v.append(f);
+    v.append(el("div", "note", "Saved secrets are encrypted and never shown. To add one, ask the bot (for example: save my Netflix password): it shows a secure input card in the chat that disappears once saved. The agent types a secret only after you approve each use."));
     let secrets = [], audit = [];
     try { [secrets, audit] = await Promise.all([api("/api/vault"), api("/api/vault/audit")]); } catch {}
     v.append(el("h4", "", "Saved secrets"));

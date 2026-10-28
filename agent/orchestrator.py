@@ -39,11 +39,14 @@ class Orchestrator:
 
     def make_item(self, bot_id: str, job_id: str | None, spec: dict) -> dict:
         """Create an action item and its chat card. spec: kind, question, options?, field?"""
-        kind = spec.get("kind") if spec.get("kind") in ("choice", "confirm", "text", "handoff", "otp") else "text"
+        kind = spec.get("kind") if spec.get("kind") in ("choice", "confirm", "text", "handoff", "otp", "secret") else "text"
         options = [str(o)[:80] for o in (spec.get("options") or [])][:4]
         if kind == "choice" and len(options) < 2:
             kind = "text"
         payload = {"kind": kind, "question": str(spec.get("question", ""))[:500], "options": options, "field": spec.get("field")}
+        if kind == "secret":
+            sk = str(spec.get("secret_kind") or "password")
+            payload.update(label=str(spec.get("label") or "")[:60], secret_kind=sk if sk in ("password", "card", "id", "note") else "note")
         item = self.db.create_item(bot_id, job_id, kind, payload)
         msg = self.post(bot_id, payload["question"], "action_item", {"item_id": item["id"], "status": "open", **payload})
         self.db.set_item_message(item["id"], msg["id"])
@@ -120,6 +123,23 @@ class Orchestrator:
             if kind == "ask_user":
                 self.make_item(bot_id, None, act)
                 return
+            if kind == "request_secret":
+                label = str(act.get("label", "")).strip()
+                if label and self.vault and self.vault.find(label):
+                    msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
+                                   {"role": "user", "content": f"[tool result for request_secret] '{label}' is already saved; no need to ask"}]
+                    continue
+                self.make_item(bot_id, None, {**act, "kind": "secret", "question": act.get("question") or
+                                              f"Enter your {label or 'secret'} to save it securely. It is encrypted and never shown again."})
+                return
+            if kind == "vault_check":
+                label = str(act.get("label", "")).strip()
+                hit = self.vault.find(label) if self.vault and label else None
+                have = ", ".join(self.vault.labels()) if self.vault else ""
+                result = f"'{hit['label']}' is saved ({hit['kind']})" if hit else f"'{label}' is not saved; saved: {have or 'nothing'}"
+                msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
+                               {"role": "user", "content": f"[tool result for vault_check] {result}"}]
+                continue
             if kind in ("routine_create", "routine_list", "routine_delete"):
                 msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
                                {"role": "user", "content": f"[tool result for {kind}] {self._routine_tool(bot_id, kind, act)}"}]
