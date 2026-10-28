@@ -1,4 +1,6 @@
 """Android device driver over ADB: observe (screenshot, UI tree) and act (tap, swipe, type, keys, launch)."""
+import io
+import os
 import re
 import shlex
 import subprocess
@@ -26,8 +28,45 @@ def parse_accounts(dumpsys_account: str) -> list[tuple[str, str]]:
 
 
 class Device:
-    def __init__(self, serial: str | None = None, adb: str = "adb"):
+    """Reads the screen through uiautomator2's resident on-device service when available (about 0.05 s per UI tree and a
+    fast screenshot), and falls back to plain ADB (`uiautomator dump`, `screencap`) otherwise. Taps, swipes and typing stay
+    on `adb shell input`, which measured faster. Set PHONE_READER=adb to force the fallback."""
+
+    def __init__(self, serial: str | None = None, adb: str = "adb", use_u2: bool | None = None):
+        self.serial = serial
         self.base = [adb, *(["-s", serial] if serial else [])]
+        self.use_u2 = (os.environ.get("PHONE_READER", "u2") != "adb") if use_u2 is None else use_u2
+        self._u2 = None
+        self._u2_failed = False
+
+    def _u2_device(self):
+        if not self.use_u2 or self._u2_failed:
+            return None
+        if self._u2 is None:
+            try:
+                import uiautomator2 as u2
+                self._u2 = u2.connect(self.serial)
+            except Exception:
+                self._u2_failed = True
+                return None
+        return self._u2
+
+    def _drop_u2(self) -> None:
+        """Only one accessibility connection can exist, so the old `uiautomator dump` works only after the service is stopped."""
+        self._u2_failed = True
+        try:
+            if self._u2 is not None:
+                self._u2.stop_uiautomator()
+        except Exception:
+            pass
+        self._stop_service_via_adb()
+
+    def _stop_service_via_adb(self) -> None:
+        for pkg in ("com.github.uiautomator.test", "com.github.uiautomator"):
+            try:
+                self._run("shell", "am", "force-stop", pkg)
+            except subprocess.CalledProcessError:
+                pass
 
     def _run(self, *args: str) -> bytes:
         return subprocess.run([*self.base, *args], check=True, capture_output=True, timeout=60).stdout
@@ -39,10 +78,29 @@ class Device:
         return int(w), int(h)
 
     def screenshot(self) -> bytes:
+        d = self._u2_device()
+        if d is not None:
+            try:
+                buf = io.BytesIO()
+                d.screenshot().save(buf, "PNG")
+                return buf.getvalue()
+            except Exception:
+                pass  # fall through to adb for this call
         return self._run("exec-out", "screencap", "-p")
 
     def elements(self, limit: int = 60) -> list[Element]:
-        root = self._dump()
+        root = None
+        d = self._u2_device()
+        if d is not None:
+            try:
+                root = ET.fromstring(d.dump_hierarchy())
+            except Exception:
+                self._drop_u2()
+        if root is None:
+            root = self._dump()
+            if root is None and not self.use_u2:  # a resident service left over from an earlier session blocks `uiautomator dump`
+                self._stop_service_via_adb()
+                root = self._dump()
         out: list[Element] = []
         if root is None:
             return out

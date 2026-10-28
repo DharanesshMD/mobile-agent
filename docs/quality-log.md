@@ -44,3 +44,25 @@ emulators (`PHONE_PROFILE=off` disables it). `wm size` overrides print an Overri
 
 Where a step still spends time: UI tree dump 2.4 to 2.9 s (starting `uiautomator` each time), model 2.5 s, settle about 1 s. The next big win is a resident accessibility helper
 instead of `uiautomator dump`, then sending the screenshot only when needed.
+
+## Resident screen reader (uiautomator2), 28 Oct 2026
+`Device` now reads the UI tree and screenshots through uiautomator2's resident on-device service (bundled `u2.jar` and APK, nothing downloaded), and falls back to
+plain ADB (`uiautomator dump`, `screencap`) if the service is unavailable or fails. Taps, swipes and typing stay on `adb shell input`, which measured faster
+(tap 34 ms vs 150 ms, swipe 350 ms vs 1033 ms). `PHONE_READER=adb` forces the fallback.
+
+| Microbenchmark, idle device | adb | uiautomator2 |
+|---|---|---|
+| UI tree | 1.04 s | 0.05 s |
+| Screenshot | 122 ms | 31 to 49 ms |
+| Tree and screenshot together | 140 ms (adb shot, u2 tree) | 68 ms |
+
+| Live task (Chrome: population of Tokyo), same steps | adb reader | uiautomator2 |
+|---|---|---|
+| Avg step | 7.0 s | 4.1 to 4.2 s (about 40% faster) |
+| Observe (tree + screenshot) | 2.88 s | 0.57 to 0.61 s |
+| Model | 2.9 s | 2.1 to 2.2 s |
+| Settle | 1.2 s | 0.7 s |
+
+Notes: only one accessibility connection can exist at a time, so while the resident service runs the old `uiautomator dump` returns nothing; the fallback stops the service first
+(tested). The model call is now the biggest piece of a step (2 to 3 s). The service uses little device memory (the 2.5 GB emulator still had about 1.1 GB free).
+Adds Python dependencies: uiautomator2, adbutils, lxml, requests.

@@ -49,7 +49,7 @@ P2:
 ## Lighter and faster phone (28 Oct 2026)
 - [x] Light profile: Mac GPU rendering, 720x1600, animations off (about half the CPU)
 - [x] Reference study of the desktop agent app (docs/reference-desktop-agent.md)
-- [ ] Resident accessibility helper instead of `uiautomator dump` (2.9 s to about 0.5 s per step); try uiautomator2 first, custom helper APK if needed
-- [ ] Send the screenshot only when needed (text-only steps when the UI tree is rich)
+- [x] Resident screen reader via uiautomator2 (observe 2.9 s to 0.6 s, step 7.0 s to 4.1 s), adb fallback
+- [ ] Model is now the biggest cost per step (2 to 3 s): send the screenshot only when needed (text-only when the UI tree is rich), smaller screenshot
 - [ ] Android intent fast paths: alarm, timer, SMS compose, contact and calendar insert, maps, dial, share
 - [ ] Cloud device: Redroid (container, no VM) on a Linux host; test binder support first

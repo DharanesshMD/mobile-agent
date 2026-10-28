@@ -41,3 +41,56 @@ class DeviceBasics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeU2:
+    XML = ('<hierarchy><node text="Battery" bounds="[0,100][720,300]" clickable="true"/>'
+           '<node text="" content-desc="Search" bounds="[10,10][110,60]" clickable="false"/></hierarchy>')
+
+    def __init__(self, fail=False):
+        self.fail, self.stopped, self.shots = fail, False, 0
+
+    def dump_hierarchy(self):
+        if self.fail:
+            raise RuntimeError("service died")
+        return self.XML
+
+    def screenshot(self):
+        from PIL import Image
+        self.shots += 1
+        return Image.new("RGB", (8, 16), (1, 2, 3))
+
+    def stop_uiautomator(self):
+        self.stopped = True
+
+
+class ResidentReader(unittest.TestCase):
+    def device(self, u2, adb_dump=b"", use_u2=True):
+        d = Device(use_u2=use_u2)
+        d._u2 = u2
+        d._run = lambda *a: adb_dump if a[:2] == ("exec-out", "cat") else b"\x89PNG-adb" if a[:2] == ("exec-out", "screencap") else b""
+        return d
+
+    def test_uses_the_resident_service_for_the_tree_and_screenshot(self):
+        u2 = FakeU2()
+        d = self.device(u2)
+        els = d.elements()
+        self.assertEqual([(e.label, e.center, e.clickable) for e in els], [("Battery", (360, 200), True), ("Search", (60, 35), False)])
+        self.assertTrue(d.screenshot().startswith(b"\x89PNG"))
+        self.assertEqual(u2.shots, 1)
+
+    def test_a_failing_service_is_stopped_and_the_adb_dump_takes_over(self):
+        u2 = FakeU2(fail=True)
+        d = self.device(u2, adb_dump=FakeU2.XML.encode())
+        els = d.elements()
+        self.assertTrue(u2.stopped)  # stopped so the old uiautomator dump can connect
+        self.assertEqual(len(els), 2)
+        d.elements()
+        self.assertTrue(d._u2_failed)  # not retried
+
+    def test_adb_mode_never_touches_the_service(self):
+        u2 = FakeU2()
+        d = self.device(u2, adb_dump=FakeU2.XML.encode(), use_u2=False)
+        self.assertEqual(len(d.elements()), 2)
+        self.assertEqual(d.screenshot(), b"\x89PNG-adb")
+        self.assertEqual(u2.shots, 0)

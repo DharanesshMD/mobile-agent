@@ -61,3 +61,7 @@ email and password yourself. Use a throwaway Google account, not your main one. 
 
 Start with `scripts/emulator.sh` (Mac GPU rendering, 3 cores, 2 GB, no window, clean boot). On an emulator the agent sets the screen to 720x1600 and turns animations off
 when it starts (`PHONE_PROFILE=off` to disable; `Device.restore()` undoes it). Measured effect and the numbers are in docs/quality-log.md.
+
+## Screen reader
+By default the agent reads the screen through uiautomator2's resident service (first use installs its APK on the device automatically). If it fails, the agent stops it and falls back to
+`adb shell uiautomator dump`. `PHONE_READER=adb` forces the fallback. See docs/quality-log.md for measurements.
