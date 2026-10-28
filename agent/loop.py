@@ -34,6 +34,7 @@ Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {
   {"type":"wait"}                          screen still loading
   {"type":"ask","question":"..."}          stop and ask the owner before anything consequential
   {"type":"handoff","reason":"..."}        the owner must act on the phone (sign in, password, captcha, 2FA prompt)
+  {"type":"type_secret","label":"...","app":"..."}  type a saved secret (password, card or ID number) into the focused field; the owner approves each use and you never see the value. Only labels listed under "Saved secrets" exist
   {"type":"request_otp","app":"..."}       a one-time SMS code is needed; the owner's phone supplies it, focus the code field first
   {"type":"need_info","field":"...","why":"..."}   the screen needs a plain value you do not have (a city, a name, a date); never for passwords or codes
   {"type":"done","answer":"..."}           goal achieved; answer holds any information requested
@@ -41,7 +42,7 @@ Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {
 
 Rules: verify on the screen that the goal is met before "done". Never send messages, pay, delete, purchase, or
 change account/security settings without first using "ask". Never type a password or a verification code yourself:
-use "handoff" for passwords and "request_otp" for SMS codes. Prefer "intent" over tapping when a kind fits. set_alarm and set_timer finish by themselves (the result confirms them). compose_sms, compose_email,
+use "type_secret" for a saved secret, otherwise "handoff" for passwords and "request_otp" for SMS codes. Prefer "intent" over tapping when a kind fits. set_alarm and set_timer finish by themselves (the result confirms them). compose_sms, compose_email,
 insert_contact and insert_event only PREFILL a screen: you still tap Send or Save, and you must "ask" the owner before anything is sent. dial never places the call.
 To open an app, call find_app first, then open_app with a returned package. If find_app says the app is not installed, do not hunt for it: use "ask"
 to offer installing it from the Play Store when signed in, otherwise "fail". For anything in Settings, use open_settings first, then tap the
@@ -51,7 +52,7 @@ visible, the row that names it (for example "Android version") often opens a det
 scrolling back and forth."""
 
 KEYS = {"back": "KEYCODE_BACK", "home": "KEYCODE_HOME", "enter": "KEYCODE_ENTER"}
-GATES = {"ask", "handoff", "request_otp", "need_info"}
+GATES = {"ask", "handoff", "request_otp", "need_info", "type_secret"}
 
 
 def shrink(png: bytes, width: int = SHOT_WIDTH) -> tuple[bytes, float]:
@@ -95,7 +96,7 @@ def parse_action(text: str) -> dict:
 
 
 def build_prompt(goal: str, history: list[str], elements, scale: float, unchanged: int, acts: list[dict],
-                 keyboard: bool = False) -> str:
+                 keyboard: bool = False, secrets: list[str] | None = None) -> str:
     listing = "\n".join(f"{e.id}: {e.label!r} at ({round(e.center[0] / scale)},{round(e.center[1] / scale)})"
                         f"{' [clickable]' if e.clickable else ''}{f' [{e.state}]' if getattr(e, 'state', '') else ''}"
                         for e in elements) or "(UI element list unavailable right now: use screenshot coordinates)"
@@ -105,6 +106,7 @@ def build_prompt(goal: str, history: list[str], elements, scale: float, unchange
                  "could open the detail you need, or use the search field.")
     return (f"Goal: {goal}\n\nRecent actions:\n" + ("\n".join(history[-6:]) or "(none)")
             + ("\n\nOn-screen keyboard: open (its keys are not listed; use type to enter text, key back to close it)." if keyboard else "")
+            + ("\n\nSaved secrets (labels only): " + ", ".join(secrets) if secrets else "")
             + f"\n\nUI elements:\n{listing}{hint}\n\nChoose the next action.")
 
 

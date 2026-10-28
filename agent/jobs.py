@@ -9,6 +9,7 @@ from agent.config import WORKER_MODEL
 from agent.db import Database
 from agent.graph import build_graph, run as run_graph
 from agent.hub import Hub
+from agent.vault import SecretUse, Vault
 
 ACTIVE = ("queued", "running", "waiting")
 
@@ -25,10 +26,11 @@ class JobRun:
 
 class JobManager:
     def __init__(self, db: Database, hub: Hub, device, model_factory, data_dir: str | Path = "data",
-                 settle: float = 0.4, max_steps: int = 25, external_busy=None):
+                 settle: float = 0.4, max_steps: int = 25, external_busy=None, vault: Vault | None = None):
         self.db, self.hub, self.device, self.model_factory = db, hub, device, model_factory
         self.data_dir, self.settle, self.max_steps = Path(data_dir), settle, max_steps
         self.external_busy = external_busy or (lambda: False)
+        self.vault = vault
         self.orch = None  # set by the app after construction
         self.graph = build_graph()
         self.runs: dict[str, JobRun] = {}
@@ -171,7 +173,8 @@ class JobManager:
         try:
             res = run_graph(jr.goal, self.device, self.model_factory(WORKER_MODEL), self.max_steps, trace_dir=trace,
                             settle=self.settle, handler=lambda p: self._handler(jr, p), emit=lambda e: self._emit(jr, e),
-                            cancel=jr.cancel, pause=lambda: self._pause(jr), graph=self.graph)
+                            cancel=jr.cancel, pause=lambda: self._pause(jr), graph=self.graph,
+                            secrets=SecretUse(self.vault, jr.job_id) if self.vault else None)
             status, result = res.status, res.answer
         except Exception as e:
             result = f"{type(e).__name__}: {str(e)[:200]}"
@@ -205,7 +208,8 @@ class JobManager:
             item = out["item"]
         else:
             text = payload.get("text", "")
-            spec = {"ask": {"kind": "confirm", "question": text},
+            spec = {"type_secret": {"kind": "confirm", "question": text},
+                    "ask": {"kind": "confirm", "question": text},
                     "handoff": {"kind": "handoff", "question": text or "Please take over the phone for this step."},
                     "request_otp": {"kind": "otp", "question": f"{text or 'An app'} sent a one-time code. Enter it here."}}[kind]
             item = self.orch.make_item(jr.bot_id, jr.job_id, spec)

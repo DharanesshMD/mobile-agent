@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from agent.graph import Result, build_graph, run as run_graph
 from agent.chat_api import register_chat
+from agent.vault import Vault, load_key
 from agent.db import Database
 from agent.hub import Hub
 from agent.jobs import JobManager
@@ -113,7 +114,7 @@ class Swipe(BaseModel):
 
 
 def create_app(device, model_factory, token: str | None = None, settle: float = 0.4, store: Store | None = None,
-               db: Database | None = None, data_dir: str = "data") -> FastAPI:
+               db: Database | None = None, data_dir: str = "data", vault_key: bytes | None = None) -> FastAPI:
     app = FastAPI(title="Mobile Agent")
     store = store or Store(None)
     runs: dict[str, Run] = {}
@@ -392,13 +393,14 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
 
     db = db or Database(":memory:")
     hub = Hub()
-    jobs = JobManager(db, hub, device, model_factory, data_dir=data_dir, settle=settle, external_busy=lambda: bool(active()))
-    orch = Orchestrator(db, hub, model_factory, jobs)
+    vault = Vault(db, vault_key or secrets.token_bytes(32))  # an in-memory db gets a throwaway key
+    jobs = JobManager(db, hub, device, model_factory, data_dir=data_dir, settle=settle, external_busy=lambda: bool(active()), vault=vault)
+    orch = Orchestrator(db, hub, model_factory, jobs, vault)
     jobs.orch = orch
     if not db.list_bots():
         db.create_bot("Assistant", "")
-    register_chat(app, auth, db, hub, jobs, orch)
-    app.state.db, app.state.jobs, app.state.orch = db, jobs, orch
+    register_chat(app, auth, db, hub, jobs, orch, vault)
+    app.state.db, app.state.jobs, app.state.orch, app.state.vault = db, jobs, orch, vault
     jobs.start()
     return app
 
@@ -412,7 +414,7 @@ def create_default_app() -> FastAPI:
         device.prepare()
     app = create_app(device, lambda m: MetaClient(m),
                      token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
-                     db=Database(os.environ.get("DB_FILE", "data/app.db")))
+                     db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key())
     print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)
     return app
 

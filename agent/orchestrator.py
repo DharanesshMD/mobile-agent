@@ -24,7 +24,8 @@ def parse_decision(text: str) -> dict:
 
 
 class Orchestrator:
-    def __init__(self, db: Database, hub: Hub, model_factory, jobs):
+    def __init__(self, db: Database, hub: Hub, model_factory, jobs, vault=None):
+        self.vault = vault
         self.db, self.hub, self.model_factory, self.jobs = db, hub, model_factory, jobs
         self._locks: dict[str, threading.Lock] = {}
         self._system = (PROMPTS / "orchestrator.md").read_text()
@@ -62,6 +63,9 @@ class Orchestrator:
         parts = [self._system]
         if bot["persona"]:
             parts.append("Persona and instructions for this bot:\n" + bot["persona"])
+        labels = self.vault.labels() if self.vault else []
+        if labels:
+            parts.append("Saved secrets (labels only, you never see the values; the phone worker can type one after the owner approves): " + ", ".join(labels))
         active = self.jobs.active_for(bot_id)
         if active:
             parts.append(f"A phone job is already {active['status']} for this bot: {active['goal']}")

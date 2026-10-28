@@ -89,6 +89,11 @@ Threat model: the owner pastes passwords, ID numbers and card details into chat;
 - Deletion: the owner can delete any secret; deletion removes the row. Audit log records label, time, job and app, never the value.
 - Limits: the cloud phone itself will hold the typed value in the app, and a compromised host can read memory. This protects data at rest and from the models.
 
+Status: built. `agent/vault.py` (AES-256-GCM, id and owner as associated data, key from `VAULT_KEY` or an owner-only `data/vault.key`), `agent/sensitive.py`
+(card with Luhn, Aadhaar-like, PAN, "password is", tokens). Differences from the plan above: the server redacts pasted secrets before they are stored or sent to a model
+(the owner then re-enters them in the Vault tab, so a bypassed browser check cannot leak); the "trust this secret for this app" switch is not built, every use asks.
+Secrets are referenced by label; unknown labels are reported to the worker without asking the owner.
+
 ## 6. Mobile panel and takeover
 
 - Thumbnail: JPEG from the phone every 2 to 3 seconds, cached on the server so many viewers do not load ADB (already built).

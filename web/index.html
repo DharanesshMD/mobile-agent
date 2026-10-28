@@ -22,7 +22,7 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   button.ghost { background: transparent; border-color: transparent; padding: 6px 8px; }
   button.danger { color: var(--bad); }
-  input, textarea { font: inherit; color: var(--text); background: var(--raise); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  input, textarea, select { font: inherit; color: var(--text); background: var(--raise); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
   .app { display: grid; grid-template-columns: 280px minmax(0, 1fr) 340px; height: 100vh; }
@@ -102,6 +102,11 @@
   .lib img { width: 34px; height: 56px; object-fit: cover; border-radius: 6px; background: #000; flex: none; }
   .lib .it { min-width: 0; font-size: 13px; } .lib .it span { display: block; color: var(--dim); font-size: 12px; }
   .details p { color: var(--dim); font-size: 13.5px; } .details h4 { margin: 16px 0 4px; font-size: 13px; }
+  .vault form { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
+  .vault .sec { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+  .vault .sec div { flex: 1; min-width: 0; } .vault .sec span { display: block; color: var(--dim); font-size: 12px; }
+  .vault h4 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); font-weight: 600; }
+  .hint { align-self: flex-end; max-width: min(640px, 86%); display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 12.5px; }
   .note { color: var(--dim); font-size: 13px; text-align: center; padding: 18px 8px; }
 
   /* full-screen mobile view */
@@ -161,6 +166,7 @@
     <div class="tabs" role="tablist">
       <button role="tab" data-tab="details">Details</button>
       <button role="tab" data-tab="library">Library</button>
+      <button role="tab" data-tab="vault">Vault</button>
       <button role="tab" data-tab="mobile" class="on">Mobile</button>
     </div>
     <div class="tab" id="tab"></div>
@@ -264,7 +270,13 @@ function renderFeed(jump) {
   for (const m of list) {
     if (m.kind === "status") feed.append(statusLine(m));
     else if (m.kind === "action_item") feed.append(card(m));
-    else feed.append(el("div", "msg " + m.role, m.content));
+    else {
+      feed.append(el("div", "msg " + m.role, m.content));
+      if (m.meta && m.meta.sensitive) {
+        const h = el("div", "hint", "Hidden before sending: " + m.meta.sensitive.join(", ") + ".");
+        const b = el("button", "ghost", "Save it to the vault"); b.onclick = () => document.querySelector('.tabs button[data-tab="vault"]').click(); h.append(b); feed.append(h);
+      }
+    }
   }
   if (S.thinking && !list.some(m => m.kind === "status")) { const s = el("div", "status"); s.append(dots(), el("span", "", "Thinking")); feed.append(s); }
   if (jump || nearBottom) feed.scrollTop = feed.scrollHeight;
@@ -328,6 +340,33 @@ async function renderTab() {
     const cap = el("div", "cap"); cap.append(el("div", "", S.bot.name + "'s phone"));
     const chip = el("div", "chip " + S.mobile.state); chip.id = "stateChip"; chip.append(el("i"), el("span", "", STATE_TEXT[S.mobile.state] || S.mobile.state)); cap.append(chip);
     t.append(th, cap); refreshShot();
+  } else if (S.tab === "vault") {
+    t.replaceChildren(); const v = el("div", "vault");
+    v.append(el("div", "note", "Secrets are encrypted. The agent types one only after you approve each use, and never sees the value."));
+    const f = el("form"), label = el("input"), kind = el("select"), val = el("input"), add = el("button", "primary", "Save to vault");
+    label.placeholder = "Label, e.g. netflix password"; label.maxLength = 60; label.setAttribute("aria-label", "Label");
+    for (const k of ["password", "card", "id", "note"]) kind.append(new Option(k, k)); kind.setAttribute("aria-label", "Kind");
+    val.type = "password"; val.placeholder = "Secret value"; val.autocomplete = "off"; val.setAttribute("aria-label", "Secret value");
+    f.onsubmit = async (e) => {
+      e.preventDefault(); if (!label.value.trim() || !val.value) return;
+      try { await api("/api/vault", { label: label.value.trim(), value: val.value, kind: kind.value, bot_id: S.bot.id }); renderTab(); }
+      catch (err) { alert(err.message); } finally { val.value = ""; }
+    };
+    f.append(label, kind, val, add); v.append(f);
+    let secrets = [], audit = [];
+    try { [secrets, audit] = await Promise.all([api("/api/vault"), api("/api/vault/audit")]); } catch {}
+    v.append(el("h4", "", "Saved secrets"));
+    if (!secrets.length) v.append(el("div", "note", "Nothing saved yet."));
+    for (const s of secrets) {
+      const r = el("div", "sec"), d = el("div", "", s.label); d.append(el("span", "", s.kind)); const x = el("button", "danger", "Delete");
+      x.onclick = async () => { if (confirm(`Delete "${s.label}"?`)) { try { await api(`/api/vault/${s.id}`, undefined, "DELETE"); } catch (err) { alert(err.message); } renderTab(); } };
+      r.append(d, x); v.append(r);
+    }
+    if (audit.length) {
+      v.append(el("h4", "", "Recent use"));
+      for (const a of audit.slice(0, 8)) { const r = el("div", "sec"), d = el("div", "", a.label + (a.app ? " in " + a.app : "")); d.append(el("span", "", new Date(a.at * 1000).toLocaleString())); r.append(d); v.append(r); }
+    }
+    t.append(v);
   } else if (S.tab === "library") {
     t.replaceChildren(); let items = [];
     try { items = await api(`/api/bots/${S.bot.id}/library`); } catch {}

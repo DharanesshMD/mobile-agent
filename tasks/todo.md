@@ -24,7 +24,7 @@
 ## Design v2 (docs/design-v2.md), pending owner sign-off
 - [x] SQLite store, bots/messages, orchestrator (Spark 1.3) with mobile_task + ask_user, background worker jobs, SSE chat
 - [x] Web UI like the reference: bot sidebar, chat with action cards, right panel Details/Library/Mobile, full-screen take control
-- [ ] Vault (AES-GCM), secret input, sensitive-text detector, type_secret with approval
+- [x] Vault (AES-GCM), secret input, sensitive-text detector, type_secret with approval
 - [ ] Sleep/wake lifecycle (docker pause/stop), routines scheduler, library artifacts
 - [ ] Android client, voice (Muse Voice Transcribe), demo scenarios, 3-minute video
 
@@ -33,7 +33,7 @@ Rubric: Impact 30, Meta tooling 25, Demo 25, Technical depth 20. Deadline Wed 4 
 
 P0, this week:
 - [ ] Re-verify dark theme, calculator (not installed), storage with the new actions; build a scenario runner (`scripts/scenarios.py`) that prints pass/fail, steps and time for about 8 tasks
-- [ ] Vault (AES-GCM), masked secret input, sensitive-text detector, `type_secret` with approval (design-v2 section 5)
+- [x] Vault (AES-GCM), masked secret input, sensitive-text detector, `type_secret` with approval (agent/vault.py, agent/sensitive.py; 19 tests)
 - [ ] Routines and proactive behaviour: scheduler (daily time or every N minutes), the bot messages you first with results and asks when it needs you
 - [ ] Voice: mic button records, Muse Voice Transcribe turns it into text (Meta tooling score), spoken replies later via the browser/phone TTS
 - [ ] Pick and rehearse two hero demo scenarios (owner to choose; safe topics only), polish the UI around them

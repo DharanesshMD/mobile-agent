@@ -19,6 +19,9 @@ create table if not exists jobs(id text primary key, bot_id text not null, goal 
 create table if not exists items(id text primary key, bot_id text not null, job_id text, message_id integer, kind text not null,
   payload text not null default '{}', status text not null default 'open', answer text, created real, answered real);
 create table if not exists library(id text primary key, bot_id text not null, job_id text, title text not null, path text not null, created real);
+create table if not exists vault(id text primary key, owner text not null, label text not null, kind text not null, nonce blob not null,
+  ciphertext blob not null, created real);
+create table if not exists vault_audit(id integer primary key autoincrement, secret_id text, label text, job_id text, app text, at real);
 create virtual table if not exists memory using fts5(text, bot_id unindexed, created unindexed);
 """
 

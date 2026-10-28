@@ -8,6 +8,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from agent import sensitive
+
 
 class NewBot(BaseModel):
     name: str = Field(min_length=1, max_length=60)
@@ -26,11 +28,18 @@ class Answer(BaseModel):
     done: bool | None = None
 
 
+class NewSecret(BaseModel):
+    label: str = Field(min_length=1, max_length=60)
+    value: str = Field(min_length=1, max_length=2000, repr=False)
+    kind: str = Field(default="password", pattern="^(password|card|id|note)$")
+    bot_id: str | None = None
+
+
 class Control(BaseModel):
     action: str = Field(pattern="^(take|release)$")
 
 
-def register_chat(app: FastAPI, auth, db, hub, jobs, orch) -> None:
+def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault) -> None:
     def bot_or_404(bot_id: str) -> dict:
         b = db.get_bot(bot_id)
         if not b:
@@ -58,7 +67,8 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch) -> None:
     @app.post("/api/bots/{bot_id}/messages", dependencies=[Depends(auth)])
     def post_message(bot_id: str, body: NewMessage):
         bot_or_404(bot_id)
-        msg = db.add_message(bot_id, "user", "text", body.text.strip())
+        text, kinds = sensitive.redact(body.text.strip())  # secrets never reach the log or a model
+        msg = db.add_message(bot_id, "user", "text", text, {"sensitive": kinds} if kinds else None)
         hub.publish(bot_id, {"type": "message", "message": msg})
         threading.Thread(target=orch.turn, args=(bot_id,), daemon=True).start()
         return msg
@@ -105,6 +115,8 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch) -> None:
             text = (body.value or "").strip()
             if not text:
                 raise HTTPException(422, "value is required")
+            if sensitive.find(text):
+                raise HTTPException(422, "that looks like a secret; add it from the Vault panel instead")
             label = user_text = text
             resume = {"value": text}
         elif kind == "handoff":
@@ -164,3 +176,28 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch) -> None:
     def mobile_control(body: Control):
         jobs.take_control() if body.action == "take" else jobs.release_control()
         return jobs.state()
+
+    @app.get("/api/vault", dependencies=[Depends(auth)])
+    def vault_list():
+        return vault.entries()
+
+    @app.post("/api/vault", dependencies=[Depends(auth)])
+    def vault_add(body: NewSecret):
+        try:
+            rec = vault.put(body.label, body.value, body.kind)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        if body.bot_id and db.get_bot(body.bot_id):
+            msg = db.add_message(body.bot_id, "assistant", "text", f"Saved '{rec['label']}' to the vault. I can type it on the phone once you approve each use.")
+            hub.publish(body.bot_id, {"type": "message", "message": msg})
+        return rec
+
+    @app.delete("/api/vault/{secret_id}", dependencies=[Depends(auth)])
+    def vault_delete(secret_id: str):
+        if not vault.delete(secret_id):
+            raise HTTPException(404, "unknown secret")
+        return {"ok": True}
+
+    @app.get("/api/vault/audit", dependencies=[Depends(auth)])
+    def vault_audit():
+        return vault.audit()

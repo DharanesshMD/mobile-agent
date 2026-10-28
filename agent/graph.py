@@ -90,7 +90,7 @@ def observe(state: State, config: RunnableConfig) -> dict:
     step = state.get("step", 0) + 1
     send = need_image(c["image_mode"], step, elements, unchanged, state.get("acts", []), state.get("history", []))
     prompt = build_prompt(state["goal"], state.get("history", []), elements, scale, unchanged, state.get("acts", []),
-                          getattr(dev, "keyboard_open", False))
+                          getattr(dev, "keyboard_open", False), c["secrets"].labels() if c.get("secrets") else None)
     ms = {"shot": shot_ms, "tree": tree_ms, "observe": round((time.time() - t0) * 1000), "image": send}
     return {"step": step, "last_hash": digest, "unchanged": unchanged,
             "obs": {"png": small, "send_image": send, "scale": scale, "elements": [asdict(e) for e in elements],
@@ -151,6 +151,12 @@ def gate(state: State, config: RunnableConfig) -> dict:
     payload = {"kind": kind, "text": text}
     if kind == "need_info":
         payload = {"kind": kind, "field": str(act.get("field", "")), "text": str(act.get("why", ""))}
+    if kind == "type_secret":
+        label, app, secrets = str(act.get("label", "")), str(act.get("app", "")), c.get("secrets")
+        if not secrets or label.lower() not in [x.lower() for x in secrets.labels()]:
+            known = ", ".join(secrets.labels()) if secrets else ""
+            return {"history": state.get("history", []) + [f"{n}. type_secret -> error: no saved secret '{label}'" + (f" (saved: {known})" if known else "")]}
+        payload = {"kind": kind, "label": label, "text": f"Type your saved secret '{label}'" + (f" into {app}" if app else "") + "?"}
     resume = interrupt(payload)
     if resume.get("cancelled"):
         return {"status": "cancelled"}
@@ -166,6 +172,11 @@ def gate(state: State, config: RunnableConfig) -> dict:
         history = history + [f"{n}. owner approved: {text}"]
     elif kind == "handoff":
         history = history + [f"{n}. owner handled on the phone: {text}"]
+    elif kind == "type_secret":
+        if not resume.get("approved"):
+            return {"status": "denied", "answer": f"owner did not allow using '{label}'"}
+        c["device"].type_text(secrets.reveal(label, app))  # typed here only: never put in state, history, events or the model prompt
+        history = history + [f"{n}. typed saved secret '{label}'"]
     else:
         code = str(resume.get("code") or "")
         if not code:
@@ -225,7 +236,7 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
         on_step: Callable[[int, dict, str], None] | None = None, settle: float = 0.4,
         handler: Callable[[dict], dict] | None = None, emit: Callable[[dict], None] | None = None,
         cancel: threading.Event | None = None, graph=None, pause: Callable[[], None] | None = None,
-        image_mode: str | None = None, image_width: int | None = None) -> Result:
+        image_mode: str | None = None, image_width: int | None = None, secrets=None) -> Result:
     """Run a goal to completion. Without a handler, the run stops at the first gate with status needs_approval."""
     w, h = device.size()
     image_mode, image_width = image_mode or IMAGE_MODE, image_width or IMAGE_WIDTH
@@ -239,7 +250,7 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
     config = {"recursion_limit": max_steps * 6 + 20, "configurable": {
         "thread_id": uuid.uuid4().hex, "device": device, "model": model, "size": (w, h), "settle": settle,
         "max_steps": max_steps, "trace": str(trace_dir) if trace_dir else None, "emit": fan_out,
-        "cancel": cancel or threading.Event(), "pause": pause, "image_mode": image_mode, "image_width": image_width,
+        "cancel": cancel or threading.Event(), "pause": pause, "secrets": secrets, "image_mode": image_mode, "image_width": image_width,
         "system": SYSTEM.replace("WIDTHxHEIGHT", f"{image_width}x{round(h * image_width / w)}")}}
     graph = graph or build_graph()
     cmd: dict | Command = {"goal": goal, "step": 0, "history": [], "acts": [], "unchanged": 0}
