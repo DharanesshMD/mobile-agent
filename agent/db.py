@@ -10,7 +10,8 @@ from pathlib import Path
 COLORS = ["#4c9aff", "#3ecf8e", "#f5b84b", "#ff7a90", "#a78bfa", "#2dd4bf"]
 
 SCHEMA = """
-create table if not exists bots(id text primary key, name text not null, persona text not null default '', color text, created real);
+create table if not exists bots(id text primary key, name text not null, persona text not null default '', color text, created real, kind text not null default 'bot');
+create table if not exists alerts(key text primary key, at real);
 create table if not exists messages(id integer primary key autoincrement, bot_id text not null, role text not null, kind text not null,
   content text not null default '', meta text not null default '{}', created real, updated real);
 create index if not exists messages_bot on messages(bot_id, id);
@@ -54,6 +55,9 @@ class Database:
         with self.lock:
             self.conn.execute("pragma journal_mode=wal")
             self.conn.executescript(SCHEMA)
+            if "kind" not in [r["name"] for r in self.conn.execute("pragma table_info(bots)")]:  # databases created before the master bot
+                self.conn.execute("alter table bots add column kind text not null default 'bot'")
+                self.conn.commit()
 
     def _q(self, sql: str, args=()) -> list[dict]:
         with self.lock:
@@ -70,11 +74,21 @@ class Database:
             return cur.lastrowid
 
     # bots
-    def create_bot(self, name: str, persona: str = "") -> dict:
+    def create_bot(self, name: str, persona: str = "", kind: str = "bot") -> dict:
         bid = uuid.uuid4().hex[:10]
-        color = COLORS[int(bid, 16) % len(COLORS)]
-        self._x("insert into bots values(?,?,?,?,?)", (bid, name.strip()[:60], persona.strip()[:4000], color, time.time()))
+        color = "#8b7cf6" if kind == "master" else COLORS[int(bid, 16) % len(COLORS)]
+        self._x("insert into bots(id,name,persona,color,created,kind) values(?,?,?,?,?,?)", (bid, name.strip()[:60], persona.strip()[:4000], color, time.time(), kind))
         return self.get_bot(bid)
+
+    def master_bot(self) -> dict | None:
+        return self._one("select * from bots where kind='master' limit 1")
+
+    def alert_once(self, key: str) -> bool:
+        """True the first time a key is seen, so each problem is reported to the owner once."""
+        with self.lock:
+            cur = self.conn.execute("insert or ignore into alerts(key, at) values(?,?)", (key, time.time()))
+            self.conn.commit()
+            return cur.rowcount == 1
 
     def get_bot(self, bot_id: str) -> dict | None:
         return self._one("select * from bots where id=?", (bot_id,))
@@ -109,10 +123,11 @@ class Database:
     def list_bots(self) -> list[dict]:
         bots = self._q("select * from bots order by created")
         for b in bots:
-            last = self._one("select content, kind, created from messages where bot_id=? and kind in ('text','result','action_item') order by id desc limit 1", (b["id"],))
+            last = self._one("select content, kind, created from messages where bot_id=? and kind in ('text','result','action_item','alert') order by id desc limit 1", (b["id"],))
             b["last"] = (last["content"][:90] if last else "")
             b["last_at"] = last["created"] if last else b["created"]
-        return sorted(bots, key=lambda b: -b["last_at"])
+            b["last_id"] = (self._one("select max(id) m from messages where bot_id=?", (b["id"],)) or {}).get("m") or 0
+        return sorted(bots, key=lambda b: (b["kind"] != "master", -b["last_at"]))  # the master bot stays on top
 
     # messages
     def add_message(self, bot_id: str, role: str, kind: str, content: str = "", meta: dict | None = None) -> dict:

@@ -187,3 +187,11 @@ other bots depend on them otherwise. The dialog lists the counts first (`GET /ap
 `ask_bot {bot, question}` in the orchestrator: one bot asks another by name and gets the answer back in the same turn. The other bot answers from its own focus and memory
 (its memory is searched for the question first), and cannot start phone tasks, ask the owner or use the vault while answering. Both chats get a dashed "bot note" so the owner
 sees every exchange. Chains are limited to three bots and never loop back to a bot already in the chain. Not built: bots handing each other phone tasks, or messaging when no question is pending.
+
+## Master bot
+One special bot (`kind = master`, created at startup with an introduction, pinned on top, cannot be deleted, can be renamed). Its model reads a digest of every other bot on each turn
+(focus or NOT SET, last messages, running or failed tasks, questions waiting for the owner and for how long, routines, recent remembered facts; capped at 4,500 characters) and can use `ask_bot`
+for details. It never runs phone tasks: it names the bot that should. Notifications need no model: `agent/master.py` `Watcher` checks every 60 s and posts each problem once (key stored in
+`alerts`) as an "alert" card in the master chat: a bot without a focus, a card unanswered for 10 minutes, a phone task that failed in the last 24 h. The page shows an unread dot per bot,
+a count in the tab title and, once the owner has allowed it, a browser notification for new master alerts. Not built: push to the Android client, alerts for routines that stopped firing,
+alerts for a secret that is needed but not saved.

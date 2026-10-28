@@ -72,6 +72,10 @@ class Orchestrator:
         labels = self.vault.labels() if self.vault else []
         if labels:
             parts.append("Saved secrets (labels only, you never see the values; the phone worker can type one after the owner approves): " + ", ".join(labels))
+        if bot["kind"] == "master":
+            from agent.master import digest
+            parts.append((PROMPTS / "master.md").read_text())
+            parts.append("Workspace digest (now):\n" + digest(self.db))
         others = [b for b in self.db.list_bots() if b["id"] != bot_id]
         if others:
             parts.append("Other bots you can ask with ask_bot (they answer from their own memory and focus):\n" +
@@ -116,6 +120,9 @@ class Orchestrator:
             kind = act["type"]
             if kind == "reply":
                 self.post(bot_id, str(act.get("text", "")).strip() or "Done.")
+                return
+            if kind == "mobile_task" and (self.db.get_bot(bot_id) or {}).get("kind") == "master":
+                self.post(bot_id, "I don't run phone tasks myself. Ask one of your other bots to do it (I can tell you which fits best), or create a new bot for it.")
                 return
             if kind == "mobile_task":
                 goal = str(act.get("goal", "")).strip()

@@ -23,6 +23,7 @@ from agent.db import Database
 from agent.hub import Hub
 from agent.jobs import JobManager
 from agent.orchestrator import Orchestrator
+from agent.master import Watcher, ensure_master
 from agent.routines import Scheduler
 from agent.store import Store
 
@@ -128,7 +129,7 @@ class Swipe(BaseModel):
 
 def create_app(device, model_factory, token: str | None = None, settle: float = 0.4, store: Store | None = None,
                db: Database | None = None, data_dir: str = "data", vault_key: bytes | None = None,
-               start_scheduler: bool = False) -> FastAPI:
+               start_scheduler: bool = False, master: bool = False) -> FastAPI:
     app = FastAPI(title="Mobile Agent")
     store = store or Store(None)
     runs: dict[str, Run] = {}
@@ -474,13 +475,17 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     orch.routines = scheduler
     scheduler.on_change = lambda bot_id: hub.publish(bot_id, {"type": "refresh", "what": "routines"})
     vault.on_change = lambda: [hub.publish(b["id"], {"type": "refresh", "what": "vault"}) for b in db.list_bots()]
-    if not db.list_bots():
+    if not [b for b in db.list_bots() if b["kind"] != "master"]:
         db.create_bot("Assistant", "")
+    watcher = Watcher(db, hub)
+    if master:
+        ensure_master(db, hub)
     register_chat(app, auth, db, hub, jobs, orch, vault, scheduler)
-    app.state.db, app.state.jobs, app.state.orch, app.state.vault, app.state.scheduler, app.state.hub = db, jobs, orch, vault, scheduler, hub
+    app.state.db, app.state.jobs, app.state.orch, app.state.vault, app.state.scheduler, app.state.hub, app.state.watcher = db, jobs, orch, vault, scheduler, hub, watcher
     jobs.start()
     if start_scheduler:
         scheduler.start()
+        watcher.start()
     return app
 
 
@@ -493,7 +498,7 @@ def create_default_app() -> FastAPI:
         device.prepare()
     app = create_app(device, lambda m: MetaClient(m),
                      token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
-                     db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True)
+                     db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True)
     print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)
     return app
 

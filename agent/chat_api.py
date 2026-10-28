@@ -84,15 +84,16 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     def delete_preview(bot_id: str):
         """What deleting this bot removes and what stays, so the owner can decide with the facts in front of them."""
         bot_or_404(bot_id)
-        return {**db.bot_counts(bot_id), "secrets": len(vault.entries()), "last": len(db.list_bots()) < 2,
+        return {**db.bot_counts(bot_id), "secrets": len(vault.entries()), "last": len([b for b in db.list_bots() if b["kind"] != "master"]) < 2,
                 "running": bool(jobs.active_for(bot_id))}
 
     @app.delete("/api/bots/{bot_id}", dependencies=[Depends(auth)])
     def delete_bot(bot_id: str, erase_secrets: bool = Query(default=False)):
         """Removes the bot's chat, tasks (with their screenshots and traces), routines, memory and library. Saved secrets belong to the owner and are
         shared by all bots, so they stay, unless this is the last bot and the owner asks to erase them too. Deleting the last bot leaves a fresh Assistant."""
-        bot_or_404(bot_id)
-        last = len(db.list_bots()) < 2
+        if bot_or_404(bot_id)["kind"] == "master":
+            raise HTTPException(409, "The master bot cannot be deleted")
+        last = len([b for b in db.list_bots() if b["kind"] != "master"]) < 2
         if erase_secrets and not last:
             raise HTTPException(409, "Secrets are shared with your other bots; erase them when deleting the last bot")
         active = jobs.active_for(bot_id)
