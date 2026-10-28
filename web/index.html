@@ -430,7 +430,7 @@ function card(m) {
     for (const o of meta.options) { const b = el("button", "", o); b.onclick = () => send({ choice: o }); row.append(b); }
   } else if (meta.kind === "text") {
     const i = draft(el("input"), meta.item_id + ":text"); i.placeholder = "Your answer"; i.setAttribute("aria-label", "Your answer"); const b = el("button", "primary", "Send");
-    const go = () => { if (!i.value.trim()) return; const v = i.value.trim(); S.drafts.delete(meta.item_id + ":text"); send({ value: v }); }; b.onclick = go; i.onkeydown = (e) => e.key === "Enter" && go(); row.append(i, b);
+    const go = () => { if (!i.value.trim()) return; const v = i.value.trim(); S.drafts.delete(meta.item_id + ":text"); send({ value: v }); }; b.onclick = go; i.onkeydown = (e) => { if (e.key === "Enter") go(); }; row.append(i, b);
   } else if (meta.kind === "handoff") {
     c.append(el("div", "ans", "Use the live phone view. Type passwords yourself; the agent never sees them."));
     const b = el("button", "primary", "Take control"); b.onclick = () => openOverlay({ control: true, handoff: meta.item_id }); row.append(b);
@@ -439,13 +439,13 @@ function card(m) {
     nm.placeholder = "Name, e.g. netflix password"; nm.maxLength = 60; nm.setAttribute("aria-label", "Name");
     v.type = "password"; v.autocomplete = "off"; v.placeholder = "Value"; v.setAttribute("aria-label", "Secret value");
     const go = () => { if (!v.value || (!meta.label && !nm.value.trim())) return; const body = { secret: v.value, label: nm.value.trim() }; v.value = ""; S.drafts.delete(meta.item_id + ":value"); S.drafts.delete(meta.item_id + ":name"); v.disabled = b.disabled = true; send(body).finally(() => { v.disabled = b.disabled = false; }); };
-    b.onclick = go; d.onclick = () => send({ approved: false }); v.onkeydown = (e) => e.key === "Enter" && go();
+    b.onclick = go; d.onclick = () => send({ approved: false }); v.onkeydown = (e) => { if (e.key === "Enter") go(); };
     if (!meta.label) row.append(nm); row.append(v, b, d);
   } else {
     const i = draft(el("input"), meta.item_id + ":code"); i.inputMode = "numeric"; i.maxLength = 8; i.placeholder = "Code"; i.autocomplete = "one-time-code"; i.setAttribute("aria-label", "One-time code");
     const b = el("button", "primary", "Send code"), d = el("button", "danger", "Decline");
     const go = () => /^\d{4,8}$/.test(i.value.trim()) ? send({ code: i.value.trim() }) : toast("Enter the 4 to 8 digit code");
-    b.onclick = go; d.onclick = () => send({ approved: false }); i.onkeydown = (e) => e.key === "Enter" && go(); row.append(i, b, d);
+    b.onclick = go; d.onclick = () => send({ approved: false }); i.onkeydown = (e) => { if (e.key === "Enter") go(); }; row.append(i, b, d);
   }
   c.append(row); return c;
 }
