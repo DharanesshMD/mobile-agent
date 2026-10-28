@@ -456,3 +456,23 @@ class BotToBot(unittest.TestCase):
         say(c, a, "chain")
         until(lambda: "a" in texts(c, a, "assistant"))
         self.assertIn("too many bots in a row", json.dumps(spark.calls))
+
+
+class NewBotGreeting(unittest.TestCase):
+    def test_a_new_bot_opens_the_conversation_from_its_focus(self):
+        spark = Spark(act(type="reply", text="I can track your gym plan. What should we start with: a weekly plan, a reminder routine, or logging today's workout?"))
+        c, _, _, _ = setup(spark)
+        bot = c.post("/api/bots", json={"name": "Coach", "persona": "personal fitness coach", "greet": True}).json()["id"]
+        until(lambda: any("What should we start with" in t for t in texts(c, bot, "assistant")))
+        self.assertEqual(texts(c, bot, "user"), [])  # the bot spoke first
+        system, messages = spark.calls[0]
+        self.assertIn("personal fitness coach", system)
+        self.assertIn("Coach", messages[-1]["content"])
+        self.assertIn("ONE concrete question", messages[-1]["content"])
+
+    def test_bots_created_without_the_flag_stay_quiet(self):
+        spark = Spark()
+        c, _, _, _ = setup(spark)
+        c.post("/api/bots", json={"name": "Quiet", "persona": "x"})
+        time.sleep(0.3)
+        self.assertEqual(spark.calls, [])

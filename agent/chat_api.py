@@ -17,6 +17,7 @@ from agent import sensitive
 class NewBot(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     persona: str = Field(default="", max_length=4000)
+    greet: bool = False  # the bot opens the conversation and asks what to do first
 
 
 class BotPatch(BaseModel):
@@ -63,7 +64,14 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
 
     @app.post("/api/bots", dependencies=[Depends(auth)])
     def create_bot(body: NewBot):
-        return db.create_bot(body.name, body.persona)
+        bot = db.create_bot(body.name, body.persona)
+        if body.greet:
+            focus = f"The owner described its focus as: {bot['persona']}" if bot["persona"] else "The owner gave it no particular focus."
+            note = (f"You were just created as the bot '{bot['name']}'. {focus} Open the conversation yourself: in two or three short sentences say what you can do "
+                    "for them given that focus (only things you can really do: chat, remember things, run recurring routines, use the phone, ask other bots), then ask ONE concrete "
+                    "question about what they want to start with, with two or three example first tasks that fit the focus. Do not start a phone task or set a routine yet.")
+            threading.Thread(target=orch.turn, args=(bot["id"], note), daemon=True).start()
+        return bot
 
     @app.patch("/api/bots/{bot_id}", dependencies=[Depends(auth)])
     def rename_bot(bot_id: str, body: BotPatch):

@@ -109,7 +109,7 @@ class Database:
     def list_bots(self) -> list[dict]:
         bots = self._q("select * from bots order by created")
         for b in bots:
-            last = self._one("select content, kind, created from messages where bot_id=? and kind in ('text','result') order by id desc limit 1", (b["id"],))
+            last = self._one("select content, kind, created from messages where bot_id=? and kind in ('text','result','action_item') order by id desc limit 1", (b["id"],))
             b["last"] = (last["content"][:90] if last else "")
             b["last_at"] = last["created"] if last else b["created"]
         return sorted(bots, key=lambda b: -b["last_at"])

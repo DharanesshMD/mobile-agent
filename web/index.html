@@ -343,7 +343,7 @@ function botForm(title, name, persona, okLabel) {
 }
 $("newBtn").onclick = async () => {
   const v = await botForm("New bot", "", "", "Create"); if (!v) return;
-  try { const b = await api("/api/bots", v); await loadBots(); selectBot(b.id); } catch (e) { toast(e.message); }
+  try { const b = await api("/api/bots", { ...v, greet: true }); await loadBots(); await selectBot(b.id); S.thinking = true; renderFeed(true); } catch (e) { toast(e.message); }
 };
 $("menuBtn").onclick = () => $("app").classList.toggle("show-side");
 $("panelBtn").onclick = () => $("app").classList.toggle("show-panel");
