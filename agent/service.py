@@ -113,6 +113,10 @@ KEYCODES = {"back": "KEYCODE_BACK", "home": "KEYCODE_HOME", "enter": "KEYCODE_EN
             "page_up": "KEYCODE_PAGE_UP", "page_down": "KEYCODE_PAGE_DOWN"}
 
 
+class Rotate(BaseModel):
+    orientation: str = Field(pattern="^(portrait|landscape|auto)$")
+
+
 class Key(BaseModel):
     key: str = Field(pattern="^(" + "|".join(KEYCODES) + ")$")
 
@@ -371,7 +375,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
             ttl = 0.1 if jobs.held else 2.5 if active() and not state["active"].pending else 0.8
             if time.time() - frame["at"] > ttl:
                 img = (device.frame() if hasattr(device, "frame") else Image.open(io.BytesIO(device.screenshot()))).convert("RGB")
-                img.thumbnail((540, 1200))
+                img.thumbnail((1200, 540) if img.width > img.height else (540, 1200))  # landscape frames keep the same short side
                 buf = io.BytesIO()
                 img.save(buf, "JPEG", quality=70)
                 frame.update(at=time.time(), jpeg=buf.getvalue())
@@ -380,6 +384,13 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
 
     def stale() -> None:
         frame["at"] = 0.0  # the next viewer request captures the result of the action
+
+    @app.post("/api/device/rotate", dependencies=[Depends(auth)])
+    def rotate(body: Rotate):
+        takeover_allowed()
+        device.rotate(body.orientation)
+        stale()
+        return {"ok": True, "orientation": device.orientation()}
 
     @app.websocket("/api/device/touch")
     async def touch_socket(ws: WebSocket):

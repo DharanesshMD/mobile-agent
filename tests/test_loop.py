@@ -185,3 +185,40 @@ class ImageUse(unittest.TestCase):
         self.assertEqual(always.images, [True, True])
         _, never = self.run_three("never", [reply(type="tap", element=0), reply(type="done", answer="x")])
         self.assertEqual(never.images[:2], [False, False])
+
+
+class Landscape(unittest.TestCase):
+    def test_landscape_screens_get_a_larger_picture_a_note_and_correct_swipes(self):
+        class Land(FakeDevice):
+            def __init__(self):
+                super().__init__([])
+                self.swipes, self.keyboard_open = [], False
+
+            def size(self):
+                return 2400, 1080
+
+            def screenshot(self):
+                buf = io.BytesIO()
+                Image.new("RGB", (2400, 1080), (9, 0, 0)).save(buf, "PNG")
+                return buf.getvalue()
+
+            def swipe(self, *a):
+                self.swipes.append(a)
+
+            def rotate(self, orientation):
+                self.rotated = orientation
+
+        dev = Land()
+        model = FakeModel([reply(type="scroll", direction="down"), reply(type="rotate", orientation="portrait"), reply(type="done", answer="ok")])
+        seen = {}
+        orig = model.complete
+        model.complete = lambda system, prompt, image=None, max_tokens=0: (seen.setdefault("w", Image.open(io.BytesIO(image)).size), orig(system, prompt, image, max_tokens))[1]
+        res = run("g", dev, model, settle=0)
+        self.assertEqual(res.status, "done")
+        self.assertEqual(seen["w"], (800, 360))  # short side 360 like a portrait screenshot, not 360x162
+        self.assertIn("rotated to landscape", model.calls[0])
+        x1, y1, x2, y2 = dev.swipes[0]
+        self.assertEqual((x1, x2), (1200, 1200))  # centred on the landscape width, not on the old portrait one
+        self.assertLessEqual(max(y1, y2), 1080)
+        self.assertEqual(dev.rotated, "portrait")
+        self.assertIn("screen is now portrait", model.calls[2])

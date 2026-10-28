@@ -520,3 +520,16 @@ class WebSearch(unittest.TestCase):
         say(c, bot, "weather?")
         until(lambda: "I could not search." in texts(c, bot, "assistant"))
         self.assertIn("web search is not available", json.dumps(spark.calls[1][1]))
+
+
+class RotateApi(unittest.TestCase):
+    def test_rotate_endpoint_and_orientation_in_mobile_state(self):
+        c, phone, _, _ = setup(Spark())
+        self.assertEqual(c.get("/api/mobile/state").json()["orientation"], "portrait")  # a phone without rotation support reports portrait
+        phone.mode = "portrait"
+        phone.rotate = lambda o: setattr(phone, "mode", o)
+        phone.orientation = lambda: phone.mode
+        r = c.post("/api/device/rotate", json={"orientation": "landscape"})
+        self.assertEqual((r.status_code, r.json()["orientation"]), (200, "landscape"))
+        self.assertEqual(c.get("/api/mobile/state").json()["orientation"], "landscape")
+        self.assertEqual(c.post("/api/device/rotate", json={"orientation": "sideways"}).status_code, 422)

@@ -195,3 +195,10 @@ for details. It never runs phone tasks: it names the bot that should. Notificati
 `alerts`) as an "alert" card in the master chat: a bot without a focus, a card unanswered for 10 minutes, a phone task that failed in the last 24 h. The page shows an unread dot per bot,
 a count in the tab title and, once the owner has allowed it, a browser notification for new master alerts. Not built: push to the Android client, alerts for routines that stopped firing,
 alerts for a secret that is needed but not saved.
+
+## Landscape apps
+Games and video apps that force landscape rotate the phone by themselves (auto-rotate is locked, so only apps that insist do). `Device.size()` now returns the rotated size (uiautomator2
+`window_size`; `dumpsys input` SurfaceOrientation on the adb path), the worker takes each step's size from the screenshot itself, shows landscape pictures at the same short side as portrait
+ones (800x360, not 360x160) and gets a one-line note. The worker has a `rotate` action for apps that do not force it, and the owner has a rotate button in the control dock
+(`POST /api/device/rotate`). The page follows the phone: when a landscape frame arrives, the bot list collapses into a drawer (the ☰ button), the phone panel widens and the live view and
+thumbnail switch to 20:9; it all returns when the app closes. The launcher itself never rotates, so going Home also brings the portrait layout back.

@@ -82,6 +82,14 @@
   .chat header .name { font-weight: 650; }
   .chat header .sub { color: var(--dim); font-size: 12.5px; }
   .menu-btn { display: none !important; }
+  /* A landscape app (a game, a video): give the phone the room. The bot list becomes a drawer and the phone panel widens. */
+  .app.landscape { grid-template-columns: minmax(0, 1fr) min(600px, 52vw); }
+  @media (max-width: 1100px) { .app.landscape { grid-template-columns: minmax(0, 1fr); } }
+  .app.landscape .side { display: none; }
+  .app.landscape.show-side .side { display: flex; position: fixed; left: 0; top: 0; bottom: 0; width: min(300px, 88vw); z-index: 20; box-shadow: 10px 0 40px #0008; }
+  .app.landscape .menu-btn { display: inline-block !important; }
+  .thumb.landscape { max-width: 100%; aspect-ratio: 20 / 9; }
+  .overlay .screen.landscape { aspect-ratio: 20 / 9; height: auto; width: min(94vw, calc((100vh - 150px) * 20 / 9)); }
   .feed { flex: 1; overflow-y: auto; padding: 20px 18px 8px; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; }
   .empty { margin: auto; text-align: center; color: var(--dim); max-width: 36ch; }
   .empty h2 { color: var(--text); font-size: 17px; margin: 10px 0 4px; }
@@ -513,7 +521,7 @@ async function renderTab() {
     const open = el("button", "open", "Open"); open.onclick = () => openOverlay({}); th.append(open);
     const cap = el("div", "cap"); cap.append(el("div", "", S.bot.kind === "master" ? "The shared phone" : S.bot.name + "'s phone"));
     const chip = el("div", "chip " + S.mobile.state); chip.id = "stateChip"; chip.append(el("i"), el("span", "", STATE_TEXT[S.mobile.state] || S.mobile.state)); cap.append(chip);
-    t.append(th, cap); refreshShot();
+    t.append(th, cap); th.classList.toggle("landscape", !!S.landscape); refreshShot();
   } else if (S.tab === "vault") {
     t.replaceChildren(); const v = el("div", "vault");
     v.append(el("div", "note", "Saved secrets are encrypted and never shown. To add one, ask the bot (for example: save my Netflix password): it shows a secure input card in the chat that disappears once saved. The agent types a secret only after you approve each use."));
@@ -575,8 +583,14 @@ async function renderTab() {
 $("lightbox").onclick = () => $("lightbox").classList.remove("on");
 
 // ---------- mobile state and live frames ----------
+function applyOrientation(land) {
+  land = !!land; if (S.landscape === land) return; S.landscape = land;
+  const app = $("app"); app.classList.toggle("landscape", land); if (land) app.classList.remove("show-side");
+  $("ovScreen").classList.toggle("landscape", land); const th = document.querySelector(".thumb"); if (th) th.classList.toggle("landscape", land);
+}
 async function pollMobile() {
   try { S.mobile = await api("/api/mobile/state"); } catch { return; }
+  applyOrientation(S.mobile.orientation === "landscape");
   const chip = $("stateChip"); if (chip) { chip.className = "chip " + S.mobile.state; chip.lastChild.textContent = STATE_TEXT[S.mobile.state] || S.mobile.state; }
   $("phoneChip").className = "chip " + S.mobile.state; $("phoneChip").lastChild.textContent = "Phone: " + (STATE_TEXT[S.mobile.state] || "").toLowerCase();
   if ($("overlay").classList.contains("on")) renderBar();
@@ -589,7 +603,7 @@ async function refreshShot() {
   shotBusy = true;
   try {
     const r = await fetch("/api/device/screenshot?t=" + Date.now(), { headers: auth() });
-    if (r.ok) { const u = URL.createObjectURL(await r.blob()), old = img.src; img.src = u; if (old.startsWith("blob:")) URL.revokeObjectURL(old); }
+    if (r.ok) { const u = URL.createObjectURL(await r.blob()), old = img.src; img.onload = () => applyOrientation(img.naturalWidth > img.naturalHeight); img.src = u; if (old.startsWith("blob:")) URL.revokeObjectURL(old); }
   } catch {}
   shotBusy = false;
   if (shotAgain || S.dragging) { shotAgain = false; refreshShot(); }
@@ -623,7 +637,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !(S.cont
 
 const ICON = {
   back: '<path d="M10 3.5L5.5 8l4.5 4.5"/>', home: '<circle cx="8" cy="8" r="4.2"/>', recents: '<rect x="3.6" y="3.6" width="8.8" height="8.8" rx="1.8"/>',
-  up: '<path d="M8 12.5v-9M4 7l4-4 4 4"/>', down: '<path d="M8 3.5v9M4 9l4 4 4-4"/>',
+  rotate: '<path d="M13 8a5 5 0 11-1.6-3.7M13 2.5v3h-3"/>', up: '<path d="M8 12.5v-9M4 7l4-4 4 4"/>', down: '<path d="M8 3.5v9M4 9l4 4 4-4"/>',
 };
 function ib(name, title, fn) { const b = el("button", "ib"); b.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${ICON[name]}</svg>`; b.title = title; b.setAttribute("aria-label", title); b.onclick = fn; return b; }
 function renderBar() {
@@ -633,7 +647,8 @@ function renderBar() {
   if (held) {
     $("ovHint").textContent = "Click to tap · hold to long-press · drag or scroll wheel to scroll · type on your keyboard · Esc goes back";
     const nav = el("div", "grp"), scroll = el("div", "grp"), key = (k) => () => api("/api/device/key", { key: k }).then(burst).catch(() => {}), sw = (d) => () => api("/api/device/swipe", { direction: d }).then(burst).catch(() => {});
-    nav.append(ib("back", "Back", key("back")), ib("home", "Home", key("home")), ib("recents", "Recent apps", key("recents")));
+    nav.append(ib("back", "Back", key("back")), ib("home", "Home", key("home")), ib("recents", "Recent apps", key("recents")),
+      ib("rotate", "Rotate screen", () => api("/api/device/rotate", { orientation: S.landscape ? "portrait" : "landscape" }).then(burst).catch((e) => toast(e.message))));
     scroll.append(ib("up", "Scroll up", sw("down")), ib("down", "Scroll down", sw("up")));  // "up" shows content above: the finger moves down
     const i = el("input"); i.placeholder = "Type here and press Enter"; i.setAttribute("aria-label", "Type on the phone"); i.autocomplete = "off";
     i.onkeydown = (e) => { if (e.key === "Enter" && i.value) { api("/api/device/type", { text: i.value }).then(() => { i.value = ""; burst(); }).catch(err => toast(err.message)); } };

@@ -78,7 +78,11 @@ class JobManager:
             state = "waiting" if job["status"] == "waiting" else "working"
         else:
             state = "ready"
-        return {"state": state, "held": self.held, "job": job, "queued": self._q.qsize()}
+        try:
+            orientation = self.device.orientation() if hasattr(self.device, "orientation") else "portrait"
+        except Exception:
+            orientation = "portrait"
+        return {"state": state, "held": self.held, "job": job, "queued": self._q.qsize(), "orientation": orientation}
 
     # --- submit and cancel ---------------------------------------------------------------------------------------
     def submit(self, bot_id: str, goal: str) -> dict:

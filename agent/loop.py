@@ -28,6 +28,7 @@ Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {
                                            insert_event title, start "YYYY-MM-DD HH:MM", minutes?, location?; maps_search query; navigate destination; share_text text
   {"type":"open_settings","page":"wifi|bluetooth|display|sound|battery|apps|storage|location|security|privacy|accounts|add_account|date_time|language|keyboard|accessibility|airplane_mode|nfc|network|data_usage|notifications|do_not_disturb|about_phone|developer_options|default_apps"}
                                            jump straight to a Settings page (much faster than hunting through menus)
+  {"type":"rotate","orientation":"landscape|portrait"}   turn the screen; apps that force landscape (games) rotate by themselves, use this for the rest, and turn back to portrait when you are done
   {"type":"key","key":"back|home|enter"}
   {"type":"open_app","package":"com.example.app"}
   {"type":"open_url","url":"https://..."}
@@ -97,7 +98,7 @@ def parse_action(text: str) -> dict:
 
 
 def build_prompt(goal: str, history: list[str], elements, scale: float, unchanged: int, acts: list[dict],
-                 keyboard: bool = False, secrets: list[str] | None = None) -> str:
+                 keyboard: bool = False, secrets: list[str] | None = None, landscape: bool = False) -> str:
     listing = "\n".join(f"{e.id}: {e.label!r} at ({round(e.center[0] / scale)},{round(e.center[1] / scale)})"
                         f"{' [clickable]' if e.clickable else ''}{f' [{e.state}]' if getattr(e, 'state', '') else ''}"
                         for e in elements) or "(UI element list unavailable right now: use screenshot coordinates)"
@@ -107,6 +108,7 @@ def build_prompt(goal: str, history: list[str], elements, scale: float, unchange
                  "could open the detail you need, or use the search field.")
     return (f"Goal: {goal}\n\nRecent actions:\n" + ("\n".join(history[-6:]) or "(none)")
             + ("\n\nOn-screen keyboard: open (its keys are not listed; use type to enter text, key back to close it)." if keyboard else "")
+            + ("\n\nThe screen is rotated to landscape: x runs along the long side. Coordinates and scrolling follow the screenshot." if landscape else "")
             + ("\n\nSaved secrets (labels only): " + ", ".join(secrets) if secrets else "")
             + f"\n\nUI elements:\n{listing}{hint}\n\nChoose the next action.")
 
@@ -153,6 +155,12 @@ def execute(device, act: dict, elements, scale: float, size: tuple[int, int]) ->
             raise ValueError(f"unknown settings page '{page}'; use one of: {', '.join(SETTINGS_PAGES)}")
         device.open_intent(SETTINGS_PAGES[page])
         return f"opened {page} settings"
+    elif kind == "rotate":
+        orientation = str(act.get("orientation", "")).lower()
+        if orientation not in ("landscape", "portrait"):
+            raise ValueError("orientation must be landscape or portrait")
+        device.rotate(orientation)
+        return f"screen is now {orientation}"
     elif kind == "key":
         device.key(KEYS[act["key"]])
     elif kind == "open_app":

@@ -8,6 +8,7 @@ from agent.device import Device
 class DeviceBasics(unittest.TestCase):
     def device_with(self, outputs: dict):
         d = Device()
+        d.use_u2 = False  # these tests exercise the adb path, never the real emulator
         calls = []
 
         def fake_run(*args):
@@ -22,6 +23,25 @@ class DeviceBasics(unittest.TestCase):
         self.assertEqual(d.size(), (720, 1600))
         d, _ = self.device_with({("shell", "wm", "size"): b"Physical size: 1080x2400\n"})
         self.assertEqual(d.size(), (1080, 2400))
+
+    def test_size_follows_the_display_rotation_on_the_adb_path(self):
+        wm = {("shell", "wm", "size"): b"Physical size: 720x1600\n"}
+        d, _ = self.device_with({**wm, ("shell", "dumpsys", "input"): b"  SurfaceOrientation: 1\n"})
+        self.assertEqual((d.size(), d.orientation()), ((1600, 720), "landscape"))
+        d, _ = self.device_with({**wm, ("shell", "dumpsys", "input"): b"  SurfaceOrientation: 0\n"})
+        self.assertEqual((d.size(), d.orientation()), ((720, 1600), "portrait"))
+
+    def test_rotate_locks_the_screen_and_rejects_unknown_values(self):
+        d, calls = self.device_with({})
+        d.rotate("landscape")
+        self.assertIn(("shell", "settings", "put", "system", "user_rotation", "1"), calls)
+        self.assertIn(("shell", "settings", "put", "system", "accelerometer_rotation", "0"), calls)
+        d.rotate("portrait")
+        self.assertIn(("shell", "settings", "put", "system", "user_rotation", "0"), calls)
+        d.rotate("auto")
+        self.assertIn(("shell", "settings", "put", "system", "accelerometer_rotation", "1"), calls)
+        with self.assertRaises(ValueError):
+            d.rotate("upside-down")
 
     def test_prepare_and_restore_set_resolution_and_animations(self):
         d, calls = self.device_with({})

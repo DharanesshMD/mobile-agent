@@ -5,6 +5,7 @@ and resume exactly where it stopped. Add more agents later as extra nodes or sub
 """
 import hashlib
 import json
+import struct
 import threading
 import time
 import uuid
@@ -84,16 +85,18 @@ def observe(state: State, config: RunnableConfig) -> dict:
     with ThreadPoolExecutor(2) as ex:  # the screenshot and the UI tree are independent ADB calls
         f_shot, f_tree = ex.submit(_timed, dev.screenshot), ex.submit(_timed, dev.elements)
         (png, shot_ms), (elements, tree_ms) = f_shot.result(), f_tree.result()
+    w0, h0 = struct.unpack(">II", png[16:24])  # the screenshot's own size (PNG header): right even if the phone rotated mid-task
     digest = hashlib.sha1(png).hexdigest()
     unchanged = state.get("unchanged", 0) + 1 if digest == state.get("last_hash") else 0
-    small, scale = shrink(png, c["image_width"])
+    # The image width is the portrait width; in landscape keep the same short side so the picture is not tiny.
+    small, scale = shrink(png, c["image_width"] if h0 >= w0 else round(c["image_width"] * w0 / h0))
     step = state.get("step", 0) + 1
     send = need_image(c["image_mode"], step, elements, unchanged, state.get("acts", []), state.get("history", []))
     prompt = build_prompt(state["goal"], state.get("history", []), elements, scale, unchanged, state.get("acts", []),
-                          getattr(dev, "keyboard_open", False), c["secrets"].labels() if c.get("secrets") else None)
+                          getattr(dev, "keyboard_open", False), c["secrets"].labels() if c.get("secrets") else None, landscape=w0 > h0)
     ms = {"shot": shot_ms, "tree": tree_ms, "observe": round((time.time() - t0) * 1000), "image": send}
     return {"step": step, "last_hash": digest, "unchanged": unchanged,
-            "obs": {"png": small, "send_image": send, "scale": scale, "elements": [asdict(e) for e in elements],
+            "obs": {"png": small, "send_image": send, "scale": scale, "size": (w0, h0), "elements": [asdict(e) for e in elements],
                     "prompt": prompt, "ms": ms}}
 
 
@@ -203,7 +206,7 @@ def act(state: State, config: RunnableConfig) -> dict:
     elements = [Element(e["id"], e["label"], tuple(e["center"]), e["clickable"], e.get("state", "")) for e in obs["elements"]]
     t0 = time.time()
     try:
-        info = execute(c["device"], a, elements, obs["scale"], c["size"])
+        info = execute(c["device"], a, elements, obs["scale"], tuple(obs.get("size") or c["size"]))
         outcome = "ok" + (f": {info}" if info else "")
     except Exception as e:  # bad element id, adb error: tell the model and carry on
         outcome = f"error: {e}"

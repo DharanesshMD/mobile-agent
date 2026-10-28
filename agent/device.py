@@ -58,6 +58,7 @@ class Device:
         self.use_u2 = (os.environ.get("PHONE_READER", "u2") != "adb") if use_u2 is None else use_u2
         self._u2 = None
         self._u2_failed = False
+        self._size_at: tuple[float, tuple[int, int]] | None = None  # (time, size): rotation can change mid-task, so the size is re-read often
         self.keyboard_open = False
 
     def _u2_device(self):
@@ -93,10 +94,42 @@ class Device:
         return subprocess.run([*self.base, *args], check=True, capture_output=True, timeout=60).stdout
 
     def size(self) -> tuple[int, int]:
-        """Current screen size. `wm size` prints the physical size and, when overridden, a later Override line that wins."""
-        found = re.findall(r"(\d+)x(\d+)", self._run("shell", "wm", "size").decode())
-        w, h = found[-1]
-        return int(w), int(h)
+        """Current screen size including rotation (a game in landscape is 1600x720 on a 720x1600 phone). `wm size` always reports the physical
+        portrait size, so the rotated size comes from uiautomator2, or from the display rotation on the adb path."""
+        now = time.time()
+        if self._size_at and now - self._size_at[0] < 0.7:
+            return self._size_at[1]
+        size = None
+        d = self._u2_device()
+        if d is not None:
+            try:
+                w, h = d.window_size()
+                size = (int(w), int(h))
+            except Exception:
+                size = None
+        if size is None:
+            found = re.findall(r"(\d+)x(\d+)", self._run("shell", "wm", "size").decode())
+            w, h = int(found[-1][0]), int(found[-1][1])
+            rot = re.search(r"SurfaceOrientation:\s*(\d)", self._run("shell", "dumpsys", "input").decode(errors="replace"))
+            size = (h, w) if rot and rot.group(1) in ("1", "3") else (w, h)
+        self._size_at = (now, size)
+        return size
+
+    def orientation(self) -> str:
+        w, h = self.size()
+        return "landscape" if w > h else "portrait"
+
+    def rotate(self, orientation: str) -> None:
+        """portrait or landscape locks the screen that way; auto hands rotation back to the sensor."""
+        if orientation not in ("portrait", "landscape", "auto"):
+            raise ValueError("orientation must be portrait, landscape or auto")
+        if orientation == "auto":
+            self._run("shell", "settings", "put", "system", "accelerometer_rotation", "1")
+        else:
+            self._run("shell", "settings", "put", "system", "accelerometer_rotation", "0")
+            self._run("shell", "settings", "put", "system", "user_rotation", "1" if orientation == "landscape" else "0")
+        self._size_at = None
+        time.sleep(0.6)  # the display takes a moment to turn
 
     def screenshot(self) -> bytes:
         d = self._u2_device()
