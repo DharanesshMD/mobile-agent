@@ -9,7 +9,7 @@ from agent.db import Database
 from agent.hub import Hub
 from agent.master import INTRO, Watcher, digest, ensure_master, find_alerts
 from agent.service import create_app
-from test_chat import Spark, act, msgs, say, texts, until
+from test_chat import Spark, Worker, act, msgs, say, texts, until
 from test_service import Phone
 
 NOW = 1_800_000_000.0
@@ -102,9 +102,10 @@ class Alerts(unittest.TestCase):
         self.assertEqual(Watcher(db, Hub()).check(), 0)
 
 
-def master_app(spark):
+def master_app(spark, *workers):
     tmp = tempfile.mkdtemp()
-    app = create_app(Phone(), lambda m: spark, settle=0, db=Database(":memory:"), data_dir=tmp, master=True)
+    queue = list(workers)
+    app = create_app(Phone(), lambda m: queue.pop(0) if m == "muse-wonder-1.0" else spark, settle=0, db=Database(":memory:"), data_dir=tmp, master=True)
     c = TestClient(app)
     bots = c.get("/api/bots").json()
     return c, app, next(b for b in bots if b["kind"] == "master"), next(b for b in bots if b["kind"] == "bot")
@@ -119,17 +120,45 @@ class Api(unittest.TestCase):
         # the only regular bot is still "the last bot": deleting it leaves a fresh Assistant, and the master is untouched
         self.assertTrue(c.get(f"/api/bots/{assistant['id']}/delete-preview").json()["last"])
 
-    def test_master_sees_the_digest_and_never_runs_phone_tasks(self):
-        spark = Spark(act(type="mobile_task", goal="open youtube", say="on it"), act(type="reply", text="unused"))
-        c, app, master, assistant = master_app(spark)
+    def test_master_sees_the_digest_and_can_run_a_phone_task_itself(self):
+        spark = Spark(act(type="mobile_task", goal="open youtube and play a BTS video", say="On it."), act(type="reply", text="Playing a BTS video now."))
+        c, app, master, assistant = master_app(spark, Worker(act(type="done", answer="playing")))
         app.state.db.add_message(assistant["id"], "user", "text", "remember I like jazz")
-        say(c, master["id"], "open youtube please")
-        until(lambda: any("don't run phone tasks" in t for t in texts(c, master["id"], "assistant")))
+        say(c, master["id"], "open youtube and play a bts video")
+        until(lambda: "Playing a BTS video now." in texts(c, master["id"], "assistant"))
         system = spark.calls[0][0]
         self.assertIn("MASTER bot", system)
         self.assertIn("Workspace digest", system)
         self.assertIn("remember I like jazz", system)
-        self.assertEqual(app.state.db.jobs(master["id"], 5), [])
+        job = app.state.db.jobs(master["id"], 5)[0]
+        self.assertEqual((job["status"], job["goal"]), ("done", "open youtube and play a BTS video"))
+
+    def test_master_hands_a_task_to_the_bot_that_fits_and_hears_back(self):
+        spark = Spark(act(type="delegate_task", bot="assistant", goal="open youtube and play a BTS video", say="Asked Assistant to play it."),
+                      act(type="reply", text="Playing a BTS video."))  # the second reply is Assistant reporting to the owner
+        c, app, master, assistant = master_app(spark, Worker(act(type="done", answer="playing")))
+        say(c, master["id"], "have the assistant play a bts video")
+        until(lambda: any(m["kind"] == "bot_note" and m["content"].startswith("Assistant finished") for m in msgs(c, master["id"])))
+        self.assertIn("Asked Assistant to play it.", texts(c, master["id"], "assistant"))
+        job = app.state.db.jobs(assistant["id"], 5)[0]
+        self.assertEqual((job["status"], job["goal"]), ("done", "open youtube and play a BTS video"))
+        self.assertEqual(app.state.db.jobs(master["id"], 5), [])  # it ran as the assistant's task, not the master's
+        notes = [m["content"] for m in msgs(c, assistant["id"]) if m["kind"] == "bot_note"]
+        self.assertEqual(notes, ["Master asked you to do this on the phone: open youtube and play a BTS video"])
+        until(lambda: "Playing a BTS video." in texts(c, assistant["id"], "assistant"))  # the bot reports in its own chat too
+
+    def test_delegating_to_an_unknown_or_busy_bot_is_explained(self):
+        spark = Spark(act(type="delegate_task", bot="Nobody", goal="g", say=""))
+        c, app, master, assistant = master_app(spark)
+        say(c, master["id"], "ask nobody")
+        until(lambda: any("no unique bot named 'nobody'" in t for t in texts(c, master["id"], "assistant")))
+        self.assertEqual(app.state.db.jobs(assistant["id"], 5), [])
+        spark2 = Spark(act(type="delegate_task", bot="Assistant", goal="g", say=""))
+        c2, app2, master2, assistant2 = master_app(spark2)
+        app2.state.db.create_job(assistant2["id"], "already running")  # queued counts as busy
+        say(c2, master2["id"], "again")
+        until(lambda: any("already busy" in t for t in texts(c2, master2["id"], "assistant")))
+        self.assertEqual(len(app2.state.db.jobs(assistant2["id"], 5)), 1)
 
     def test_master_answers_from_the_digest(self):
         spark = Spark(act(type="reply", text="Assistant has nothing waiting."))

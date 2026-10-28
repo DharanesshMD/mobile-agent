@@ -28,6 +28,7 @@ def parse_decision(text: str) -> dict:
 
 class Orchestrator:
     def __init__(self, db: Database, hub: Hub, model_factory, jobs, vault=None):
+        self.delegated: dict[str, str] = {}  # job id -> the master bot that handed it over
         self.vault, self.routines = vault, None  # routines (the scheduler) is attached by the app
         self.db, self.hub, self.model_factory, self.jobs = db, hub, model_factory, jobs
         self._locks: dict[str, threading.Lock] = {}
@@ -124,8 +125,8 @@ class Orchestrator:
             if kind == "reply":
                 self.post(bot_id, str(act.get("text", "")).strip() or "Done.")
                 return
-            if kind == "mobile_task" and (self.db.get_bot(bot_id) or {}).get("kind") == "master":
-                self.post(bot_id, "I don't run phone tasks myself. Ask one of your other bots to do it (I can tell you which fits best), or create a new bot for it.")
+            if kind == "delegate_task" and (self.db.get_bot(bot_id) or {}).get("kind") == "master":
+                self._delegate(bot_id, act)
                 return
             if kind == "mobile_task":
                 goal = str(act.get("goal", "")).strip()
@@ -279,7 +280,31 @@ class Orchestrator:
             msgs += [{"role": "assistant", "content": json.dumps({"action": act})}, {"role": "user", "content": f"[tool result for {kind}] {result}"}]
         return "I could not settle on an answer."
 
+    def _delegate(self, master_id: str, act: dict) -> None:
+        """The master hands a phone task to the bot that fits it. The task runs, and is reported, in that bot's chat; the master hears back too."""
+        goal, say = str(act.get("goal", "")).strip(), str(act.get("say", "")).strip()
+        if not goal:
+            self.post(master_id, "What should I get done on the phone?")
+            return
+        target = self._find_bot(str(act.get("bot", "")), (master_id,))
+        if isinstance(target, str):
+            self.post(master_id, target.replace("that you can ask now", "to hand this to") + ". I can run it myself instead if you like.")
+            return
+        if self.jobs.active_for(target["id"]):
+            self.post(master_id, f"{target['name']} is already busy with a task. I can run this one myself, or wait for it to finish.")
+            return
+        self.post(master_id, say or f"I asked {target['name']} to do that. Watch its chat for questions; I'll tell you when it's done.")
+        self.post(target["id"], f"Master asked you to do this on the phone: {goal}", "bot_note", {"with": master_id})
+        job = self.jobs.submit(target["id"], goal)
+        self.delegated[job["id"]] = master_id
+
     def job_finished(self, bot_id: str, job: dict) -> None:
+        master_id = self.delegated.pop(job["id"], None)
+        if master_id:
+            bot = self.db.get_bot(bot_id) or {"name": "A bot"}
+            text = {"done": f"{bot['name']} finished: {job['goal']}\n{job['result']}", "cancelled": f"{bot['name']}'s task was stopped: {job['goal']}"}.get(
+                job["status"], f"{bot['name']}'s task did not complete ({job['status']}): {job['goal']}\n{job['result']}")
+            self.post(master_id, text, "bot_note", {"with": bot_id})
         status, result = job["status"], job["result"]
         if status == "cancelled":
             self.post(bot_id, "Stopped the task.")
