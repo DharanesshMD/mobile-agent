@@ -126,18 +126,28 @@
   .overlay { position: fixed; inset: 0; background: #07080b; z-index: 50; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 12px; }
   .overlay.on { display: flex; }
   .overlay .close { position: absolute; right: 14px; top: 14px; }
-  .overlay .screen { height: calc(100vh - 150px); aspect-ratio: 9 / 20; max-width: 94vw; border-radius: 26px; border: 2px solid var(--line); overflow: hidden; background: #000; position: relative; }
+  .overlay .screen { height: calc(100vh - 140px); aspect-ratio: 9 / 20; max-width: 94vw; border-radius: 26px; border: 2px solid var(--line); overflow: hidden; background: #000; position: relative; }
   .overlay .screen.control { border-color: var(--accent); cursor: crosshair; touch-action: none; user-select: none; outline: none; }
   .tap.long { background: #f5b84b66; border-color: var(--warn); }
-  .bar .hint { color: var(--dim); font-size: 12.5px; }
   .tap { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 50%; background: #ffffff55; border: 2px solid #fff; pointer-events: none; animation: tap .45s ease-out forwards; }
   @keyframes tap { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
   .overlay .screen img { width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; -webkit-user-drag: none; }
-  .bar { display: flex; align-items: center; gap: 8px; background: #141821; border: 1px solid var(--line); border-radius: 999px; padding: 6px 8px 6px 14px; color: #e8ebf1; flex-wrap: wrap; justify-content: center; }
-  .bar .msg-t { font-size: 14px; }
-  .bar button { border-radius: 999px; background: #fff; color: #111; border-color: #fff; }
-  .bar button.sm { background: #232938; color: #e8ebf1; border-color: #2d3446; padding: 5px 10px; }
-  .bar input { width: 170px; background: #0d1017; color: #e8ebf1; border-color: #2d3446; border-radius: 999px; padding: 5px 12px; }
+  .dock { display: flex; align-items: center; gap: 10px; background: #141821; border: 1px solid #232938; border-radius: 18px; padding: 8px 10px; width: min(780px, 94vw); flex-wrap: wrap; color: #e8ebf1; box-shadow: 0 10px 30px #0006; }
+  .dock .status { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; white-space: nowrap; padding: 0 4px; }
+  .dock .status i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .dock .status.live i { background: var(--accent); box-shadow: 0 0 0 0 #6b8cff88; animation: ring 1.6s ease-out infinite; }
+  .dock .status.busy i { background: var(--warn); }
+  @keyframes ring { to { box-shadow: 0 0 0 7px #6b8cff00; } }
+  .dock .grp { display: flex; gap: 2px; background: #0d1017; border-radius: 12px; padding: 3px; }
+  .dock .ib { width: 34px; height: 32px; padding: 0; border: 0; border-radius: 9px; background: transparent; color: #cfd5e2; display: grid; place-items: center; }
+  .dock .ib:hover:not(:disabled) { background: #232938; color: #fff; border-color: transparent; }
+  .dock .ib svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .dock input { flex: 1; min-width: 150px; background: #0d1017; color: #e8ebf1; border: 1px solid #232938; border-radius: 12px; padding: 7px 12px; }
+  .dock input:focus { border-color: var(--accent); outline: none; }
+  .dock .go { border-radius: 12px; padding: 7px 16px; font-weight: 600; margin-left: auto; }
+  .dock .go.stop { background: #fff; color: #111; border-color: #fff; }
+  .dock-hint { color: #8b93a7; font-size: 12px; text-align: center; max-width: 94vw; }
+  @media (max-width: 760px) { .dock-hint { display: none; } }
   .lightbox { position: fixed; inset: 0; background: #000d; z-index: 60; display: none; align-items: center; justify-content: center; }
   .lightbox.on { display: flex; } .lightbox img { max-height: 92vh; max-width: 92vw; border-radius: 12px; }
 </style>
@@ -193,7 +203,8 @@
 <div class="overlay" id="overlay">
   <button class="ghost close" id="ovClose" aria-label="Close live view">&#10005;</button>
   <div class="screen" id="ovScreen" tabindex="0"><img id="ovImg" alt="Live view of the phone"></div>
-  <div class="bar" id="ovBar"></div>
+  <div class="dock" id="ovBar"></div>
+  <div class="dock-hint" id="ovHint"></div>
 </div>
 <div class="lightbox" id="lightbox"><img id="lbImg" alt="Library item"></div>
 
@@ -504,23 +515,32 @@ function closeOverlay() { if (S.control && S.control.held) releaseControl(false)
 $("ovClose").onclick = closeOverlay;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !(S.control && S.control.held)) { closeOverlay(); $("lightbox").classList.remove("on"); } });
 
+const ICON = {
+  back: '<path d="M10 3.5L5.5 8l4.5 4.5"/>', home: '<circle cx="8" cy="8" r="4.2"/>', recents: '<rect x="3.6" y="3.6" width="8.8" height="8.8" rx="1.8"/>',
+  up: '<path d="M8 12.5v-9M4 7l4-4 4 4"/>', down: '<path d="M8 3.5v9M4 9l4 4 4-4"/>',
+};
+function ib(name, title, fn) { const b = el("button", "ib"); b.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${ICON[name]}</svg>`; b.title = title; b.setAttribute("aria-label", title); b.onclick = fn; return b; }
 function renderBar() {
   const bar = $("ovBar"), held = S.control && S.control.held; bar.replaceChildren();
   $("ovScreen").classList.toggle("control", !!held);
+  const status = (text, cls) => { const st = el("div", "status " + cls); st.append(el("i"), el("span", "", text)); return st; };
   if (held) {
-    bar.append(el("span", "msg-t", "You're in control"), el("span", "hint", "Click to tap · hold to long-press · drag or wheel to scroll · type on your keyboard · Esc = back"));
-    for (const [k, label] of [["back", "◀"], ["home", "●"], ["recents", "■"]]) { const b = el("button", "sm", label); b.title = k; b.onclick = () => api("/api/device/key", { key: k }).then(burst).catch(() => {}); bar.append(b); }
-    for (const [d, label] of [["up", "↑"], ["down", "↓"]]) { const b = el("button", "sm", label); b.title = "scroll " + d; b.onclick = () => api("/api/device/swipe", { direction: d }).then(burst).catch(() => {}); bar.append(b); }
-    const i = el("input"); i.placeholder = "Type on the phone"; i.setAttribute("aria-label", "Type on the phone");
+    $("ovHint").textContent = "Click to tap · hold to long-press · drag or scroll wheel to scroll · type on your keyboard · Esc goes back";
+    const nav = el("div", "grp"), scroll = el("div", "grp"), key = (k) => () => api("/api/device/key", { key: k }).then(burst).catch(() => {}), sw = (d) => () => api("/api/device/swipe", { direction: d }).then(burst).catch(() => {});
+    nav.append(ib("back", "Back", key("back")), ib("home", "Home", key("home")), ib("recents", "Recent apps", key("recents")));
+    scroll.append(ib("up", "Scroll up", sw("down")), ib("down", "Scroll down", sw("up")));  // "up" shows content above: the finger moves down
+    const i = el("input"); i.placeholder = "Type here and press Enter"; i.setAttribute("aria-label", "Type on the phone"); i.autocomplete = "off";
     i.onkeydown = (e) => { if (e.key === "Enter" && i.value) { api("/api/device/type", { text: i.value }).then(() => { i.value = ""; burst(); }).catch(err => alert(err.message)); } };
-    const done = el("button", "", "I'm done"); done.onclick = () => releaseControl(true);
-    bar.append(i, done);
+    const done = el("button", "go stop", "I'm done"); done.onclick = () => releaseControl(true);
+    bar.append(status("You're in control", "live"), nav, scroll, i, done);
   } else {
-    const st = S.mobile.state;
-    bar.append(el("span", "msg-t", st === "working" ? "Watching live: the agent is working" : "Watching live"));
-    const b = el("button", "", "Take control"); b.onclick = takeControl; bar.append(b);
+    $("ovHint").textContent = "";
+    const working = S.mobile.state === "working";
+    const take = el("button", "go primary", "Take control"); take.onclick = takeControl;
+    bar.append(status(working ? "Watching live: the agent is working" : "Watching live", working ? "busy" : ""), take);
   }
 }
+
 // ---------- pointer and keyboard control of the phone (while "You're in control") ----------
 // Click taps, hold without moving long-presses, drag scrolls or swipes, the wheel scrolls, and the keyboard types on the phone.
 const holding = () => !!(S.control && S.control.held) && $("overlay").classList.contains("on");
