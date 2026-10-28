@@ -407,7 +407,10 @@ def create_default_app() -> FastAPI:
     from agent.device import Device
     from agent.model import MetaClient, load_env
     load_env()
-    app = create_app(Device(os.environ.get("ANDROID_SERIAL")), lambda m: MetaClient(m),
+    device = Device(os.environ.get("ANDROID_SERIAL"))
+    if os.environ.get("PHONE_PROFILE", "light") == "light" and device.is_emulator():
+        device.prepare()
+    app = create_app(device, lambda m: MetaClient(m),
                      token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
                      db=Database(os.environ.get("DB_FILE", "data/app.db")))
     print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)

@@ -56,3 +56,8 @@ Verified: the agent opens the Play Store, recognizes "Sign in" and hands off to 
 Signing in: start the service, ask the agent to "Open the Play Store and sign in", then in the web UI use the phone view to enter the
 email and password yourself. Use a throwaway Google account, not your main one. If Google asks for an SMS code, that is the
 `request_otp` flow once the phone client exists; until then type it in the phone view.
+
+## Light profile (28 Oct 2026)
+
+Start with `scripts/emulator.sh` (Mac GPU rendering, 3 cores, 2 GB, no window, clean boot). On an emulator the agent sets the screen to 720x1600 and turns animations off
+when it starts (`PHONE_PROFILE=off` to disable; `Device.restore()` undoes it). Measured effect and the numbers are in docs/quality-log.md.

@@ -33,8 +33,10 @@ class Device:
         return subprocess.run([*self.base, *args], check=True, capture_output=True, timeout=60).stdout
 
     def size(self) -> tuple[int, int]:
-        m = re.search(r"(\d+)x(\d+)", self._run("shell", "wm", "size").decode())
-        return int(m.group(1)), int(m.group(2))
+        """Current screen size. `wm size` prints the physical size and, when overridden, a later Override line that wins."""
+        found = re.findall(r"(\d+)x(\d+)", self._run("shell", "wm", "size").decode())
+        w, h = found[-1]
+        return int(w), int(h)
 
     def screenshot(self) -> bytes:
         return self._run("exec-out", "screencap", "-p")
@@ -95,6 +97,25 @@ class Device:
 
     def key(self, name: str) -> None:
         self._run("shell", "input", "keyevent", name)
+
+    ANIMATION_SETTINGS = ("window_animation_scale", "transition_animation_scale", "animator_duration_scale")
+
+    def is_emulator(self) -> bool:
+        return self._run("shell", "getprop", "ro.kernel.qemu").decode().strip() == "1" or \
+            self._run("shell", "getprop", "ro.boot.qemu").decode().strip() == "1"
+
+    def prepare(self, width: int = 720, height: int = 1600, density: int = 300) -> None:
+        """Light profile: a smaller screen (cheaper to render, capture and send to the model) and no animations (faster to settle)."""
+        self._run("shell", "wm", "size", f"{width}x{height}")
+        self._run("shell", "wm", "density", str(density))
+        for key in self.ANIMATION_SETTINGS:
+            self._run("shell", "settings", "put", "global", key, "0")
+
+    def restore(self) -> None:
+        self._run("shell", "wm", "size", "reset")
+        self._run("shell", "wm", "density", "reset")
+        for key in self.ANIMATION_SETTINGS:
+            self._run("shell", "settings", "put", "global", key, "1")
 
     def launcher_apps(self) -> list[str]:
         out = self._run("shell", "cmd", "package", "query-activities", "--brief", "-a", "android.intent.action.MAIN",

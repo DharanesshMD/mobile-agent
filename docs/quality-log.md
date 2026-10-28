@@ -24,7 +24,23 @@ an app loads, so it is now capped on the device (hard kill after 6 s, one retry)
 - Model client now retries dropped connections (`RemoteDisconnected`, resets, bad bodies), not just HTTP 429/5xx. A dropped connection used to fail the whole job.
 - Test waits loosened: a CPU-starved machine made a few background-thread tests flaky.
 
-## Not yet re-verified
-The dark-theme, calculator and storage tasks with the new actions. A re-run was blocked by the host: the Mac was swapping about 10.7 of 12.3 GB, the
-emulator held 250 to 400 percent CPU, and a UI dump or settle step sometimes took tens of seconds or longer. Free memory before the next run
-(for example quit Docker Desktop, which is not needed now) and re-run the scenario set.
+## Re-verified after the fixes (light profile, 28 Oct 2026)
+| Task | Before | After |
+|---|---|---|
+| Settings: turn on Dark theme | 14 steps, ran out of budget | 3 steps, 20 s, night mode confirmed on the device |
+| Calculator (not installed) | 14 steps hunting for it | 2 steps, 16 s: `find_app` reports it is missing, then it asks whether to install one |
+| Settings: storage used | not run | 2 steps, 14 s: "4.2 GB of 8.0 GB" |
+
+## Compute: what the emulator costs and what we changed (28 Oct 2026, M-series Mac, same Chrome lookup task)
+| Setup | Emulator CPU (avg / peak) | Avg step | Notes |
+|---|---|---|---|
+| 1080x2400, animations on, software GPU (swiftshader) | 160% / 491% | 8.0 s | Settle 2.2 s |
+| 720x1600, animations off, software GPU | 181% / 492% | 7.1 s | Settle 1.2 s, screenshot 443 ms instead of 702 ms |
+| 720x1600, animations off, Mac GPU (`-gpu host`) | 83% / 246% | 6.6 s | Screenshot 0.4 s, settle 1.0 s |
+
+Software rendering was the CPU cost; the smaller screen and no animations mainly help latency. A long-running emulator can also run away (250-400% after 7 hours), so restart
+it when the machine feels slow. The light profile is now the default: `scripts/emulator.sh` starts the emulator, and the agent applies the 720x1600 screen and no animations on
+emulators (`PHONE_PROFILE=off` disables it). `wm size` overrides print an Override line; the size parser now uses it (a bug that would have scaled every tap wrongly).
+
+Where a step still spends time: UI tree dump 2.4 to 2.9 s (starting `uiautomator` each time), model 2.5 s, settle about 1 s. The next big win is a resident accessibility helper
+instead of `uiautomator dump`, then sending the screenshot only when needed.
