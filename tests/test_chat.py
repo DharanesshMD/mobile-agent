@@ -299,3 +299,24 @@ class BotManagement(unittest.TestCase):
     def test_the_last_bot_cannot_be_deleted(self):
         c, _, bot, _ = setup(Spark())
         self.assertEqual(c.delete(f"/api/bots/{bot}").status_code, 409)
+
+
+class PointerControl(unittest.TestCase):
+    def test_drag_long_press_and_pc_keys_reach_the_phone(self):
+        c, phone, _, _ = setup(Spark())
+        swipes, keys = [], []
+        phone.swipe = lambda *a: swipes.append(a)
+        phone.key = lambda name: keys.append(name)
+        post = lambda path, body: c.post(path, json=body).status_code
+        self.assertEqual(post("/api/device/swipe", {"fx1": 0.5, "fy1": 0.8, "fx2": 0.5, "fy2": 0.2, "ms": 180}), 200)
+        self.assertEqual(swipes[-1], (540, 1920, 540, 480, 180))  # the fake phone is 1080x2400
+        self.assertEqual(post("/api/device/swipe", {"fx1": 0.5, "fy1": 0.5, "fx2": 0.5, "fy2": 0.5, "ms": 900}), 200)  # long press
+        self.assertEqual(swipes[-1], (540, 1200, 540, 1200, 900))
+        self.assertEqual(post("/api/device/swipe", {"direction": "up"}), 200)
+        self.assertEqual(post("/api/device/swipe", {"fx1": 0.5}), 422)
+        self.assertEqual(post("/api/device/swipe", {"fx1": 1.5, "fy1": 0, "fx2": 0, "fy2": 0}), 422)
+        self.assertEqual(post("/api/device/swipe", {"fx1": 0, "fy1": 0, "fx2": 0, "fy2": 0, "ms": 5}), 422)
+        for k, code in (("delete", "KEYCODE_DEL"), ("tab", "KEYCODE_TAB"), ("left", "KEYCODE_DPAD_LEFT"), ("page_down", "KEYCODE_PAGE_DOWN")):
+            self.assertEqual(post("/api/device/key", {"key": k}), 200)
+            self.assertEqual(keys[-1], code)
+        self.assertEqual(post("/api/device/key", {"key": "power"}), 422)

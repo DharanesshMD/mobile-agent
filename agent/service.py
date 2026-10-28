@@ -106,12 +106,24 @@ class Text(BaseModel):
     text: str = Field(min_length=1, max_length=500)
 
 
+KEYCODES = {"back": "KEYCODE_BACK", "home": "KEYCODE_HOME", "enter": "KEYCODE_ENTER", "recents": "KEYCODE_APP_SWITCH",
+            "delete": "KEYCODE_DEL", "forward_delete": "KEYCODE_FORWARD_DEL", "tab": "KEYCODE_TAB", "space": "KEYCODE_SPACE",
+            "up": "KEYCODE_DPAD_UP", "down": "KEYCODE_DPAD_DOWN", "left": "KEYCODE_DPAD_LEFT", "right": "KEYCODE_DPAD_RIGHT",
+            "page_up": "KEYCODE_PAGE_UP", "page_down": "KEYCODE_PAGE_DOWN"}
+
+
 class Key(BaseModel):
-    key: str = Field(pattern="^(back|home|enter|recents)$")
+    key: str = Field(pattern="^(" + "|".join(KEYCODES) + ")$")
 
 
 class Swipe(BaseModel):
-    direction: str = Field(pattern="^(up|down|left|right)$")
+    """Either a direction (the scroll buttons) or a drag from one point to another in screen fractions (mouse drag, wheel, long press)."""
+    direction: str | None = Field(default=None, pattern="^(up|down|left|right)$")
+    fx1: float | None = Field(default=None, ge=0, le=1)
+    fy1: float | None = Field(default=None, ge=0, le=1)
+    fx2: float | None = Field(default=None, ge=0, le=1)
+    fy2: float | None = Field(default=None, ge=0, le=1)
+    ms: int = Field(default=300, ge=50, le=2000)
 
 
 def create_app(device, model_factory, token: str | None = None, settle: float = 0.4, store: Store | None = None,
@@ -386,8 +398,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     @app.post("/api/device/key", dependencies=[Depends(auth)])
     def key(body: Key):
         takeover_allowed()
-        device.key({"back": "KEYCODE_BACK", "home": "KEYCODE_HOME", "enter": "KEYCODE_ENTER",
-                    "recents": "KEYCODE_APP_SWITCH"}[body.key])
+        device.key(KEYCODES[body.key])
         stale()
         return {"ok": True}
 
@@ -395,10 +406,15 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     def swipe(body: Swipe):
         takeover_allowed()
         w, h = device.size()
-        cx, cy, dx, dy = w // 2, h // 2, w // 3, h // 3
-        d = {"up": (cx, cy + dy, cx, cy - dy), "down": (cx, cy - dy, cx, cy + dy),
-             "left": (cx + dx, cy, cx - dx, cy), "right": (cx - dx, cy, cx + dx, cy)}[body.direction]
-        device.swipe(*d)
+        if body.fx1 is not None and None not in (body.fy1, body.fx2, body.fy2):
+            device.swipe(round(body.fx1 * w), round(body.fy1 * h), round(body.fx2 * w), round(body.fy2 * h), body.ms)
+        elif body.direction:
+            cx, cy, dx, dy = w // 2, h // 2, w // 3, h // 3
+            d = {"up": (cx, cy + dy, cx, cy - dy), "down": (cx, cy - dy, cx, cy + dy),
+                 "left": (cx + dx, cy, cx - dx, cy), "right": (cx - dx, cy, cx + dx, cy)}[body.direction]
+            device.swipe(*d)
+        else:
+            raise HTTPException(422, "give a direction or fx1, fy1, fx2, fy2")
         stale()
         return {"ok": True}
 

@@ -127,7 +127,9 @@
   .overlay.on { display: flex; }
   .overlay .close { position: absolute; right: 14px; top: 14px; }
   .overlay .screen { height: calc(100vh - 150px); aspect-ratio: 9 / 20; max-width: 94vw; border-radius: 26px; border: 2px solid var(--line); overflow: hidden; background: #000; position: relative; }
-  .overlay .screen.control { border-color: var(--accent); cursor: pointer; }
+  .overlay .screen.control { border-color: var(--accent); cursor: crosshair; touch-action: none; user-select: none; outline: none; }
+  .tap.long { background: #f5b84b66; border-color: var(--warn); }
+  .bar .hint { color: var(--dim); font-size: 12.5px; }
   .tap { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 50%; background: #ffffff55; border: 2px solid #fff; pointer-events: none; animation: tap .45s ease-out forwards; }
   @keyframes tap { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
   .overlay .screen img { width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; -webkit-user-drag: none; }
@@ -190,7 +192,7 @@
 
 <div class="overlay" id="overlay">
   <button class="ghost close" id="ovClose" aria-label="Close live view">&#10005;</button>
-  <div class="screen" id="ovScreen"><img id="ovImg" alt="Live view of the phone"></div>
+  <div class="screen" id="ovScreen" tabindex="0"><img id="ovImg" alt="Live view of the phone"></div>
   <div class="bar" id="ovBar"></div>
 </div>
 <div class="lightbox" id="lightbox"><img id="lbImg" alt="Library item"></div>
@@ -499,13 +501,13 @@ async function releaseControl(done) {
 }
 function closeOverlay() { if (S.control && S.control.held) releaseControl(false); $("overlay").classList.remove("on"); }
 $("ovClose").onclick = closeOverlay;
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeOverlay(); $("lightbox").classList.remove("on"); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !(S.control && S.control.held)) { closeOverlay(); $("lightbox").classList.remove("on"); } });
 
 function renderBar() {
   const bar = $("ovBar"), held = S.control && S.control.held; bar.replaceChildren();
   $("ovScreen").classList.toggle("control", !!held);
   if (held) {
-    bar.append(el("span", "msg-t", "You're in control"));
+    bar.append(el("span", "msg-t", "You're in control"), el("span", "hint", "Click to tap · hold to long-press · drag or wheel to scroll · type on your keyboard · Esc = back"));
     for (const [k, label] of [["back", "◀"], ["home", "●"], ["recents", "■"]]) { const b = el("button", "sm", label); b.title = k; b.onclick = () => api("/api/device/key", { key: k }).then(burst).catch(() => {}); bar.append(b); }
     for (const [d, label] of [["up", "↑"], ["down", "↓"]]) { const b = el("button", "sm", label); b.title = "scroll " + d; b.onclick = () => api("/api/device/swipe", { direction: d }).then(burst).catch(() => {}); bar.append(b); }
     const i = el("input"); i.placeholder = "Type on the phone"; i.setAttribute("aria-label", "Type on the phone");
@@ -518,16 +520,66 @@ function renderBar() {
     const b = el("button", "", "Take control"); b.onclick = takeControl; bar.append(b);
   }
 }
-$("ovScreen").addEventListener("click", (e) => {
-  if (!(S.control && S.control.held)) return;
+// ---------- pointer and keyboard control of the phone (while "You're in control") ----------
+// Click taps, hold without moving long-presses, drag scrolls or swipes, the wheel scrolls, and the keyboard types on the phone.
+const holding = () => !!(S.control && S.control.held) && $("overlay").classList.contains("on");
+let chain = Promise.resolve();
+const phone = (path, body) => (chain = chain.then(() => api(path, body)).catch(() => {}).then(burst));  // ordered; a failed step never blocks the next
+function frac(e, clamp) {
   const img = $("ovImg"), r = img.getBoundingClientRect(), ar = img.naturalWidth / img.naturalHeight || 0.45;
   let w = r.width, h = r.height, ox = 0, oy = 0;
   if (w / h > ar) { w = h * ar; ox = (r.width - w) / 2; } else { h = w / ar; oy = (r.height - h) / 2; }
-  const fx = (e.clientX - r.left - ox) / w, fy = (e.clientY - r.top - oy) / h;
-  if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
-  const dot = el("div", "tap"); dot.style.left = (e.clientX - $("ovScreen").getBoundingClientRect().left) + "px"; dot.style.top = (e.clientY - $("ovScreen").getBoundingClientRect().top) + "px";
-  $("ovScreen").append(dot); setTimeout(() => dot.remove(), 450);  // instant feedback while the phone catches up
-  api("/api/device/tap", { fx, fy }).then(burst).catch((err) => alert(err.message));
+  let fx = (e.clientX - r.left - ox) / w, fy = (e.clientY - r.top - oy) / h;
+  if (clamp) { fx = Math.min(1, Math.max(0, fx)); fy = Math.min(1, Math.max(0, fy)); }
+  else if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+  return { fx, fy };
+}
+function ripple(e, cls) {
+  const sc = $("ovScreen"), r = sc.getBoundingClientRect(), d = el("div", "tap " + (cls || ""));
+  d.style.left = (e.clientX - r.left) + "px"; d.style.top = (e.clientY - r.top) + "px"; sc.append(d); setTimeout(() => d.remove(), 450);
+}
+let drag = null;
+$("ovScreen").addEventListener("pointerdown", (e) => {
+  if (!holding() || e.button !== 0) return;
+  const f = frac(e, false); if (!f) return;
+  drag = { ...f, x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
+  $("ovScreen").setPointerCapture(e.pointerId); $("ovScreen").focus(); e.preventDefault();
+});
+$("ovScreen").addEventListener("pointermove", (e) => { if (drag && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 8) drag.moved = true; });
+$("ovScreen").addEventListener("pointercancel", () => { drag = null; });
+$("ovScreen").addEventListener("pointerup", (e) => {
+  if (!drag) return; const d = drag; drag = null;
+  const dt = performance.now() - d.t;
+  if (!d.moved && dt < 450) { ripple(e); phone("/api/device/tap", { fx: d.fx, fy: d.fy }); }
+  else if (!d.moved) { ripple(e, "long"); phone("/api/device/swipe", { fx1: d.fx, fy1: d.fy, fx2: d.fx, fy2: d.fy, ms: Math.min(1500, Math.round(dt)) }); }  // press and hold
+  else { const t = frac(e, true); ripple(e); phone("/api/device/swipe", { fx1: d.fx, fy1: d.fy, fx2: t.fx, fy2: t.fy, ms: Math.min(900, Math.max(80, Math.round(dt))) }); }
+});
+let wheel = { x: 0, y: 0, timer: null };
+$("ovScreen").addEventListener("wheel", (e) => {
+  if (!holding()) return; e.preventDefault();
+  const k = e.deltaMode === 1 ? 16 : 1; wheel.x += e.deltaX * k; wheel.y += e.deltaY * k;
+  if (wheel.timer) return;
+  wheel.timer = setTimeout(() => {
+    const h = $("ovImg").getBoundingClientRect().height || 600, dy = Math.max(-0.6, Math.min(0.6, wheel.y / h * 1.5)), dx = Math.max(-0.6, Math.min(0.6, wheel.x / h * 1.5));
+    wheel = { x: 0, y: 0, timer: null };
+    if (Math.abs(dy) < 0.03 && Math.abs(dx) < 0.03) return;
+    // wheel down reveals content further down, so the finger moves up
+    phone("/api/device/swipe", { fx1: 0.5 + dx / 2, fy1: 0.5 + dy / 2, fx2: 0.5 - dx / 2, fy2: 0.5 - dy / 2, ms: 160 });
+  }, 90);
+}, { passive: false });
+
+let typed = "", typeTimer = null;
+function flushTyped() { clearTimeout(typeTimer); typeTimer = null; const t = typed; typed = ""; for (let i = 0; i < t.length; i += 500) phone("/api/device/type", { text: t.slice(i, i + 500) }); }
+const SPECIAL = { Backspace: "delete", Delete: "forward_delete", Enter: "enter", Tab: "tab", ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", PageUp: "page_up", PageDown: "page_down", Escape: "back" };
+const inField = (e) => /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+document.addEventListener("keydown", (e) => {
+  if (!holding() || inField(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key.length === 1) { e.preventDefault(); typed += e.key; if (!typeTimer) typeTimer = setTimeout(flushTyped, 60); return; }  // batch fast typing into one call
+  if (SPECIAL[e.key]) { e.preventDefault(); flushTyped(); phone("/api/device/key", { key: SPECIAL[e.key] }); }
+});
+document.addEventListener("paste", (e) => {
+  if (!holding() || inField(e)) return;
+  const t = e.clipboardData.getData("text"); if (t) { e.preventDefault(); typed += t; flushTyped(); }
 });
 
 loadBots(); pollMobile();
