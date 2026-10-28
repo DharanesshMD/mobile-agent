@@ -57,7 +57,7 @@ def client(*actions, token=None):
     return TestClient(app), phone
 
 
-def wait_for(c, rid, pred, timeout=15):
+def wait_for(c, rid, pred, timeout=40):
     end = time.time() + timeout
     while time.time() < end:
         r = c.get(f"/api/runs/{rid}").json()

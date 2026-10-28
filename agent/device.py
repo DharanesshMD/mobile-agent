@@ -15,6 +15,8 @@ class Element:
     clickable: bool
 
 
+from agent.apps import parse_launcher_packages
+
 ACCOUNT_RE = re.compile(r"Account \{name=([^,}]+), type=([^}]+)\}")
 
 
@@ -63,12 +65,14 @@ class Device:
                 break
         return out
 
-    def _dump(self, tries: int = 3):
-        """uiautomator can exit 0 without writing a file (mid-animation) and leave a stale one, so delete first."""
+    def _dump(self, tries: int = 2, device_timeout: int = 6):
+        """uiautomator waits for the app to go idle, which can stall for tens of seconds while a page loads or animates.
+        Cap it on the device, retry once, and give up (the model then works from the screenshot alone).
+        It can also exit 0 without writing a file and leave a stale one, so delete first."""
         for _ in range(tries):
-            self._run("shell", "rm", "-f", "/sdcard/ui.xml")
             try:
-                self._run("shell", "uiautomator", "dump", "/sdcard/ui.xml")
+                self._run("shell", "rm", "-f", "/sdcard/ui.xml")
+                self._run("shell", "timeout", "-s", "KILL", str(device_timeout), "uiautomator", "dump", "/sdcard/ui.xml")
                 data = self._run("exec-out", "cat", "/sdcard/ui.xml")
             except subprocess.CalledProcessError:
                 data = b""
@@ -77,7 +81,7 @@ class Device:
                     return ET.fromstring(data)
             except ET.ParseError:
                 pass
-            time.sleep(0.5)
+            time.sleep(0.3)
         return None
 
     def tap(self, x: int, y: int) -> None:
@@ -91,6 +95,11 @@ class Device:
 
     def key(self, name: str) -> None:
         self._run("shell", "input", "keyevent", name)
+
+    def launcher_apps(self) -> list[str]:
+        out = self._run("shell", "cmd", "package", "query-activities", "--brief", "-a", "android.intent.action.MAIN",
+                        "-c", "android.intent.category.LAUNCHER").decode(errors="replace")
+        return parse_launcher_packages(out)
 
     def accounts(self) -> list[tuple[str, str]]:
         return parse_accounts(self._run("shell", "dumpsys", "account").decode(errors="replace"))

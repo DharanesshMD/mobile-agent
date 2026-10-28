@@ -1,5 +1,6 @@
 """Meta Model API client (OpenAI-style chat completions with image input)."""
 import base64
+import http.client
 import json
 import os
 import time
@@ -54,7 +55,7 @@ class MetaClient:
                     time.sleep(2 ** attempt)
                     continue
                 raise ModelError(f"HTTP {e.code}: {e.read()[:300].decode(errors='replace')}") from e
-            except (urllib.error.URLError, TimeoutError) as e:
+            except (OSError, http.client.HTTPException, json.JSONDecodeError) as e:  # dropped connection, timeout, bad body
                 if attempt < 2:
                     time.sleep(2 ** attempt)
                     continue

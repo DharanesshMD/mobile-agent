@@ -27,3 +27,21 @@
 - [ ] Vault (AES-GCM), secret input, sensitive-text detector, type_secret with approval
 - [ ] Sleep/wake lifecycle (docker pause/stop), routines scheduler, library artifacts
 - [ ] Android client, voice (Muse Voice Transcribe), demo scenarios, 3-minute video
+
+## Prize plan (28 Oct 2026), ordered by value for the judging rubric
+Rubric: Impact 30, Meta tooling 25, Demo 25, Technical depth 20. Deadline Wed 4 Nov, 9 PM ET.
+
+P0, this week:
+- [ ] Re-verify dark theme, calculator (not installed), storage with the new actions; build a scenario runner (`scripts/scenarios.py`) that prints pass/fail, steps and time for about 8 tasks
+- [ ] Vault (AES-GCM), masked secret input, sensitive-text detector, `type_secret` with approval (design-v2 section 5)
+- [ ] Routines and proactive behaviour: scheduler (daily time or every N minutes), the bot messages you first with results and asks when it needs you
+- [ ] Voice: mic button records, Muse Voice Transcribe turns it into text (Meta tooling score), spoken replies later via the browser/phone TTS
+- [ ] Pick and rehearse two hero demo scenarios (owner to choose; safe topics only), polish the UI around them
+
+P1:
+- [ ] Open-weight path: run the orchestrator on Muse Spark Open through Baseten (bonus prize, uses the partner credits)
+- [ ] Sleep and wake lifecycle visible in the Mobile panel (emulator backend now, docker backend later)
+- [ ] Android client: pairing, chat, action cards, OTP relay
+
+P2:
+- [ ] Replay mode for reviewers, README polish, 3-minute video script, record on Nov 3

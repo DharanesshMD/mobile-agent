@@ -1,11 +1,12 @@
 """Building blocks for the agent graph: prompt, screenshot shrinking, action parsing and execution."""
-import hashlib
 import io
 import json
 import re
 import time
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageStat
+
+from agent.apps import SETTINGS_PAGES, match_apps
 
 SHOT_WIDTH = 540
 
@@ -17,7 +18,11 @@ Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {
   {"type":"tap","element":<id>}            tap a listed element (preferred)
   {"type":"tap","x":<int>,"y":<int>}       tap screenshot coordinates when no element fits
   {"type":"type","text":"..."}             type into the focused field (never passwords or codes)
-  {"type":"swipe","direction":"up|down|left|right"}   scroll/swipe the screen content
+  {"type":"scroll","direction":"down|up|left|right"}  reveal more content in that direction: "down" shows what is further down the page
+  {"type":"swipe","direction":"up|down|left|right"}   raw finger swipe (the finger moves in that direction); prefer "scroll"
+  {"type":"find_app","query":"calculator"} list installed apps matching a name; use the package it returns with open_app
+  {"type":"open_settings","page":"wifi|bluetooth|display|sound|battery|apps|storage|location|security|privacy|accounts|add_account|date_time|language|keyboard|accessibility|airplane_mode|nfc|network|data_usage|notifications|do_not_disturb|about_phone|developer_options|default_apps"}
+                                           jump straight to a Settings page (much faster than hunting through menus)
   {"type":"key","key":"back|home|enter"}
   {"type":"open_app","package":"com.example.app"}
   {"type":"open_url","url":"https://..."}
@@ -31,7 +36,9 @@ Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {
 
 Rules: verify on the screen that the goal is met before "done". Never send messages, pay, delete, purchase, or
 change account/security settings without first using "ask". Never type a password or a verification code yourself:
-use "handoff" for passwords and "request_otp" for SMS codes. If the screen did not change after an action, try a
+use "handoff" for passwords and "request_otp" for SMS codes. To open an app, call find_app first, then open_app with a returned package. If find_app says the app is not installed, do not hunt for it: use "ask"
+to offer installing it from the Play Store when signed in, otherwise "fail". For anything in Settings, use open_settings first, then tap the
+exact toggle or row. If the screen did not change after an action, try a
 different approach instead of repeating it. Prefer element ids over coordinates. If a value you need is not
 visible, the row that names it (for example "Android version") often opens a detail screen: tap it instead of
 scrolling back and forth."""
@@ -52,7 +59,7 @@ def shrink(png: bytes) -> tuple[bytes, float]:
 def oscillating(acts: list[dict]) -> bool:
     """True when the last four actions are swipes that alternate direction (a, b, a, b)."""
     last = acts[-4:]
-    if len(last) < 4 or any(a["type"] != "swipe" for a in last):
+    if len(last) < 4 or any(a["type"] not in ("swipe", "scroll") for a in last):
         return False
     d = [a["direction"] for a in last]
     return d[0] == d[2] and d[1] == d[3] and d[0] != d[1]
@@ -72,7 +79,7 @@ def parse_action(text: str) -> dict:
 
 def build_prompt(goal: str, history: list[str], elements, scale: float, unchanged: int, acts: list[dict]) -> str:
     listing = "\n".join(f"{e.id}: {e.label!r} at ({round(e.center[0] / scale)},{round(e.center[1] / scale)})"
-                        f"{' [clickable]' if e.clickable else ''}" for e in elements) or "(none)"
+                        f"{' [clickable]' if e.clickable else ''}" for e in elements) or "(UI element list unavailable right now: use screenshot coordinates)"
     hint = f"\nWARNING: the screen has not changed for {unchanged} action(s); change approach." if unchanged else ""
     if oscillating(acts):
         hint += ("\nWARNING: you keep scrolling up and down without progress. Stop scrolling; tap a row that "
@@ -81,7 +88,8 @@ def build_prompt(goal: str, history: list[str], elements, scale: float, unchange
             + f"\n\nUI elements:\n{listing}{hint}\n\nChoose the next action.")
 
 
-def execute(device, act: dict, elements, scale: float, size: tuple[int, int]) -> None:
+def execute(device, act: dict, elements, scale: float, size: tuple[int, int]) -> str | None:
+    """Run one action. Returns text to show the model (for lookups), or None."""
     kind = act["type"]
     w, h = size
     if kind == "tap":
@@ -94,11 +102,23 @@ def execute(device, act: dict, elements, scale: float, size: tuple[int, int]) ->
             device.tap(round(float(act["x"]) * scale), round(float(act["y"]) * scale))
     elif kind == "type":
         device.type_text(str(act["text"]))
-    elif kind == "swipe":
+    elif kind in ("swipe", "scroll"):
         cx, cy, dx, dy = w // 2, h // 2, w // 3, h // 3
+        direction = act["direction"]
+        if kind == "scroll":  # "scroll down" reveals lower content, so the finger moves up
+            direction = {"down": "up", "up": "down", "left": "right", "right": "left"}[direction]
         d = {"up": (cx, cy + dy, cx, cy - dy), "down": (cx, cy - dy, cx, cy + dy),
-             "left": (cx + dx, cy, cx - dx, cy), "right": (cx - dx, cy, cx + dx, cy)}[act["direction"]]
+             "left": (cx + dx, cy, cx - dx, cy), "right": (cx - dx, cy, cx + dx, cy)}[direction]
         device.swipe(*d)
+    elif kind == "find_app":
+        found = match_apps(str(act.get("query", "")), device.launcher_apps())
+        return ("installed: " + ", ".join(found)) if found else f"no installed app matches '{act.get('query', '')}' (it is not installed)"
+    elif kind == "open_settings":
+        page = str(act.get("page", "")).lower().replace(" ", "_").replace("-", "_")
+        if page not in SETTINGS_PAGES:
+            raise ValueError(f"unknown settings page '{page}'; use one of: {', '.join(SETTINGS_PAGES)}")
+        device.open_intent(SETTINGS_PAGES[page])
+        return f"opened {page} settings"
     elif kind == "key":
         device.key(KEYS[act["key"]])
     elif kind == "open_app":
@@ -111,13 +131,20 @@ def execute(device, act: dict, elements, scale: float, size: tuple[int, int]) ->
         raise ValueError(f"unknown action type {kind!r}")
 
 
-def settle(device, pause: float, timeout: float = 4.0) -> None:
-    """Wait until two consecutive screenshots match, so we judge the screen after the transition."""
+def _signature(png: bytes) -> Image.Image:
+    """Small grayscale view of the screen without the status bar and gesture bar (clock, battery, cursor blinks)."""
+    img = Image.open(io.BytesIO(png)).convert("L")
+    w, h = img.size
+    return img.crop((0, int(h * 0.06), w, int(h * 0.94))).resize((48, 106))
+
+
+def settle(device, pause: float, timeout: float = 4.0, tolerance: float = 1.5) -> None:
+    """Wait until two consecutive screens match closely, so we judge the screen after the transition."""
     time.sleep(pause)
     deadline, prev = time.time() + timeout, None
     while time.time() < deadline:
-        cur = hashlib.sha1(device.screenshot()).hexdigest()
-        if cur == prev:
+        cur = _signature(device.screenshot())
+        if prev is not None and ImageStat.Stat(ImageChops.difference(prev, cur)).mean[0] <= tolerance:
             return
         prev = cur
-        time.sleep(0.4)
+        time.sleep(0.15)

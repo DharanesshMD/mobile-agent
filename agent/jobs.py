@@ -25,7 +25,7 @@ class JobRun:
 
 class JobManager:
     def __init__(self, db: Database, hub: Hub, device, model_factory, data_dir: str | Path = "data",
-                 settle: float = 0.6, max_steps: int = 25, external_busy=None):
+                 settle: float = 0.4, max_steps: int = 25, external_busy=None):
         self.db, self.hub, self.device, self.model_factory = db, hub, device, model_factory
         self.data_dir, self.settle, self.max_steps = Path(data_dir), settle, max_steps
         self.external_busy = external_busy or (lambda: False)

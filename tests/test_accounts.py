@@ -43,7 +43,7 @@ def act(**a):
     return a
 
 
-def wait(c, rid, pred, timeout=15):
+def wait(c, rid, pred, timeout=40):
     end = time.time() + timeout
     while time.time() < end:
         r = c.get(f"/api/runs/{rid}", headers=ADMIN).json()

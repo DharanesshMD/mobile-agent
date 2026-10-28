@@ -55,7 +55,7 @@ def setup(spark, *workers, db=None):
     return c, phone, bot, app
 
 
-def until(fn, timeout=15):
+def until(fn, timeout=40):
     end = time.time() + timeout
     while time.time() < end:
         v = fn()

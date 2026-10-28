@@ -6,7 +6,9 @@ and resume exactly where it stopped. Add more agents later as extra nodes or sub
 import hashlib
 import json
 import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, TypedDict
@@ -54,6 +56,20 @@ def _emit(config: RunnableConfig, event: dict) -> None:
         fn(event)
 
 
+def _timed(fn):
+    t = time.time()
+    out = fn()
+    return out, round((time.time() - t) * 1000)
+
+
+def _log_timing(config: RunnableConfig, n: int, ms: dict) -> None:
+    trace = _c(config).get("trace")
+    if trace:
+        Path(trace).mkdir(parents=True, exist_ok=True)
+        with open(Path(trace) / "timing.jsonl", "a") as f:
+            f.write(json.dumps({"step": n, **ms}) + "\n")
+
+
 def observe(state: State, config: RunnableConfig) -> dict:
     c = _c(config)
     if c.get("pause"):
@@ -63,19 +79,23 @@ def observe(state: State, config: RunnableConfig) -> dict:
     if state.get("step", 0) >= c["max_steps"]:
         return {"status": "max_steps", "answer": "step budget exhausted"}
     dev = c["device"]
-    png = dev.screenshot()
+    t0 = time.time()
+    with ThreadPoolExecutor(2) as ex:  # the screenshot and the UI tree are independent ADB calls
+        f_shot, f_tree = ex.submit(_timed, dev.screenshot), ex.submit(_timed, dev.elements)
+        (png, shot_ms), (elements, tree_ms) = f_shot.result(), f_tree.result()
     digest = hashlib.sha1(png).hexdigest()
     unchanged = state.get("unchanged", 0) + 1 if digest == state.get("last_hash") else 0
     small, scale = shrink(png)
-    elements = dev.elements()
     prompt = build_prompt(state["goal"], state.get("history", []), elements, scale, unchanged, state.get("acts", []))
+    ms = {"shot": shot_ms, "tree": tree_ms, "observe": round((time.time() - t0) * 1000)}
     return {"step": state.get("step", 0) + 1, "last_hash": digest, "unchanged": unchanged,
-            "obs": {"png": small, "scale": scale, "elements": [asdict(e) for e in elements], "prompt": prompt}}
+            "obs": {"png": small, "scale": scale, "elements": [asdict(e) for e in elements], "prompt": prompt, "ms": ms}}
 
 
 def plan(state: State, config: RunnableConfig) -> dict:
     c, obs = _c(config), state["obs"]
     prompt, parsed = obs["prompt"], None
+    t0 = time.time()
     for _ in range(2):
         reply = c["model"].complete(c["system"], prompt, obs["png"])
         try:
@@ -86,13 +106,14 @@ def plan(state: State, config: RunnableConfig) -> dict:
     if parsed is None:
         return {"status": "failed", "answer": "model returned invalid JSON twice"}
     act, thought, n = parsed["action"], str(parsed.get("thought", "")), state["step"]
+    obs["ms"]["model"] = round((time.time() - t0) * 1000)
     if c.get("trace"):
         t = Path(c["trace"])
         t.mkdir(parents=True, exist_ok=True)
         (t / f"step{n:02d}.png").write_bytes(obs["png"])
         (t / f"step{n:02d}.json").write_text(json.dumps({"prompt": obs["prompt"], "reply": parsed}, indent=2))
     _emit(config, {"type": "step", "n": n, "thought": thought, "action": act})
-    return {"action": act, "thought": thought, "acts": state.get("acts", []) + [act]}
+    return {"action": act, "thought": thought, "acts": state.get("acts", []) + [act], "obs": obs}
 
 
 def finish(state: State) -> dict:
@@ -137,13 +158,17 @@ def gate(state: State, config: RunnableConfig) -> dict:
 def act(state: State, config: RunnableConfig) -> dict:
     c, obs, a, n = _c(config), state["obs"], state["action"], state["step"]
     elements = [Element(e["id"], e["label"], tuple(e["center"]), e["clickable"]) for e in obs["elements"]]
+    t0 = time.time()
     try:
-        execute(c["device"], a, elements, obs["scale"], c["size"])
-        outcome = "ok"
+        info = execute(c["device"], a, elements, obs["scale"], c["size"])
+        outcome = "ok" + (f": {info}" if info else "")
     except Exception as e:  # bad element id, adb error: tell the model and carry on
         outcome = f"error: {e}"
+    act_ms = round((time.time() - t0) * 1000)
     _emit(config, {"type": "result", "n": n, "outcome": outcome})
+    t1 = time.time()
     settle_screen(c["device"], c["settle"])
+    _log_timing(config, n, {**obs.get("ms", {}), "act": act_ms, "settle": round((time.time() - t1) * 1000), "action": a["type"]})
     return {"history": state.get("history", []) + [f"{n}. {json.dumps(a)} -> {outcome}"]}
 
 
@@ -176,7 +201,7 @@ def build_graph(checkpointer=None):
 
 
 def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | None = None,
-        on_step: Callable[[int, dict, str], None] | None = None, settle: float = 0.6,
+        on_step: Callable[[int, dict, str], None] | None = None, settle: float = 0.4,
         handler: Callable[[dict], dict] | None = None, emit: Callable[[dict], None] | None = None,
         cancel: threading.Event | None = None, graph=None, pause: Callable[[], None] | None = None) -> Result:
     """Run a goal to completion. Without a handler, the run stops at the first gate with status needs_approval."""

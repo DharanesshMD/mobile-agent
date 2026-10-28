@@ -112,7 +112,7 @@ class Swipe(BaseModel):
     direction: str = Field(pattern="^(up|down|left|right)$")
 
 
-def create_app(device, model_factory, token: str | None = None, settle: float = 0.6, store: Store | None = None,
+def create_app(device, model_factory, token: str | None = None, settle: float = 0.4, store: Store | None = None,
                db: Database | None = None, data_dir: str = "data") -> FastAPI:
     app = FastAPI(title="Mobile Agent")
     store = store or Store(None)
