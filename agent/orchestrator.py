@@ -10,6 +10,7 @@ from agent.hub import Hub
 
 PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
 MAX_TOOL_LOOPS = 4
+MAX_BOT_CHAIN = 3  # the asking bot plus at most two more
 
 
 def parse_decision(text: str) -> dict:
@@ -71,6 +72,10 @@ class Orchestrator:
         labels = self.vault.labels() if self.vault else []
         if labels:
             parts.append("Saved secrets (labels only, you never see the values; the phone worker can type one after the owner approves): " + ", ".join(labels))
+        others = [b for b in self.db.list_bots() if b["id"] != bot_id]
+        if others:
+            parts.append("Other bots you can ask with ask_bot (they answer from their own memory and focus):\n" +
+                         "\n".join(f"- {b['name']}" + (f": {b['persona'][:120]}" if b["persona"] else "") for b in others))
         active = self.jobs.active_for(bot_id)
         if active:
             parts.append(f"A phone job is already {active['status']} for this bot: {active['goal']}")
@@ -98,7 +103,7 @@ class Orchestrator:
             except Exception as e:  # keep the chat usable if the model or network fails
                 self.post(bot_id, f"Sorry, I hit a problem and could not answer ({type(e).__name__}). Please try again.")
 
-    def _turn(self, bot_id: str, note: str | None) -> None:
+    def _turn(self, bot_id: str, note: str | None, chain: tuple = ()) -> None:
         model = self.model_factory(ORCHESTRATOR_MODEL)
         system, msgs = self._context(bot_id), self._history(bot_id)
         if note:
@@ -127,6 +132,10 @@ class Orchestrator:
             if kind == "ask_user":
                 self.make_item(bot_id, None, act)
                 return
+            if kind == "ask_bot":
+                msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
+                               {"role": "user", "content": f"[tool result for ask_bot] {self._ask_bot(bot_id, act, chain or (bot_id,))}"}]
+                continue
             if kind == "request_secret":
                 label = str(act.get("label", "")).strip()
                 if label and self.vault and self.vault.find(label):
@@ -182,6 +191,60 @@ class Orchestrator:
             return f"deleted '{hit['name']}'"
         except ValueError as e:
             return f"error: {e}"
+
+    def _find_bot(self, name: str, exclude: tuple) -> dict | str:
+        """A bot by name (exact, else unique prefix), or an error string for the model."""
+        name = name.strip().lower()
+        others = [b for b in self.db.list_bots() if b["id"] not in exclude]
+        hit = [b for b in others if b["name"].lower() == name] or [b for b in others if name and b["name"].lower().startswith(name)]
+        if len(hit) == 1:
+            return hit[0]
+        names = ", ".join(b["name"] for b in others) or "none"
+        return f"no unique bot named '{name}' that you can ask now; available: {names}"
+
+    def _ask_bot(self, bot_id: str, act: dict, chain: tuple) -> str:
+        """Ask another bot one question and get its answer back (it answers from its own persona and memory; no phone, no owner prompts).
+        Both chats get a note so the owner can see the exchange. Chains are limited to three bots and never loop back."""
+        question = str(act.get("question", "")).strip()
+        if not question:
+            return "error: a question is required"
+        if len(chain) >= MAX_BOT_CHAIN:
+            return "error: too many bots in a row; answer with what you know"
+        target = self._find_bot(str(act.get("bot", "")), chain)
+        if isinstance(target, str):
+            return target
+        me = self.db.get_bot(bot_id)
+        try:
+            answer = self._answer_bot(target["id"], me["name"], question, chain + (target["id"],))
+        except Exception as e:
+            return f"error: {target['name']} could not answer ({type(e).__name__})"
+        self.post(bot_id, f"You asked {target['name']}: {question}\n{target['name']}: {answer}", "bot_note", {"with": target["id"]})
+        self.post(target["id"], f"{me['name']} asked: {question}\nYou answered: {answer}", "bot_note", {"with": bot_id})
+        return f"{target['name']} answered: {answer}"
+
+    def _answer_bot(self, bot_id: str, from_name: str, question: str, chain: tuple) -> str:
+        model = self.model_factory(ORCHESTRATOR_MODEL)
+        system = self._context(bot_id) + ("\n\nAnother bot, not the owner, is asking you something. Answer it with reply, briefly and only from what you know "
+                                          "(your memory and focus). You cannot start phone tasks, ask the owner, or use the vault here.")
+        hits = self.db.memory_search(bot_id, question)  # look first, so a bot does not say "I don't know" about what it remembers
+        msgs = [{"role": "user", "content": f"[question from the bot '{from_name}', not from the owner] {question}\n"
+                                            f"Your memory matches: {'; '.join(hits) if hits else 'none'}"}]
+        for _ in range(MAX_TOOL_LOOPS):
+            act = self._decide(model, system, msgs)
+            if act is None:
+                return "I could not work out an answer."
+            kind = act["type"]
+            if kind == "reply":
+                return str(act.get("text", "")).strip() or "I have nothing to add."
+            if kind == "memory_search":
+                hits = self.db.memory_search(bot_id, str(act.get("query", "")))
+                result = "; ".join(hits) if hits else "nothing found"
+            elif kind == "ask_bot":
+                result = self._ask_bot(bot_id, act, chain)
+            else:
+                result = "not available while answering another bot; reply with what you know or say what is missing"
+            msgs += [{"role": "assistant", "content": json.dumps({"action": act})}, {"role": "user", "content": f"[tool result for {kind}] {result}"}]
+        return "I could not settle on an answer."
 
     def job_finished(self, bot_id: str, job: dict) -> None:
         status, result = job["status"], job["result"]

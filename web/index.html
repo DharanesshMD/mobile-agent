@@ -53,6 +53,7 @@
   .botrow .more:hover:not(:disabled), .botrow .more.open { background: #ffffff14; color: var(--text); border-color: transparent; }
   .botrow .more:focus:not(:focus-visible) { outline: none; }
   .botrow:hover .pulse { visibility: hidden; }
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #2a1519; color: #ffb3bc; border: 1px solid #5a2a31; padding: 10px 16px; border-radius: 12px; z-index: 100; font-size: 13.5px; max-width: 90vw; box-shadow: 0 10px 30px #0008; }
   dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; width: min(440px, 92vw); box-shadow: 0 24px 60px #000a; }
   dialog::backdrop { background: #000a; }
   dialog h3 { margin: 0 0 6px; font-size: 17px; } dialog .sub { color: var(--dim); font-size: 13.5px; margin-bottom: 12px; }
@@ -127,6 +128,7 @@
   .vault .sec { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
   .vault .sec div { flex: 1; min-width: 0; } .vault .sec span { display: block; color: var(--dim); font-size: 12px; }
   .vault h4 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); font-weight: 600; }
+  .botnote { align-self: center; max-width: min(560px, 90%); white-space: pre-wrap; font-size: 12.5px; color: var(--dim); border: 1px dashed var(--line); border-radius: 12px; padding: 8px 12px; }
   .hint { align-self: flex-end; max-width: min(640px, 86%); display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 12.5px; }
   .note { color: var(--dim); font-size: 13px; text-align: center; padding: 18px 8px; }
 
@@ -234,6 +236,18 @@ async function api(path, body, method) {
 }
 const tq = () => token ? "token=" + encodeURIComponent(token) : "";
 
+// Native alert/confirm/prompt are blocked in some embedded browsers, so errors and confirmations use these.
+function toast(msg) {
+  const t = el("div", "toast", msg); document.body.append(t); setTimeout(() => t.remove(), 5000);
+}
+function sure(title, text, okLabel) {
+  return new Promise((resolve) => {
+    const dlg = el("dialog"), acts = el("div", "acts"), no = el("button", "", "Cancel"), yes = el("button", "danger solid", okLabel || "Delete");
+    const done = (v) => { dlg.close(); dlg.remove(); resolve(v); };
+    no.onclick = () => done(false); yes.onclick = () => done(true); dlg.addEventListener("cancel", (e) => { e.preventDefault(); done(false); });
+    acts.append(no, yes); dlg.append(el("h3", "", title), el("div", "sub", text || ""), acts); document.body.append(dlg); dlg.showModal(); no.focus();
+  });
+}
 const S = { bots: [], bot: null, msgs: new Map(), es: null, tab: "mobile", mobile: { state: "ready" }, thinking: false, filter: "", control: null };
 
 // ---------- bots ----------
@@ -273,13 +287,12 @@ function openMenu(row, more, bot) {
   m.append(ren, del); row.append(m);
 }
 async function renameBot(bot) {
-  const name = prompt("Bot name", bot.name); if (!name || !name.trim()) return;
-  const persona = prompt("What should it focus on? (optional)", bot.persona || "");
+  const v = await botForm("Rename bot", bot.name, bot.persona, "Save"); if (!v) return;
   try {
-    const nb = await api(`/api/bots/${bot.id}`, { name: name.trim(), persona: persona === null ? bot.persona : persona }, "PATCH");
+    const nb = await api(`/api/bots/${bot.id}`, v, "PATCH");
     if (S.bot && S.bot.id === bot.id) { S.bot = nb; renderHeader(); renderTab(); }
     await loadBots();
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message); }
 }
 function askDelete(bot, info) {
   return new Promise((resolve) => {
@@ -310,15 +323,27 @@ async function deleteBot(bot) {
     S.bots = await api("/api/bots");
     if (S.bot && S.bot.id === bot.id) { S.bot = null; renderBots(); selectBot(r.bot ? r.bot.id : S.bots[0].id); } else renderBots();
     if (S.tab === "vault") renderTab();
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message); }
 }
 $("searchBtn").onclick = () => { const b = $("searchBox"); b.hidden = !b.hidden; if (!b.hidden) $("searchInput").focus(); };
 $("searchInput").oninput = (e) => { S.filter = e.target.value; renderBots(); };
+// window.prompt() is blocked in some embedded browsers, so bot details are collected in a normal dialog.
+function botForm(title, name, persona, okLabel) {
+  return new Promise((resolve) => {
+    const dlg = el("dialog"), form = el("form"), n = el("input"), p = el("textarea");
+    n.placeholder = "Name, e.g. Research"; n.maxLength = 60; n.value = name || ""; n.required = true; n.setAttribute("aria-label", "Bot name");
+    p.placeholder = "What should it focus on? (optional)"; p.maxLength = 4000; p.rows = 3; p.value = persona || ""; p.setAttribute("aria-label", "Focus");
+    p.style.cssText = n.style.cssText = "width:100%;margin-top:8px;box-sizing:border-box;resize:vertical";
+    const acts = el("div", "acts"), no = el("button", "", "Cancel"), yes = el("button", "primary", okLabel); no.type = "button"; yes.type = "submit";
+    const done = (v) => { dlg.close(); dlg.remove(); resolve(v); };
+    no.onclick = () => done(null); dlg.addEventListener("cancel", (e) => { e.preventDefault(); done(null); });
+    form.onsubmit = (e) => { e.preventDefault(); if (n.value.trim()) done({ name: n.value.trim(), persona: p.value.trim() }); };
+    acts.append(no, yes); form.append(el("h3", "", title), n, p, acts); dlg.append(form); document.body.append(dlg); dlg.showModal(); n.focus(); n.select();
+  });
+}
 $("newBtn").onclick = async () => {
-  const name = prompt("Name for the new bot");
-  if (!name || !name.trim()) return;
-  const persona = prompt("What should it focus on? (optional)") || "";
-  try { const b = await api("/api/bots", { name: name.trim(), persona }); await loadBots(); selectBot(b.id); } catch (e) { alert(e.message); }
+  const v = await botForm("New bot", "", "", "Create"); if (!v) return;
+  try { const b = await api("/api/bots", v); await loadBots(); selectBot(b.id); } catch (e) { toast(e.message); }
 };
 $("menuBtn").onclick = () => $("app").classList.toggle("show-side");
 $("panelBtn").onclick = () => $("app").classList.toggle("show-panel");
@@ -362,6 +387,7 @@ function renderFeed(jump) {
   for (const m of list) {
     if (m.kind === "status") feed.append(statusLine(m));
     else if (m.kind === "action_item") feed.append(card(m));
+    else if (m.kind === "bot_note") feed.append(el("div", "botnote", m.content));
     else {
       feed.append(el("div", "msg " + m.role, m.content));
       if (m.meta && m.meta.sensitive) {
@@ -376,7 +402,7 @@ function renderFeed(jump) {
 function dots() { const d = el("span", "dots"); d.append(el("b"), el("b"), el("b")); return d; }
 function statusLine(m) {
   const s = el("div", "status"); s.append(dots(), el("span", "", m.content));
-  const stop = el("button", "ghost", "Stop"); stop.onclick = () => api(`/api/jobs/${m.meta.job_id}/cancel`, {}).catch(e => alert(e.message));
+  const stop = el("button", "ghost", "Stop"); stop.onclick = () => api(`/api/jobs/${m.meta.job_id}/cancel`, {}).catch(e => toast(e.message));
   s.append(stop); return s;
 }
 
@@ -387,7 +413,7 @@ function card(m) {
   const c = el("div", "card" + (meta.status === "answered" ? " done" : meta.status === "cancelled" ? " cancelled" : ""));
   c.append(el("div", "k", open ? KIND[meta.kind] || "Action needed" : meta.status === "answered" ? "Answered" : "No longer needed"), el("div", "q", m.content));
   if (!open) { if (meta.status === "answered" && meta.answer) c.append(el("div", "ans", meta.answer)); return c; }
-  const send = (body) => api(`/api/items/${meta.item_id}/answer`, body).catch(e => alert(e.message));
+  const send = (body) => api(`/api/items/${meta.item_id}/answer`, body).catch(e => toast(e.message));
   const row = el("div", "row");
   if (meta.kind === "confirm") {
     const y = el("button", "primary", "Approve"), n = el("button", "danger", "Decline"); y.onclick = () => send({ approved: true }); n.onclick = () => send({ approved: false }); row.append(y, n);
@@ -409,7 +435,7 @@ function card(m) {
   } else {
     const i = el("input"); i.inputMode = "numeric"; i.maxLength = 8; i.placeholder = "Code"; i.autocomplete = "one-time-code"; i.setAttribute("aria-label", "One-time code");
     const b = el("button", "primary", "Send code"), d = el("button", "danger", "Decline");
-    const go = () => /^\d{4,8}$/.test(i.value.trim()) ? send({ code: i.value.trim() }) : alert("Enter the 4 to 8 digit code");
+    const go = () => /^\d{4,8}$/.test(i.value.trim()) ? send({ code: i.value.trim() }) : toast("Enter the 4 to 8 digit code");
     b.onclick = go; d.onclick = () => send({ approved: false }); i.onkeydown = (e) => e.key === "Enter" && go(); row.append(i, b, d);
   }
   c.append(row); return c;
@@ -424,7 +450,7 @@ $("form").addEventListener("submit", async (e) => {
   const text = ta.value.trim(); if (!text || !S.bot) return;
   ta.value = ""; ta.style.height = "auto"; S.thinking = true;
   try { const m = await api(`/api/bots/${S.bot.id}/messages`, { text }); S.msgs.set(m.id, m); renderFeed(true); }
-  catch (err) { S.thinking = false; alert(err.message); ta.value = text; }
+  catch (err) { S.thinking = false; toast(err.message); ta.value = text; }
 });
 
 // ---------- right panel ----------
@@ -448,7 +474,7 @@ async function renderTab() {
     if (!secrets.length) v.append(el("div", "note", "Nothing saved yet."));
     for (const s of secrets) {
       const r = el("div", "sec"), d = el("div", "", s.label); d.append(el("span", "", s.kind)); const x = el("button", "danger", "Delete");
-      x.onclick = async () => { if (confirm(`Delete "${s.label}"?`)) { try { await api(`/api/vault/${s.id}`, undefined, "DELETE"); } catch (err) { alert(err.message); } renderTab(); } };
+      x.onclick = async () => { if (await sure(`Delete "${s.label}"?`, "The agent will no longer be able to use it.")) { try { await api(`/api/vault/${s.id}`, undefined, "DELETE"); } catch (err) { toast(err.message); } renderTab(); } };
       r.append(d, x); v.append(r);
     }
     if (audit.length) {
@@ -488,9 +514,9 @@ async function renderTab() {
       const row = el("div", "sec"), nm = el("div", "", r.name);
       nm.append(el("span", "", when(r) + (r.enabled ? " · next " + new Date(r.next_run * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : " · paused")));
       const run = el("button", "ghost", "Run now"), pause = el("button", "ghost", r.enabled ? "Pause" : "Resume"), del = el("button", "danger", "Delete");
-      const act = (fn) => async () => { try { await fn(); } catch (e) { alert(e.message); } renderTab(); };
+      const act = (fn) => async () => { try { await fn(); } catch (e) { toast(e.message); } renderTab(); };
       run.onclick = act(() => api(`/api/routines/${r.id}/run`, {})); pause.onclick = act(() => api(`/api/routines/${r.id}`, { enabled: !r.enabled }, "PATCH"));
-      del.onclick = act(async () => { if (confirm(`Delete "${r.name}"?`)) await api(`/api/routines/${r.id}`, undefined, "DELETE"); });
+      del.onclick = act(async () => { if (await sure(`Delete "${r.name}"?`, "It will stop running.")) await api(`/api/routines/${r.id}`, undefined, "DELETE"); });
       row.append(nm, run, pause, del); box.append(row);
     }
     if (!rows.length) box.append(el("div", "note", "No routines yet. Ask the bot in chat, for example: check the battery every morning at 8."));
@@ -535,7 +561,7 @@ function openOverlay(opts) {
   $("overlay").classList.add("on"); refreshShot();
   if (opts.control) takeControl(); else renderBar();
 }
-async function takeControl() { try { await api("/api/mobile/control", { action: "take" }); S.control.held = true; openTouch(); } catch (e) { alert(e.message); } pollMobile(); renderBar(); }
+async function takeControl() { try { await api("/api/mobile/control", { action: "take" }); S.control.held = true; openTouch(); } catch (e) { toast(e.message); } pollMobile(); renderBar(); }
 async function releaseControl(done) {
   try { await api("/api/mobile/control", { action: "release" }); } catch {}
   S.control.held = false; if (touchWs) { touchWs.close(); touchWs = null; }
@@ -561,7 +587,7 @@ function renderBar() {
     nav.append(ib("back", "Back", key("back")), ib("home", "Home", key("home")), ib("recents", "Recent apps", key("recents")));
     scroll.append(ib("up", "Scroll up", sw("down")), ib("down", "Scroll down", sw("up")));  // "up" shows content above: the finger moves down
     const i = el("input"); i.placeholder = "Type here and press Enter"; i.setAttribute("aria-label", "Type on the phone"); i.autocomplete = "off";
-    i.onkeydown = (e) => { if (e.key === "Enter" && i.value) { api("/api/device/type", { text: i.value }).then(() => { i.value = ""; burst(); }).catch(err => alert(err.message)); } };
+    i.onkeydown = (e) => { if (e.key === "Enter" && i.value) { api("/api/device/type", { text: i.value }).then(() => { i.value = ""; burst(); }).catch(err => toast(err.message)); } };
     const done = el("button", "go stop", "I'm done"); done.onclick = () => releaseControl(true);
     bar.append(status("You're in control", "live"), nav, scroll, i, done);
   } else {

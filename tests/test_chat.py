@@ -398,3 +398,61 @@ class LiveTouch(unittest.TestCase):
                 ws.receive_json()
         with c.websocket_connect("/api/device/touch?token=s3cret") as ws:
             ws.send_json({"t": "down", "fx": 0.5, "fy": 0.5})
+
+
+class BotToBot(unittest.TestCase):
+    def two_bots(self, spark):
+        c, _, a, app = setup(spark)
+        b = c.post("/api/bots", json={"name": "Research", "persona": "knows the owner's travel plans"}).json()["id"]
+        return c, a, b, app
+
+    def notes(self, c, bot):
+        return [m["content"] for m in msgs(c, bot) if m["kind"] == "bot_note"]
+
+    def test_a_bot_asks_another_and_both_chats_show_it(self):
+        # model calls happen in this order: Assistant asks, Research answers, Assistant reports back to the owner
+        spark = Spark(act(type="ask_bot", bot="research", question="Where am I flying?"), act(type="reply", text="Mumbai, then Pune."),
+                      act(type="reply", text="Research says Mumbai, then Pune."))
+        c, a, b, _ = self.two_bots(spark)
+        say(c, a, "check with Research about my trip")
+        until(lambda: "Research says Mumbai, then Pune." in texts(c, a, "assistant"))
+        self.assertIn("You asked Research: Where am I flying?\nResearch: Mumbai, then Pune.", self.notes(c, a))
+        self.assertIn("Assistant asked: Where am I flying?\nYou answered: Mumbai, then Pune.", self.notes(c, b))
+        self.assertIn("Research: knows the owner's travel plans", spark.calls[0][0])  # the asking bot sees who it can ask
+        self.assertIn("not from the owner", json.dumps(spark.calls[1][1]))  # the answering bot knows who is asking
+
+    def test_the_answering_bot_cannot_start_phone_tasks_or_loop_back(self):
+        spark = Spark(act(type="ask_bot", bot="Research", question="q"),
+                      act(type="mobile_task", goal="do it", say="ok"),          # Research tries the phone
+                      act(type="ask_bot", bot="Assistant", question="loop?"),   # ...then to ask back
+                      act(type="reply", text="I only know X."),
+                      act(type="reply", text="Done."))
+        c, a, b, app = self.two_bots(spark)
+        say(c, a, "ask research")
+        until(lambda: "Done." in texts(c, a, "assistant"))
+        blob = json.dumps(spark.calls[3][1])
+        self.assertIn("not available while answering another bot", blob)
+        self.assertIn("no unique bot named 'assistant'", blob)
+        self.assertEqual(app.state.db.jobs(b, 5), [])
+
+    def test_errors_for_unknown_self_and_empty_questions(self):
+        spark = Spark(act(type="ask_bot", bot="Nobody", question="hi"), act(type="ask_bot", bot="Assistant", question="me?"),
+                      act(type="ask_bot", bot="Research", question=""), act(type="reply", text="ok"))
+        c, a, _, _ = self.two_bots(spark)
+        say(c, a, "go")
+        until(lambda: "ok" in texts(c, a, "assistant"))
+        blob = json.dumps(spark.calls[-1][1])
+        self.assertIn("no unique bot named 'nobody'", blob)
+        self.assertIn("no unique bot named 'assistant'", blob)  # a bot cannot ask itself
+        self.assertIn("a question is required", blob)
+
+    def test_chain_is_limited_to_three_bots(self):
+        spark = Spark(act(type="ask_bot", bot="B", question="1"), act(type="ask_bot", bot="C", question="2"), act(type="ask_bot", bot="D", question="3"),
+                      act(type="reply", text="c"), act(type="reply", text="b"), act(type="reply", text="a"))
+        c, _, _, app = setup(spark)
+        ids = {n: c.post("/api/bots", json={"name": n}).json()["id"] for n in "BCD"}
+        a = c.get("/api/bots").json()
+        a = next(x["id"] for x in a if x["name"] == "Assistant")
+        say(c, a, "chain")
+        until(lambda: "a" in texts(c, a, "assistant"))
+        self.assertIn("too many bots in a row", json.dumps(spark.calls))

@@ -28,6 +28,9 @@ Reply with ONLY one JSON object: {"thought": "<short>", "action": {...}}. Action
       never ask for them in chat. The value is encrypted and you never see it. Use a short specific label.
   {"type":"vault_check","label":"..."}
       Check whether a secret with that label is saved (you only get yes/no and its kind, never the value); the result is shown to you next turn. Do this before a task that needs a credential.
+  {"type":"ask_bot","bot":"<name>","question":"..."}
+      Ask one of the other bots listed in your context a question and get its answer next turn. Use it when the owner asks you to check with another bot, or when
+      another bot's focus or memory clearly has what you need. Do not ask a bot for things only the phone can do. Questions are visible to the owner.
 
 Rules:
 - Be brief and plain. One or two sentences unless the owner asks for detail.

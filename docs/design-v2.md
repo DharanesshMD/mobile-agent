@@ -182,3 +182,8 @@ Removed: the chat, its phone tasks with their screenshots and traces (`data/runs
 stopped first and allowed to finish before its data goes. Kept: saved secrets (they belong to the owner and are shared by all bots), the phone with its apps and Google account.
 The only bot can also be deleted: it is replaced by a fresh Assistant, and the owner may tick "also erase all saved secrets" (secrets and the use history), offered only then because
 other bots depend on them otherwise. The dialog lists the counts first (`GET /api/bots/{id}/delete-preview`). Late messages for a deleted bot are dropped.
+
+## Bots talking to each other
+`ask_bot {bot, question}` in the orchestrator: one bot asks another by name and gets the answer back in the same turn. The other bot answers from its own focus and memory
+(its memory is searched for the question first), and cannot start phone tasks, ask the owner or use the vault while answering. Both chats get a dashed "bot note" so the owner
+sees every exchange. Chains are limited to three bots and never loop back to a bot already in the chain. Not built: bots handing each other phone tasks, or messaging when no question is pending.
