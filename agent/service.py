@@ -354,8 +354,10 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     def screenshot():
         # One capture at a time and a short cache, so live viewers never compete with the agent for ADB.
         with frame_lock:
-            if time.time() - frame["at"] > (2.5 if active() and not state["active"].pending else 0.8):
-                img = Image.open(io.BytesIO(device.screenshot())).convert("RGB")
+            # Fresh frames while the owner is driving the phone; slower when the agent is working, so viewers never starve it.
+            ttl = 0.1 if jobs.held else 2.5 if active() and not state["active"].pending else 0.8
+            if time.time() - frame["at"] > ttl:
+                img = (device.frame() if hasattr(device, "frame") else Image.open(io.BytesIO(device.screenshot()))).convert("RGB")
                 img.thumbnail((540, 1200))
                 buf = io.BytesIO()
                 img.save(buf, "JPEG", quality=70)
@@ -363,17 +365,22 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
             jpeg = frame["jpeg"]
         return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
+    def stale() -> None:
+        frame["at"] = 0.0  # the next viewer request captures the result of the action
+
     @app.post("/api/device/tap", dependencies=[Depends(auth)])
     def tap(body: Tap):
         takeover_allowed()
         w, h = device.size()
         device.tap(round(body.fx * w), round(body.fy * h))
+        stale()
         return {"ok": True}
 
     @app.post("/api/device/type", dependencies=[Depends(auth)])
     def type_text(body: Text):
         takeover_allowed()
         device.type_text(body.text)
+        stale()
         return {"ok": True}
 
     @app.post("/api/device/key", dependencies=[Depends(auth)])
@@ -381,6 +388,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         takeover_allowed()
         device.key({"back": "KEYCODE_BACK", "home": "KEYCODE_HOME", "enter": "KEYCODE_ENTER",
                     "recents": "KEYCODE_APP_SWITCH"}[body.key])
+        stale()
         return {"ok": True}
 
     @app.post("/api/device/swipe", dependencies=[Depends(auth)])
@@ -391,6 +399,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         d = {"up": (cx, cy + dy, cx, cy - dy), "down": (cx, cy - dy, cx, cy + dy),
              "left": (cx + dx, cy, cx - dx, cy), "right": (cx - dx, cy, cx + dx, cy)}[body.direction]
         device.swipe(*d)
+        stale()
         return {"ok": True}
 
     db = db or Database(":memory:")

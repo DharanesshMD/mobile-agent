@@ -128,6 +128,8 @@
   .overlay .close { position: absolute; right: 14px; top: 14px; }
   .overlay .screen { height: calc(100vh - 150px); aspect-ratio: 9 / 20; max-width: 94vw; border-radius: 26px; border: 2px solid var(--line); overflow: hidden; background: #000; position: relative; }
   .overlay .screen.control { border-color: var(--accent); cursor: pointer; }
+  .tap { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 50%; background: #ffffff55; border: 2px solid #fff; pointer-events: none; animation: tap .45s ease-out forwards; }
+  @keyframes tap { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
   .overlay .screen img { width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; -webkit-user-drag: none; }
   .bar { display: flex; align-items: center; gap: 8px; background: #141821; border: 1px solid var(--line); border-radius: 999px; padding: 6px 8px 6px 14px; color: #e8ebf1; flex-wrap: wrap; justify-content: center; }
   .bar .msg-t { font-size: 14px; }
@@ -460,18 +462,27 @@ async function pollMobile() {
   $("phoneChip").className = "chip " + S.mobile.state; $("phoneChip").lastChild.textContent = "Phone: " + (STATE_TEXT[S.mobile.state] || "").toLowerCase();
   if ($("overlay").classList.contains("on")) renderBar();
 }
-let shotBusy = false;
+let shotBusy = false, shotAgain = false;
 async function refreshShot() {
   const ov = $("overlay").classList.contains("on"); const img = ov ? $("ovImg") : $("thumbImg");
-  if (!img || shotBusy) return; shotBusy = true;
+  if (!img) return;
+  if (shotBusy) { shotAgain = true; return; }  // a request is in flight: fetch again right after it, so a tap's result is never missed
+  shotBusy = true;
   try {
     const r = await fetch("/api/device/screenshot?t=" + Date.now(), { headers: auth() });
     if (r.ok) { const u = URL.createObjectURL(await r.blob()), old = img.src; img.src = u; if (old.startsWith("blob:")) URL.revokeObjectURL(old); }
   } catch {}
   shotBusy = false;
+  if (shotAgain) { shotAgain = false; refreshShot(); }
 }
+// After the owner acts on the phone, look again quickly a few times while the screen animates to its new state.
+const burst = () => [60, 250, 600, 1100].forEach(ms => setTimeout(refreshShot, ms));
 setInterval(pollMobile, 2000);
-(function frames() { if (S.tab === "mobile" || $("overlay").classList.contains("on")) refreshShot(); setTimeout(frames, $("overlay").classList.contains("on") ? 1000 : 2500); })();
+(function frames() {
+  const on = $("overlay").classList.contains("on");
+  if (S.tab === "mobile" || on) refreshShot();
+  setTimeout(frames, on ? (S.control && S.control.held ? 300 : 1000) : 2500);
+})();
 
 // ---------- full-screen mobile view ----------
 function openOverlay(opts) {
@@ -495,10 +506,10 @@ function renderBar() {
   $("ovScreen").classList.toggle("control", !!held);
   if (held) {
     bar.append(el("span", "msg-t", "You're in control"));
-    for (const [k, label] of [["back", "◀"], ["home", "●"], ["recents", "■"]]) { const b = el("button", "sm", label); b.title = k; b.onclick = () => api("/api/device/key", { key: k }).then(refreshShot).catch(() => {}); bar.append(b); }
-    for (const [d, label] of [["up", "↑"], ["down", "↓"]]) { const b = el("button", "sm", label); b.title = "scroll " + d; b.onclick = () => api("/api/device/swipe", { direction: d }).then(refreshShot).catch(() => {}); bar.append(b); }
+    for (const [k, label] of [["back", "◀"], ["home", "●"], ["recents", "■"]]) { const b = el("button", "sm", label); b.title = k; b.onclick = () => api("/api/device/key", { key: k }).then(burst).catch(() => {}); bar.append(b); }
+    for (const [d, label] of [["up", "↑"], ["down", "↓"]]) { const b = el("button", "sm", label); b.title = "scroll " + d; b.onclick = () => api("/api/device/swipe", { direction: d }).then(burst).catch(() => {}); bar.append(b); }
     const i = el("input"); i.placeholder = "Type on the phone"; i.setAttribute("aria-label", "Type on the phone");
-    i.onkeydown = (e) => { if (e.key === "Enter" && i.value) { api("/api/device/type", { text: i.value }).then(() => { i.value = ""; refreshShot(); }).catch(err => alert(err.message)); } };
+    i.onkeydown = (e) => { if (e.key === "Enter" && i.value) { api("/api/device/type", { text: i.value }).then(() => { i.value = ""; burst(); }).catch(err => alert(err.message)); } };
     const done = el("button", "", "I'm done"); done.onclick = () => releaseControl(true);
     bar.append(i, done);
   } else {
@@ -514,7 +525,9 @@ $("ovScreen").addEventListener("click", (e) => {
   if (w / h > ar) { w = h * ar; ox = (r.width - w) / 2; } else { h = w / ar; oy = (r.height - h) / 2; }
   const fx = (e.clientX - r.left - ox) / w, fy = (e.clientY - r.top - oy) / h;
   if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
-  api("/api/device/tap", { fx, fy }).then(refreshShot).catch((err) => alert(err.message));
+  const dot = el("div", "tap"); dot.style.left = (e.clientX - $("ovScreen").getBoundingClientRect().left) + "px"; dot.style.top = (e.clientY - $("ovScreen").getBoundingClientRect().top) + "px";
+  $("ovScreen").append(dot); setTimeout(() => dot.remove(), 450);  // instant feedback while the phone catches up
+  api("/api/device/tap", { fx, fy }).then(burst).catch((err) => alert(err.message));
 });
 
 loadBots(); pollMobile();
