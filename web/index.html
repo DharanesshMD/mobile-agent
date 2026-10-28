@@ -376,8 +376,16 @@ function renderHeader() {
   $("hName").textContent = $("pName").textContent = b.name;
   $("hSub").textContent = "Muse Spark 1.3 · phone worker Muse Wonder";
 }
+// The feed is rebuilt on every event (the phone task posts a status update each step), so what the owner is typing into a card must survive it.
+S.drafts = new Map();
+function draft(input, key) {
+  input.dataset.draft = key; input.value = S.drafts.get(key) || "";
+  input.addEventListener("input", () => S.drafts.set(key, input.value));
+  return input;
+}
 function renderFeed(jump) {
   const feed = $("feed"), nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 140;
+  const a = document.activeElement, focusKey = a && a.dataset ? a.dataset.draft : null, caret = focusKey ? [a.selectionStart, a.selectionEnd] : null;
   feed.replaceChildren();
   const list = [...S.msgs.values()].sort((a, b) => a.id - b.id);
   if (!list.length) {
@@ -398,6 +406,7 @@ function renderFeed(jump) {
   }
   if (S.thinking && !list.some(m => m.kind === "status")) { const s = el("div", "status"); s.append(dots(), el("span", "", "Thinking")); feed.append(s); }
   if (jump || nearBottom) feed.scrollTop = feed.scrollHeight;
+  if (focusKey) { const i = [...feed.querySelectorAll("[data-draft]")].find(x => x.dataset.draft === focusKey); if (i) { i.focus({ preventScroll: true }); try { i.setSelectionRange(...caret); } catch {} } }
 }
 function dots() { const d = el("span", "dots"); d.append(el("b"), el("b"), el("b")); return d; }
 function statusLine(m) {
@@ -420,20 +429,20 @@ function card(m) {
   } else if (meta.kind === "choice") {
     for (const o of meta.options) { const b = el("button", "", o); b.onclick = () => send({ choice: o }); row.append(b); }
   } else if (meta.kind === "text") {
-    const i = el("input"); i.placeholder = "Your answer"; i.setAttribute("aria-label", "Your answer"); const b = el("button", "primary", "Send");
-    const go = () => i.value.trim() && send({ value: i.value.trim() }); b.onclick = go; i.onkeydown = (e) => e.key === "Enter" && go(); row.append(i, b);
+    const i = draft(el("input"), meta.item_id + ":text"); i.placeholder = "Your answer"; i.setAttribute("aria-label", "Your answer"); const b = el("button", "primary", "Send");
+    const go = () => { if (!i.value.trim()) return; const v = i.value.trim(); S.drafts.delete(meta.item_id + ":text"); send({ value: v }); }; b.onclick = go; i.onkeydown = (e) => e.key === "Enter" && go(); row.append(i, b);
   } else if (meta.kind === "handoff") {
     c.append(el("div", "ans", "Use the live phone view. Type passwords yourself; the agent never sees them."));
     const b = el("button", "primary", "Take control"); b.onclick = () => openOverlay({ control: true, handoff: meta.item_id }); row.append(b);
   } else if (meta.kind === "secret") {
-    const nm = el("input"), v = el("input"), b = el("button", "primary", "Save securely"), d = el("button", "danger", "Decline");
+    const nm = draft(el("input"), meta.item_id + ":name"), v = draft(el("input"), meta.item_id + ":value"), b = el("button", "primary", "Save securely"), d = el("button", "danger", "Decline");
     nm.placeholder = "Name, e.g. netflix password"; nm.maxLength = 60; nm.setAttribute("aria-label", "Name");
     v.type = "password"; v.autocomplete = "off"; v.placeholder = "Value"; v.setAttribute("aria-label", "Secret value");
-    const go = () => { if (!v.value || (!meta.label && !nm.value.trim())) return; const body = { secret: v.value, label: nm.value.trim() }; v.value = ""; v.disabled = b.disabled = true; send(body).finally(() => { v.disabled = b.disabled = false; }); };
+    const go = () => { if (!v.value || (!meta.label && !nm.value.trim())) return; const body = { secret: v.value, label: nm.value.trim() }; v.value = ""; S.drafts.delete(meta.item_id + ":value"); S.drafts.delete(meta.item_id + ":name"); v.disabled = b.disabled = true; send(body).finally(() => { v.disabled = b.disabled = false; }); };
     b.onclick = go; d.onclick = () => send({ approved: false }); v.onkeydown = (e) => e.key === "Enter" && go();
     if (!meta.label) row.append(nm); row.append(v, b, d);
   } else {
-    const i = el("input"); i.inputMode = "numeric"; i.maxLength = 8; i.placeholder = "Code"; i.autocomplete = "one-time-code"; i.setAttribute("aria-label", "One-time code");
+    const i = draft(el("input"), meta.item_id + ":code"); i.inputMode = "numeric"; i.maxLength = 8; i.placeholder = "Code"; i.autocomplete = "one-time-code"; i.setAttribute("aria-label", "One-time code");
     const b = el("button", "primary", "Send code"), d = el("button", "danger", "Decline");
     const go = () => /^\d{4,8}$/.test(i.value.trim()) ? send({ code: i.value.trim() }) : toast("Enter the 4 to 8 digit code");
     b.onclick = go; d.onclick = () => send({ approved: false }); i.onkeydown = (e) => e.key === "Enter" && go(); row.append(i, b, d);
