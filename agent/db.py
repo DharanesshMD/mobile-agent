@@ -79,6 +79,23 @@ class Database:
     def get_bot(self, bot_id: str) -> dict | None:
         return self._one("select * from bots where id=?", (bot_id,))
 
+    def rename_bot(self, bot_id: str, name: str, persona: str | None = None) -> dict | None:
+        cur = self.get_bot(bot_id)
+        if cur:
+            self._x("update bots set name=?, persona=? where id=?",
+                    (name.strip()[:60], cur["persona"] if persona is None else persona.strip()[:4000], bot_id))
+        return self.get_bot(bot_id)
+
+    def delete_bot(self, bot_id: str) -> list[str]:
+        """Remove a bot and everything it owns. Returns the library file paths so the caller can delete them."""
+        with self.lock:
+            paths = [r["path"] for r in self.conn.execute("select path from library where bot_id=?", (bot_id,)).fetchall()]
+            for table in ("messages", "jobs", "items", "library", "memory", "routines"):
+                self.conn.execute(f"delete from {table} where bot_id=?", (bot_id,))
+            self.conn.execute("delete from bots where id=?", (bot_id,))
+            self.conn.commit()
+        return paths
+
     def list_bots(self) -> list[dict]:
         bots = self._q("select * from bots order by created")
         for b in bots:

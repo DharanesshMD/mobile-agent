@@ -381,6 +381,18 @@ async function renderTab() {
     t.append(lib);
   } else {
     t.replaceChildren(); const d = el("div", "details");
+    const acts = el("div", "row"); acts.style.cssText = "display:flex;gap:8px;margin-bottom:6px";
+    const ren = el("button", "", "Rename"), del = el("button", "danger", "Delete bot");
+    ren.onclick = async () => {
+      const name = prompt("Bot name", S.bot.name); if (!name || !name.trim()) return;
+      const persona = prompt("What should it focus on? (optional)", S.bot.persona || "");
+      try { S.bot = await api(`/api/bots/${S.bot.id}`, { name: name.trim(), persona: persona === null ? S.bot.persona : persona }, "PATCH"); await loadBots(); renderHeader(); renderTab(); } catch (e) { alert(e.message); }
+    };
+    del.onclick = async () => {
+      if (!confirm(`Delete "${S.bot.name}" with its chat, routines, memory and library? This cannot be undone.`)) return;
+      try { await api(`/api/bots/${S.bot.id}`, undefined, "DELETE"); S.bot = null; S.bots = await api("/api/bots"); renderBots(); selectBot(S.bots[0].id); } catch (e) { alert(e.message); }
+    };
+    acts.append(ren); if (S.bots.length > 1) acts.append(del); d.append(acts);
     d.append(el("h4", "", "About"), el("p", "", S.bot.persona || "A general assistant. Ask it anything; it uses the cloud phone when a task needs one."),
       el("h4", "", "Models"), el("p", "", "Chat and planning: Muse Spark 1.3. Phone control (screen, taps, typing): Muse Wonder."),
       el("h4", "", "Routines"), el("p", "", "Routines are set by asking the bot in chat. A routine is a task this bot runs on a schedule. It messages you first with the result and asks when it needs you."));

@@ -268,3 +268,34 @@ class Bots(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BotManagement(unittest.TestCase):
+    def test_rename_and_delete_remove_everything_the_bot_owns(self):
+        import os
+        c, _, first, app = setup(Spark())
+        bot = c.post("/api/bots", json={"name": "Temp"}).json()["id"]
+        r = c.patch(f"/api/bots/{bot}", json={"name": "  Renamed ", "persona": "be brief"})
+        self.assertEqual((r.json()["name"], r.json()["persona"]), ("Renamed", "be brief"))
+        self.assertEqual(c.patch(f"/api/bots/{bot}", json={"name": "Only name"}).json()["persona"], "be brief")
+        self.assertEqual(c.patch("/api/bots/nope", json={"name": "x"}).status_code, 404)
+        db = app.state.db
+        db.add_message(bot, "user", "text", "hi")
+        db.memory_add(bot, "likes tea")
+        app.state.scheduler.add(bot, "r", "p", {"every_minutes": 5})
+        job = db.create_job(bot, "g")
+        db.update_job(job["id"], status="done")
+        lib = os.path.join(app.state.jobs.data_dir, "x.png")
+        __import__("pathlib").Path(lib).write_bytes(b"x")
+        db.add_library(bot, job["id"], "t", lib)
+        self.assertEqual(c.delete(f"/api/bots/{bot}").status_code, 200)
+        for table in ("messages", "jobs", "items", "library", "routines"):
+            self.assertEqual(db._q(f"select * from {table} where bot_id=?", (bot,)), [], table)
+        self.assertEqual(db.memory_search(bot, "tea"), [])
+        self.assertFalse(os.path.exists(lib))
+        self.assertEqual([b["id"] for b in c.get("/api/bots").json()], [first])
+        self.assertEqual(c.delete(f"/api/bots/{bot}").status_code, 404)
+
+    def test_the_last_bot_cannot_be_deleted(self):
+        c, _, bot, _ = setup(Spark())
+        self.assertEqual(c.delete(f"/api/bots/{bot}").status_code, 409)

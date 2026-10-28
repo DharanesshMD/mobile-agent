@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import threading
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
@@ -14,6 +15,11 @@ from agent import sensitive
 class NewBot(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     persona: str = Field(default="", max_length=4000)
+
+
+class BotPatch(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    persona: str | None = Field(default=None, max_length=4000)
 
 
 class NewMessage(BaseModel):
@@ -56,6 +62,25 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     @app.post("/api/bots", dependencies=[Depends(auth)])
     def create_bot(body: NewBot):
         return db.create_bot(body.name, body.persona)
+
+    @app.patch("/api/bots/{bot_id}", dependencies=[Depends(auth)])
+    def rename_bot(bot_id: str, body: BotPatch):
+        bot_or_404(bot_id)
+        if not body.name.strip():
+            raise HTTPException(422, "name is required")
+        return db.rename_bot(bot_id, body.name, body.persona)
+
+    @app.delete("/api/bots/{bot_id}", dependencies=[Depends(auth)])
+    def delete_bot(bot_id: str):
+        bot_or_404(bot_id)
+        if len(db.list_bots()) < 2:
+            raise HTTPException(409, "Keep at least one bot")
+        active = jobs.active_for(bot_id)
+        if active:
+            jobs.cancel(active["id"])
+        for path in db.delete_bot(bot_id):
+            Path(path).unlink(missing_ok=True)
+        return {"ok": True}
 
     @app.get("/api/bots/{bot_id}/state", dependencies=[Depends(auth)])
     def bot_state(bot_id: str):
