@@ -174,6 +174,7 @@ class Orchestrator:
             if not hit:
                 return f"no routine named '{act.get('name', '')}'; existing: " + (", ".join(r["name"] for r in rows) or "none")
             self.db.routine_delete(hit["id"])
+            self.routines.on_change(bot_id)
             return f"deleted '{hit['name']}'"
         except ValueError as e:
             return f"error: {e}"

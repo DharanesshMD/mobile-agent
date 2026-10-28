@@ -43,6 +43,7 @@ def load_key(key_file: str | Path = "data/vault.key") -> bytes:
 class Vault:
     def __init__(self, db: Database, key: bytes):
         self.db, self._aes = db, AESGCM(key)
+        self.on_change = lambda: None  # the app hooks this to refresh open Vault tabs
 
     @staticmethod
     def _aad(sid: str) -> bytes:
@@ -57,6 +58,7 @@ class Vault:
         sid, nonce = uuid.uuid4().hex[:10], secrets.token_bytes(12)
         ct = self._aes.encrypt(nonce, value.encode(), self._aad(sid))
         self.db._x("insert into vault values(?,?,?,?,?,?,?)", (sid, OWNER, label[:60], kind, nonce, ct, time.time()))
+        self.on_change()
         return self.get(sid)
 
     def get(self, sid: str) -> dict | None:
@@ -75,6 +77,7 @@ class Vault:
         with self.db.lock:
             n = self.db.conn.execute("delete from vault where id=?", (sid,)).rowcount
             self.db.conn.commit()
+        self.on_change()
         return n > 0
 
     def reveal(self, label: str, job_id: str | None = None, app: str = "") -> str:
@@ -88,6 +91,7 @@ class Vault:
             raise ValueError("secret could not be decrypted (wrong key or tampered data)") from None
         self.db._x("insert into vault_audit(secret_id,label,job_id,app,at) values(?,?,?,?,?)",
                    (row["id"], row["label"], job_id, app[:80], time.time()))
+        self.on_change()
         return value
 
     def audit(self, limit: int = 50) -> list[dict]:

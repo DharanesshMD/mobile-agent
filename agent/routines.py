@@ -59,12 +59,15 @@ class Scheduler:
     def __init__(self, db: Database, orch: Orchestrator, clock=time.time):
         self.db, self.orch, self.clock = db, orch, clock
         self._stop = threading.Event()
+        self.on_change = lambda bot_id: None  # the app hooks this to refresh open Details tabs
 
     def add(self, bot_id: str, name: str, prompt: str, schedule: dict) -> dict:
         sched = parse_schedule(schedule)
         if not name.strip() or not prompt.strip():
             raise ValueError("name and prompt are required")
-        return self.db.routine_add(bot_id, name.strip()[:60], prompt.strip()[:1000], sched, next_run(sched, self.clock()))
+        r = self.db.routine_add(bot_id, name.strip()[:60], prompt.strip()[:1000], sched, next_run(sched, self.clock()))
+        self.on_change(bot_id)
+        return r
 
     def fire(self, routine: dict, manual: bool = False) -> None:
         """Hand the routine to the bot as a system note; the bot decides to reply or start a phone job."""
@@ -75,6 +78,7 @@ class Scheduler:
             self.db.routine_update(r["id"], last_run=self.clock())
         note = (f"The owner's routine '{r['name']}' ({describe(r['schedule'])}) has just fired. The owner did not message you: you are reaching out first. "
                 f"Routine instructions: {r['prompt']}\nDo it now. If it needs the phone, start a mobile_task; otherwise reply with the result, briefly.")
+        self.on_change(r["bot_id"])
         self.orch.turn(r["bot_id"], note)
 
     def tick(self) -> int:

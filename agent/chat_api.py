@@ -224,7 +224,9 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     def routines_patch(rid: str, body: RoutinePatch):
         r = routine_or_404(rid)
         from agent.routines import next_run
-        return db.routine_update(rid, enabled=int(body.enabled), next_run=next_run(r["schedule"], scheduler.clock()))
+        out = db.routine_update(rid, enabled=int(body.enabled), next_run=next_run(r["schedule"], scheduler.clock()))
+        scheduler.on_change(r["bot_id"])
+        return out
 
     @app.post("/api/routines/{rid}/run", dependencies=[Depends(auth)])
     def routines_run(rid: str):
@@ -234,6 +236,7 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
 
     @app.delete("/api/routines/{rid}", dependencies=[Depends(auth)])
     def routines_delete(rid: str):
-        routine_or_404(rid)
+        r = routine_or_404(rid)
         db.routine_delete(rid)
+        scheduler.on_change(r["bot_id"])
         return {"ok": True}

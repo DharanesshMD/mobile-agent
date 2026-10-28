@@ -401,10 +401,12 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     jobs.orch = orch
     scheduler = Scheduler(db, orch)
     orch.routines = scheduler
+    scheduler.on_change = lambda bot_id: hub.publish(bot_id, {"type": "refresh", "what": "routines"})
+    vault.on_change = lambda: [hub.publish(b["id"], {"type": "refresh", "what": "vault"}) for b in db.list_bots()]
     if not db.list_bots():
         db.create_bot("Assistant", "")
     register_chat(app, auth, db, hub, jobs, orch, vault, scheduler)
-    app.state.db, app.state.jobs, app.state.orch, app.state.vault, app.state.scheduler = db, jobs, orch, vault, scheduler
+    app.state.db, app.state.jobs, app.state.orch, app.state.vault, app.state.scheduler, app.state.hub = db, jobs, orch, vault, scheduler, hub
     jobs.start()
     if start_scheduler:
         scheduler.start()

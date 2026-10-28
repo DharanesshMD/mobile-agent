@@ -124,3 +124,14 @@ class Api(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Refresh(unittest.TestCase):
+    def test_creating_a_routine_in_chat_pushes_a_refresh_event(self):
+        spark = Spark(act(type="routine_create", name="Hi", prompt="say hi", schedule={"daily_at": "08:00"}), act(type="reply", text="Set."))
+        c, _, bot, app = setup(spark)
+        say(c, bot, "say hi every day at 8")
+        until(lambda: "Set." in texts(c, bot, "assistant"))
+        self.assertTrue(any(e.get("type") == "refresh" and e.get("what") == "routines" for e in app.state.hub.since(bot, -1)))
+        app.state.vault.put("x", "y")
+        self.assertTrue(any(e.get("what") == "vault" for e in app.state.hub.since(bot, -1)))

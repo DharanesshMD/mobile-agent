@@ -247,6 +247,7 @@ function onEvent(ev) {
     S.msgs.set(m.id, m); renderFeed(); if (m.kind === "text" || m.kind === "result") loadBotsSoon();
     if (m.kind === "action_item" && m.meta.status === "open") pollMobile();
   } else if (ev.type === "message_delete") { S.msgs.delete(ev.id); renderFeed(); }
+  else if (ev.type === "refresh" && ((ev.what === "routines" && S.tab === "details") || (ev.what === "vault" && S.tab === "vault"))) renderTab();
   if (S.tab === "library") renderTab();
 }
 let botsTimer; function loadBotsSoon() { clearTimeout(botsTimer); botsTimer = setTimeout(loadBots, 400); }
