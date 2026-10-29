@@ -222,10 +222,10 @@
   <aside class="panel" aria-label="Bot details">
     <div class="top"><div class="av lg" id="pAv" style="margin:0 auto"></div><div class="nm" id="pName"></div></div>
     <div class="tabs" role="tablist">
-      <button role="tab" data-tab="details">Details</button>
+      <button role="tab" data-tab="details" class="on">Details</button>
       <button role="tab" data-tab="library">Library</button>
       <button role="tab" data-tab="vault">Vault</button>
-      <button role="tab" data-tab="mobile" class="on">Mobile</button>
+      <button role="tab" data-tab="mobile">Mobile</button>
     </div>
     <div class="tab" id="tab"></div>
   </aside>
@@ -269,7 +269,7 @@ function sure(title, text, okLabel) {
     acts.append(no, yes); dlg.append(el("h3", "", title), el("div", "sub", text || ""), acts); document.body.append(dlg); dlg.showModal(); no.focus();
   });
 }
-const S = { bots: [], bot: null, msgs: new Map(), es: null, tab: "mobile", mobile: { state: "ready" }, thinking: false, filter: "", control: null };
+const S = { bots: [], bot: null, msgs: new Map(), es: null, tab: "details", mobile: { state: "ready" }, thinking: false, filter: "", control: null };
 
 // ---------- bots ----------
 const initial = (n) => (n || "?").trim().slice(0, 1).toUpperCase();
@@ -574,7 +574,7 @@ async function toggleMic() {
 mic.onclick = toggleMic;
 
 // ---------- right panel ----------
-document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { S.tab = b.dataset.tab; document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b)); renderTab(); });
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { S.tab = b.dataset.tab; updateLayout(); document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b)); renderTab(); });
 const STATE_TEXT = { ready: "Ready", working: "Working", waiting: "Waiting for you", control: "You're in control" };
 async function renderTab() {
   const t = $("tab"); if (!S.bot) return;
@@ -622,7 +622,7 @@ async function renderTab() {
     const ren = el("button", "", "Rename"), del = el("button", "danger", "Delete bot");
     ren.onclick = () => renameBot(S.bot); del.onclick = () => deleteBot(S.bot);
     acts.append(ren); if (S.bot.kind !== "master") acts.append(del); d.append(acts);
-    d.append(el("h4", "", "About"), el("p", "", S.bot.persona || "A general assistant. Ask it anything; it uses the cloud phone when a task needs one."),
+    d.append(el("h4", "", "About"), el("p", "", S.bot.persona || (S.bot.kind === "master" ? "Your overseer. It sees all your bots, tells you what is missing or stuck, and can run a phone task itself or hand it to the bot that fits." : "A general assistant. Ask it anything; it uses the cloud phone when a task needs one.")),
       el("h4", "", "Models"), el("p", "", "Chat and planning: Muse Spark 1.3. Phone control (screen, taps, typing): Muse Wonder."),
       el("h4", "", "Routines"), el("p", "", "Routines are set by asking the bot in chat. A routine is a task this bot runs on a schedule. It messages you first with the result and asks when it needs you."));
     t.append(d);
@@ -648,8 +648,13 @@ $("lightbox").onclick = () => $("lightbox").classList.remove("on");
 // ---------- mobile state and live frames ----------
 function applyOrientation(land) {
   land = !!land; if (S.landscape === land) return; S.landscape = land;
-  const app = $("app"); app.classList.toggle("landscape", land); if (land) app.classList.remove("show-side");
   $("ovScreen").classList.toggle("landscape", land); const th = document.querySelector(".thumb"); if (th) th.classList.toggle("landscape", land);
+  updateLayout();
+}
+// The wide, sidebar-free layout only matters while the phone is actually on screen (Mobile tab or full-screen view).
+function updateLayout() {
+  const show = !!S.landscape && (S.tab === "mobile" || $("overlay").classList.contains("on")), app = $("app");
+  app.classList.toggle("landscape", show); if (show) app.classList.remove("show-side");
 }
 async function pollMobile() {
   try { S.mobile = await api("/api/mobile/state"); } catch { return; }
@@ -684,7 +689,7 @@ setInterval(pollMobile, 2000);
 function openOverlay(opts) {
   if (opts.control) setTimeout(() => holding() && openTouch(), 300);
   S.control = { held: false, handoff: opts.handoff || null };
-  $("overlay").classList.add("on"); refreshShot();
+  $("overlay").classList.add("on"); updateLayout(); refreshShot();
   if (opts.control) takeControl(); else renderBar();
 }
 async function takeControl() { try { await api("/api/mobile/control", { action: "take" }); S.control.held = true; openTouch(); } catch (e) { toast(e.message); } pollMobile(); renderBar(); }
@@ -694,7 +699,7 @@ async function releaseControl(done) {
   if (done && S.control.handoff) await api(`/api/items/${S.control.handoff}/answer`, { done: true }).catch(() => {});
   S.control.handoff = null; pollMobile(); renderBar();
 }
-function closeOverlay() { if (S.control && S.control.held) releaseControl(false); $("overlay").classList.remove("on"); }
+function closeOverlay() { if (S.control && S.control.held) releaseControl(false); $("overlay").classList.remove("on"); updateLayout(); }
 $("ovClose").onclick = closeOverlay;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !(S.control && S.control.held)) { closeOverlay(); $("lightbox").classList.remove("on"); } });
 

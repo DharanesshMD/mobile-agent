@@ -211,7 +211,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
 
     @app.get("/", include_in_schema=False)
     def index():
-        return FileResponse(WEB / "index.html")
+        return FileResponse(WEB / "index.html", headers={"Cache-Control": "no-cache"})  # always pick up the newest page after an update
 
     @app.get("/api/health")
     def health():
