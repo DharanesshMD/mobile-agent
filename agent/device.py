@@ -73,6 +73,11 @@ class Device:
                 return None
         return self._u2
 
+    def reconnect(self) -> None:
+        """After a boot or a long sleep the on-device service and cached values are stale: start from scratch."""
+        self._u2, self._u2_failed, self._size_at = None, False, None
+        self.keyboard_open = False
+
     def _drop_u2(self) -> None:
         """Only one accessibility connection can exist, so the old `uiautomator dump` works only after the service is stopped."""
         self._u2_failed = True

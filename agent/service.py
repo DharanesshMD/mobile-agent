@@ -133,7 +133,7 @@ class Swipe(BaseModel):
 
 def create_app(device, model_factory, token: str | None = None, settle: float = 0.4, store: Store | None = None,
                db: Database | None = None, data_dir: str = "data", vault_key: bytes | None = None,
-               start_scheduler: bool = False, master: bool = False) -> FastAPI:
+               start_scheduler: bool = False, master: bool = False, lifecycle=None) -> FastAPI:
     app = FastAPI(title="Mobile Agent")
     store = store or Store(None)
     runs: dict[str, Run] = {}
@@ -163,7 +163,15 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
             raise HTTPException(404, "unknown run")
         return runs[run_id]
 
+    def phone_on() -> None:
+        """Owner actions and live frames need an awake phone; a sleeping one would hang adb."""
+        if lifecycle:
+            if lifecycle.power != "on":
+                raise HTTPException(409, f"The phone is {'asleep' if lifecycle.power == 'sleeping' else 'off' if lifecycle.power == 'off' else 'waking up'}. Wake it first.")
+            lifecycle.touch()
+
     def takeover_allowed() -> None:
+        phone_on()
         r = active()
         if r and r.status != "waiting":
             raise HTTPException(409, "the agent is acting on the phone; wait for it to pause or cancel the run")
@@ -369,6 +377,8 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
 
     @app.get("/api/device/screenshot", dependencies=[Depends(auth)])
     def screenshot():
+        if lifecycle and lifecycle.power != "on":
+            raise HTTPException(409, "The phone is not on")  # no touch(): watching never keeps it awake
         # One capture at a time and a short cache, so live viewers never compete with the agent for ADB.
         with frame_lock:
             # Fresh frames while the owner is driving the phone; slower when the agent is working, so viewers never starve it.
@@ -482,6 +492,9 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     jobs = JobManager(db, hub, device, model_factory, data_dir=data_dir, settle=settle, external_busy=lambda: bool(active()), vault=vault)
     orch = Orchestrator(db, hub, model_factory, jobs, vault)
     jobs.orch = orch
+    if lifecycle:
+        jobs.lifecycle = lifecycle
+        lifecycle.busy = lambda: jobs.busy() or jobs.held or bool(active())  # an active task or owner control keeps the phone awake
     scheduler = Scheduler(db, orch)
     orch.routines = scheduler
     scheduler.on_change = lambda bot_id: hub.publish(bot_id, {"type": "refresh", "what": "routines"})
@@ -497,19 +510,33 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     if start_scheduler:
         scheduler.start()
         watcher.start()
+        if lifecycle:
+            lifecycle.start()
     return app
 
 
 def create_default_app() -> FastAPI:
     from agent.device import Device
+    from agent.lifecycle import EmulatorBackend, Lifecycle
     from agent.model import MetaClient, load_env
     load_env()
     device = Device(os.environ.get("ANDROID_SERIAL"))
-    if os.environ.get("PHONE_PROFILE", "light") == "light" and device.is_emulator():
+    light = os.environ.get("PHONE_PROFILE", "light") == "light"
+    lifecycle = None
+    if os.environ.get("PHONE_SLEEP", "on") != "off" and EmulatorBackend.available():
+        def ready(cold: bool) -> None:  # after a boot or a long sleep the cached connection and settings are stale
+            device.reconnect()
+            if cold and light:
+                device.prepare()
+        lifecycle = Lifecycle(EmulatorBackend(device.base), on_ready=ready)
+        if lifecycle.power == "off":
+            lifecycle.wake()  # the phone is not running: boot it now, the page shows "Starting the phone"
+    if (lifecycle is None or lifecycle.power == "on") and light and device.is_emulator():
         device.prepare()
     app = create_app(device, lambda m: MetaClient(m),
                      token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
-                     db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True)
+                     db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True,
+                     lifecycle=lifecycle)
     print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)
     return app
 

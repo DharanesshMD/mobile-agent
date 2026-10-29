@@ -202,3 +202,12 @@ Games and video apps that force landscape rotate the phone by themselves (auto-r
 ones (800x360, not 360x160) and gets a one-line note. The worker has a `rotate` action for apps that do not force it, and the owner has a rotate button in the control dock
 (`POST /api/device/rotate`). The page follows the phone: when a landscape frame arrives, the bot list collapses into a drawer (the ☰ button), the phone panel widens and the live view and
 thumbnail switch to 20:9; it all returns when the app closes. The launcher itself never rotates, so going Home also brings the portrait layout back.
+
+## Phone power (built, local emulator backend)
+`agent/lifecycle.py`. Power states: `on`, `sleeping`, `off`, `waking`. Idle policy: sleep after 5 minutes without a task, owner control or owner input (watching the live view does not count, so an open
+tab cannot keep it awake); fully off after 60 more minutes asleep. `EmulatorBackend`: sleep is screen-off plus SIGSTOP on the emulator process (0 % CPU, memory kept), wake is SIGCONT (about 1 s), off is
+`adb emu kill`, boot starts `scripts/emulator.sh` (measured 21 s to a usable phone with the light profile re-applied). After a nap longer than 90 s Wi-Fi is toggled so apps reconnect (a long-frozen
+emulator leaves stale connections, which showed up as a YouTube "An error occurred (Playback ID ...)" screen). The server also notices when the emulator is stopped or started from outside.
+Wake triggers: a phone task (including routines and delegated tasks) waits for the phone, the owner's Wake or Start button, taking control, and opening a task. A sleeping phone answers frames and input with 409
+instead of hanging adb. The page shows the state everywhere: the sidebar chip, the Mobile tab (asleep, off, or starting with a progress bar, and "Sleeps in N min / Sleep now" while on) and the full-screen view.
+`PHONE_SLEEP=off` disables it. A cloud backend (docker pause, stop, start) only has to implement the same six methods. Not built: waking from an incoming SMS or OTP request.

@@ -31,6 +31,7 @@ class JobManager:
         self.data_dir, self.settle, self.max_steps = Path(data_dir), settle, max_steps
         self.external_busy = external_busy or (lambda: False)
         self.vault = vault
+        self.lifecycle = None  # phone power (sleep and wake), attached by the app
         self.orch = None  # set by the app after construction
         self.graph = build_graph()
         self.runs: dict[str, JobRun] = {}
@@ -78,11 +79,12 @@ class JobManager:
             state = "waiting" if job["status"] == "waiting" else "working"
         else:
             state = "ready"
-        try:
-            orientation = self.device.orientation() if hasattr(self.device, "orientation") else "portrait"
+        power = self.lifecycle.info() if self.lifecycle else {"power": "on"}
+        try:  # never ask a sleeping phone anything: its adb connection would hang
+            orientation = self.device.orientation() if power["power"] == "on" and hasattr(self.device, "orientation") else "portrait"
         except Exception:
             orientation = "portrait"
-        return {"state": state, "held": self.held, "job": job, "queued": self._q.qsize(), "orientation": orientation}
+        return {"state": state, "held": self.held, "job": job, "queued": self._q.qsize(), "orientation": orientation, "phone": power}
 
     # --- submit and cancel ---------------------------------------------------------------------------------------
     def submit(self, bot_id: str, goal: str) -> dict:
@@ -115,6 +117,8 @@ class JobManager:
 
     # --- owner control of the phone ------------------------------------------------------------------------------
     def take_control(self) -> None:
+        if self.lifecycle:
+            self.lifecycle.wake()
         with self._cv:
             self.held = True
 
@@ -171,6 +175,14 @@ class JobManager:
 
     def _execute(self, jr: JobRun) -> None:
         self.db.update_job(jr.job_id, status="running")
+        if self.lifecycle:
+            if self.lifecycle.power != "on":
+                self._set_status(jr, "Waking the phone…")
+            if not self.lifecycle.ensure_awake(300):  # a sleeping phone resumes in about a second, a stopped one boots in about a minute
+                self.db.update_job(jr.job_id, status="failed", ended=time.time(), result="The phone did not wake up in time")
+                self._drop_status(jr)
+                self.orch.job_finished(jr.bot_id, self.db.get_job(jr.job_id))
+                return
         self._set_status(jr, "Starting…")
         trace = self.data_dir / "runs" / jr.job_id
         status, result = "failed", ""
@@ -183,6 +195,8 @@ class JobManager:
         except Exception as e:
             result = f"{type(e).__name__}: {str(e)[:200]}"
         job = self.db.update_job(jr.job_id, status=status, ended=time.time(), result=result, trace_dir=str(trace))
+        if self.lifecycle:
+            self.lifecycle.touch()  # the idle timer starts when the task ends
         self._drop_status(jr)
         self._close_items(jr)
         self._save_artifact(jr, trace, status)

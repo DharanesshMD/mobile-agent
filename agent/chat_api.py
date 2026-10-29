@@ -249,6 +249,20 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     def mobile_state():
         return jobs.state()
 
+    @app.post("/api/mobile/wake", dependencies=[Depends(auth)])
+    def mobile_wake():
+        if jobs.lifecycle:
+            jobs.lifecycle.wake()
+        return jobs.state()
+
+    @app.post("/api/mobile/sleep", dependencies=[Depends(auth)])
+    def mobile_sleep():
+        if not jobs.lifecycle:
+            raise HTTPException(409, "This phone cannot sleep")
+        if not jobs.lifecycle.sleep():
+            raise HTTPException(409, "The phone is busy or already asleep")
+        return jobs.state()
+
     @app.post("/api/mobile/control", dependencies=[Depends(auth)])
     def mobile_control(body: Control):
         jobs.take_control() if body.action == "take" else jobs.release_control()
