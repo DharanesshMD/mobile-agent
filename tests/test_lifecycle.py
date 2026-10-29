@@ -16,7 +16,7 @@ from test_service import Phone
 
 class FakeBackend:
     def __init__(self, status="running", boot_polls=2):
-        self.state, self.calls, self.boot_polls, self.fail_start = status, [], boot_polls, False
+        self.state, self.calls, self.boot_polls, self.fail_start, self.resume_ok = status, [], boot_polls, False, True
 
     def status(self):
         return self.state
@@ -31,7 +31,9 @@ class FakeBackend:
 
     def resume(self):
         self.calls.append("resume")
-        self.state = "running"
+        if self.resume_ok:
+            self.state = "running"
+        return self.resume_ok
 
     def kick_network(self):
         self.calls.append("kick_network")
@@ -124,6 +126,22 @@ class Waking(unittest.TestCase):
         settled(l, "on")
         self.assertEqual((b.calls, ready), (["resume", "kick_network"], [False]))
 
+    def test_a_phone_that_does_not_come_back_from_sleep_is_restarted(self):
+        ready = []
+        l, b, clock = life("paused", on_ready=lambda cold: ready.append(cold))
+        b.resume_ok = False
+        clock.t += 200
+        l.wake()
+        settled(l, "on")
+        self.assertEqual((b.calls, ready), (["resume", "stop", "start"], [True]))
+
+    def test_a_sleeping_phone_whose_process_vanished_boots_instead_of_resuming(self):
+        l, b, _ = life("paused")
+        b.state = "stopped"
+        l.wake()
+        settled(l, "on")
+        self.assertEqual(b.calls, ["start"])
+
     def test_a_short_nap_skips_the_network_kick(self):
         l, b, clock = life("paused")
         clock.t += 30
@@ -189,11 +207,20 @@ class Emulator(unittest.TestCase):
         import signal
         e = EmulatorBackend(["adb"])
         sent = []
-        with mock.patch.object(e, "pids", return_value=[7]), mock.patch.object(e, "_adb", return_value="1"), mock.patch("os.kill", lambda p, s: sent.append((p, s))), \
-                mock.patch("time.sleep"):
+        with mock.patch.object(e, "pids", return_value=[7]), mock.patch.object(e, "netsim_pids", return_value=[9]), mock.patch.object(e, "_adb", side_effect=lambda *a, **k: "Physical size: 720x1600" if "wm" in a else "1"), \
+                mock.patch("os.kill", lambda p, s: sent.append((p, s))), mock.patch("time.sleep"):
             e.pause()
-            e.resume()
-        self.assertEqual(sent, [(7, signal.SIGSTOP), (7, signal.SIGCONT)])
+            self.assertTrue(e.resume())
+        # the emulator and its network helper freeze together, and the helper wakes first
+        self.assertEqual(sent, [(7, signal.SIGSTOP), (9, signal.SIGSTOP), (9, signal.SIGCONT), (7, signal.SIGCONT)])
+
+    def test_resume_reports_failure_when_the_emulator_is_gone_or_adb_never_answers(self):
+        e = EmulatorBackend(["adb"])
+        with mock.patch.object(e, "pids", return_value=[]), mock.patch.object(e, "netsim_pids", return_value=[]), mock.patch("time.sleep"):
+            self.assertFalse(e.resume())
+        with mock.patch.object(e, "pids", return_value=[7]), mock.patch.object(e, "netsim_pids", return_value=[]), mock.patch.object(e, "_adb", return_value=""), \
+                mock.patch("os.kill"), mock.patch("time.sleep"):
+            self.assertFalse(e.resume())
 
 
 def phone_app(l, spark=None, workers=()):

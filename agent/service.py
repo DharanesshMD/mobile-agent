@@ -515,6 +515,18 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     return app
 
 
+def prepare_with_retries(device, tries: int = 10) -> None:
+    """The light screen profile needs the window service, which can take a few seconds after a boot or a long freeze."""
+    for i in range(tries):
+        try:
+            device.prepare()
+            return
+        except Exception:
+            if i == tries - 1:
+                raise
+            time.sleep(3)
+
+
 def create_default_app() -> FastAPI:
     from agent.device import Device
     from agent.lifecycle import EmulatorBackend, Lifecycle
@@ -527,12 +539,16 @@ def create_default_app() -> FastAPI:
         def ready(cold: bool) -> None:  # after a boot or a long sleep the cached connection and settings are stale
             device.reconnect()
             if cold and light:
-                device.prepare()
+                prepare_with_retries(device)
         lifecycle = Lifecycle(EmulatorBackend(device.base), on_ready=ready)
         if lifecycle.power == "off":
             lifecycle.wake()  # the phone is not running: boot it now, the page shows "Starting the phone"
-    if (lifecycle is None or lifecycle.power == "on") and light and device.is_emulator():
-        device.prepare()
+    if (lifecycle is None or lifecycle.power == "on") and light:
+        try:
+            if device.is_emulator():
+                prepare_with_retries(device)
+        except Exception as e:  # a phone that is still settling must not stop the server from starting
+            print(f"Could not apply the light profile yet ({type(e).__name__}); continuing.", flush=True)
     app = create_app(device, lambda m: MetaClient(m),
                      token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
                      db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True,

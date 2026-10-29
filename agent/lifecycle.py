@@ -44,6 +44,13 @@ class EmulatorBackend:
         out = subprocess.run(["pgrep", "-f", rf"^[^ ]*qemu-system[^ ]* .*-avd {re.escape(self.avd)}( |$)"], capture_output=True, text=True).stdout
         return [int(p) for p in out.split()]
 
+    @staticmethod
+    def netsim_pids() -> list[int]:
+        """The emulator's network helper pings the emulator; if only the emulator is frozen it gives up on it after about a minute and the emulator
+        dies when it wakes. So the helper is frozen and resumed together with the emulator."""
+        out = subprocess.run(["pgrep", "-x", "netsimd"], capture_output=True, text=True).stdout
+        return [int(p) for p in out.split()]
+
     def status(self) -> str:
         """running, paused (SIGSTOP) or stopped."""
         pids = self.pids()
@@ -53,22 +60,31 @@ class EmulatorBackend:
         return "paused" if state.startswith("T") else "running"
 
     def booted(self) -> bool:
-        return self._adb("shell", "getprop", "sys.boot_completed", timeout=4) == "1"
+        """Usable, not just booted: Android sets boot_completed early, and after a long freeze the window service can still be restarting."""
+        return self._adb("shell", "getprop", "sys.boot_completed", timeout=4) == "1" and "size" in self._adb("shell", "wm", "size", timeout=5).lower()
 
     def pause(self) -> None:
         self._adb("shell", "input", "keyevent", "KEYCODE_SLEEP", timeout=4)  # screen off first, so apps stop playing and drawing
-        for pid in self.pids():
+        for pid in self.pids() + self.netsim_pids():
             os.kill(pid, signal.SIGSTOP)
 
-    def resume(self) -> None:
-        for pid in self.pids():
+    def resume(self) -> bool:
+        """Unfreeze and wait until adb really answers again. False if the emulator is gone or never recovers (the caller then reboots it)."""
+        for pid in self.netsim_pids() + self.pids():
             os.kill(pid, signal.SIGCONT)
-        for _ in range(40):  # adb needs a moment to see the device again
+        for i in range(60):
+            if not self.pids():
+                return False
+            if i == 6:
+                self._adb("reconnect", "offline", timeout=4)  # nudge adb if it still thinks the device is offline
             if self.booted():
                 break
             time.sleep(0.5)
+        else:
+            return False
         self._adb("shell", "input", "keyevent", "KEYCODE_WAKEUP", timeout=4)
         self._adb("shell", "wm", "dismiss-keyguard", timeout=4)
+        return True
 
     def kick_network(self) -> None:
         """After a long freeze, open connections are dead (apps show playback or network errors): restart Wi-Fi so they reconnect."""
@@ -76,7 +92,7 @@ class EmulatorBackend:
         self._adb("shell", "svc", "wifi", "enable", timeout=6)
 
     def stop(self) -> None:
-        for pid in self.pids():
+        for pid in self.netsim_pids() + self.pids():
             os.kill(pid, signal.SIGCONT)  # a frozen process cannot shut down
         self._adb("emu", "kill", timeout=8)
         for _ in range(30):
@@ -141,7 +157,7 @@ class Lifecycle:
             self.touch()
             if self.power in ("on", "waking"):
                 return self.power
-            cold = self.power == "off"
+            cold = self.power == "off" or self.backend.status() == "stopped"  # a sleeping phone whose process is gone must boot
             slept = self.clock() - self.since
             self._set("waking", "Starting the phone…" if cold else "Waking the phone…")
             self.boot_started = self.clock()
@@ -160,11 +176,15 @@ class Lifecycle:
                     time.sleep(2)
                 self._set("waking", "Getting the phone ready…")
                 self.last_boot_s = self.clock() - self.boot_started
-            else:
-                self.backend.resume()
-                if slept > 90 and hasattr(self.backend, "kick_network"):
-                    self._set("waking", "Reconnecting to the network…")
-                    self.backend.kick_network()
+            elif self.backend.resume() is False:
+                # It did not come back (it crashed while frozen, or adb never recovered): restart it instead of leaving the owner stuck.
+                self._set("waking", "Restarting the phone…")
+                self.backend.stop()
+                self._wake(True, 0)
+                return
+            elif slept > 90 and hasattr(self.backend, "kick_network"):
+                self._set("waking", "Reconnecting to the network…")
+                self.backend.kick_network()
             self.on_ready(cold)
             self.touch()
             self._set("on")

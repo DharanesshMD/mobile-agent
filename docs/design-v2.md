@@ -211,3 +211,8 @@ emulator leaves stale connections, which showed up as a YouTube "An error occurr
 Wake triggers: a phone task (including routines and delegated tasks) waits for the phone, the owner's Wake or Start button, taking control, and opening a task. A sleeping phone answers frames and input with 409
 instead of hanging adb. The page shows the state everywhere: the sidebar chip, the Mobile tab (asleep, off, or starting with a progress bar, and "Sleeps in N min / Sleep now" while on) and the full-screen view.
 `PHONE_SLEEP=off` disables it. A cloud backend (docker pause, stop, start) only has to implement the same six methods. Not built: waking from an incoming SMS or OTP request.
+
+Phone power, lessons from testing: freezing only the emulator (SIGSTOP) kills it if it stays frozen for about a minute: the emulator's network helper `netsimd` pings it, gives up and the emulator
+crashes on resume. So the helper is frozen and resumed with it (verified: 110 s frozen, adb back in 1 s). `resume()` now waits until adb answers and `wm size` works (Android sets boot_completed
+early, and the window service can still be restarting), and if the emulator is gone or never recovers the phone is restarted automatically ("Restarting the phone"). A task submitted while the phone sleeps wakes it first
+(measured: asleep for 105 s, task sent, phone on 4 s later, task done).
