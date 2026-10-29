@@ -98,6 +98,11 @@
   .app.landscape .side { display: none; }
   .app.landscape.show-side .side { display: flex; position: fixed; left: 0; top: 0; bottom: 0; width: min(300px, 88vw); z-index: 20; box-shadow: 10px 0 40px #0008; }
   .app.landscape .menu-btn { display: inline-block !important; }
+  /* When the bot list is a drawer (landscape phone view, narrow windows) it can be closed: the dimmed backdrop, the X, Esc, or picking a bot. */
+  .scrim, .drawer-close { display: none; }
+  .app.landscape.show-side .scrim { display: block; position: fixed; inset: 0; background: #0009; z-index: 15; }
+  .app.landscape.show-side .drawer-close { display: inline-block; }
+  @media (max-width: 720px) { .app.show-side .scrim { display: block; position: fixed; inset: 0; background: #0009; z-index: 15; } .app.show-side .drawer-close { display: inline-block; } }
   .thumb.landscape { max-width: 100%; aspect-ratio: 20 / 9; }
   .overlay .screen.landscape { aspect-ratio: 20 / 9; height: auto; width: min(94vw, calc((100vh - 150px) * 20 / 9)); }
   .feed { flex: 1; overflow-y: auto; padding: 20px 18px 8px; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; }
@@ -195,11 +200,13 @@
 </head>
 <body>
 <div class="app" id="app">
+  <div class="scrim" id="scrim" aria-hidden="true"></div>
   <aside class="side" aria-label="Bots">
     <header>
       <h1>Bots</h1>
       <button class="ghost" id="searchBtn" title="Search bots" aria-label="Search bots">&#8981;</button>
       <button class="ghost" id="newBtn" title="New bot" aria-label="New bot">+</button>
+      <button class="ghost drawer-close" id="sideClose" title="Close" aria-label="Close the bot list">&#10005;</button>
     </header>
     <div class="search" id="searchBox" hidden><input id="searchInput" type="search" placeholder="Search bots" aria-label="Search bots"></div>
     <div class="bots" id="bots"></div>
@@ -327,7 +334,10 @@ function renderBots() {
   }
 }
 function closeMenu() { document.querySelectorAll(".menu").forEach(m => m.remove()); document.querySelectorAll(".more.open").forEach(m => m.classList.remove("open")); }
-document.addEventListener("click", closeMenu); document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
+document.addEventListener("click", closeMenu);
+const closeSide = () => $("app").classList.remove("show-side");
+$("scrim").onclick = $("sideClose").onclick = closeSide;
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeMenu(); closeSide(); } });
 function openMenu(row, more, bot) {
   const was = more.classList.contains("open"); closeMenu(); if (was) return;
   more.classList.add("open");
