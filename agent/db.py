@@ -16,7 +16,7 @@ create table if not exists messages(id integer primary key autoincrement, bot_id
   content text not null default '', meta text not null default '{}', created real, updated real);
 create index if not exists messages_bot on messages(bot_id, id);
 create table if not exists jobs(id text primary key, bot_id text not null, goal text not null, status text not null, started real, ended real,
-  result text not null default '', trace_dir text);
+  result text not null default '', trace_dir text, after text, verify text);
 create table if not exists items(id text primary key, bot_id text not null, job_id text, message_id integer, kind text not null,
   payload text not null default '{}', status text not null default 'open', answer text, created real, answered real);
 create table if not exists library(id text primary key, bot_id text not null, job_id text, title text not null, path text not null, created real);
@@ -33,7 +33,7 @@ def _row(r: sqlite3.Row | None) -> dict | None:
     if r is None:
         return None
     d = dict(r)
-    for k in ("meta", "payload", "schedule"):
+    for k in ("meta", "payload", "schedule", "verify"):
         if k in d and isinstance(d[k], str):
             d[k] = json.loads(d[k] or "{}")
     return d
@@ -58,6 +58,10 @@ class Database:
             if "kind" not in [r["name"] for r in self.conn.execute("pragma table_info(bots)")]:  # databases created before the master bot
                 self.conn.execute("alter table bots add column kind text not null default 'bot'")
                 self.conn.commit()
+            for col in ("after", "verify"):  # databases created before task dependencies and checks
+                if col not in [r["name"] for r in self.conn.execute("pragma table_info(jobs)")]:
+                    self.conn.execute(f"alter table jobs add column {col} text")
+                    self.conn.commit()
 
     def _q(self, sql: str, args=()) -> list[dict]:
         with self.lock:
@@ -154,20 +158,29 @@ class Database:
         return list(reversed(rows))
 
     # jobs
-    def create_job(self, bot_id: str, goal: str) -> dict:
+    def create_job(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None) -> dict:
+        """`after` is the id of a job that must finish successfully before this one runs; `verify` is a phone check (agent/checks.py) that must pass for it to count as done."""
         jid = uuid.uuid4().hex[:10]
-        self._x("insert into jobs(id,bot_id,goal,status,started) values(?,?,?,?,?)", (jid, bot_id, goal, "queued", time.time()))
+        self._x("insert into jobs(id,bot_id,goal,status,started,after,verify) values(?,?,?,?,?,?,?)",
+                (jid, bot_id, goal, "queued", time.time(), after, json.dumps(verify) if verify else None))
         return self.get_job(jid)
 
     def get_job(self, jid: str) -> dict | None:
         return self._one("select * from jobs where id=?", (jid,))
 
     def update_job(self, jid: str, **fields) -> dict:
-        cols = {"status", "ended", "result", "trace_dir"}
+        cols = {"status", "ended", "result", "trace_dir", "goal"}
         sets = {k: v for k, v in fields.items() if k in cols}
         if sets:
             self._x(f"update jobs set {', '.join(f'{k}=?' for k in sets)} where id=?", (*sets.values(), jid))
         return self.get_job(jid)
+
+    def active_jobs(self, bot_id: str | None = None) -> list[dict]:
+        """Queued, running and waiting jobs, oldest first (all bots when `bot_id` is None)."""
+        where, args = "status in ('queued','running','waiting')", ()
+        if bot_id:
+            where, args = where + " and bot_id=?", (bot_id,)
+        return self._q(f"select * from jobs where {where} order by started", args)
 
     def jobs(self, bot_id: str, limit: int = 20) -> list[dict]:
         return self._q("select * from jobs where bot_id=? order by started desc limit ?", (bot_id, limit))

@@ -155,9 +155,9 @@ class Api(unittest.TestCase):
         self.assertEqual(app.state.db.jobs(assistant["id"], 5), [])
         spark2 = Spark(act(type="delegate_task", bot="Assistant", goal="g", say=""))
         c2, app2, master2, assistant2 = master_app(spark2)
-        app2.state.db.create_job(assistant2["id"], "already running")  # queued counts as busy
+        app2.state.db.create_job(assistant2["id"], "g")  # the same task is already queued
         say(c2, master2["id"], "again")
-        until(lambda: any("already busy" in t for t in texts(c2, master2["id"], "assistant")))
+        until(lambda: any("already working on that" in t for t in texts(c2, master2["id"], "assistant")))
         self.assertEqual(len(app2.state.db.jobs(assistant2["id"], 5)), 1)
 
     def test_master_answers_from_the_digest(self):

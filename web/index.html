@@ -479,6 +479,7 @@ function renderFeed(jump) {
       }
     }
   }
+  $("text").placeholder = S.thinking || list.some(m => m.kind === "status") ? "Working… type to add or change something" : "Message";
   if (S.thinking && !list.some(m => m.kind === "status")) { const s = el("div", "status"); s.append(dots(), el("span", "", "Thinking")); feed.append(s); }
   if (jump || nearBottom) feed.scrollTop = feed.scrollHeight;
   if (focusKey) { const i = [...feed.querySelectorAll("[data-draft]")].find(x => x.dataset.draft === focusKey); if (i) { i.focus({ preventScroll: true }); try { i.setSelectionRange(...caret); } catch {} } }
@@ -494,8 +495,8 @@ function statusLine(m) {
 const KIND = { confirm: "Needs your approval", choice: "Your choice", text: "Quick question", handoff: "Your turn on the phone", otp: "One-time code", secret: "Secure input" };
 function card(m) {
   const meta = m.meta, open = meta.status === "open";
-  const c = el("div", "card" + (meta.status === "answered" ? " done" : meta.status === "cancelled" ? " cancelled" : ""));
-  c.append(el("div", "k", open ? KIND[meta.kind] || "Action needed" : meta.status === "answered" ? "Answered" : "No longer needed"), el("div", "q", m.content));
+  const c = el("div", "card" + (meta.status === "answered" ? " done" : (meta.status === "cancelled" || meta.status === "expired") ? " cancelled" : ""));
+  c.append(el("div", "k", open ? KIND[meta.kind] || "Action needed" : meta.status === "answered" ? "Answered" : meta.status === "expired" ? "Expired: no answer in time, the task was stopped" : "No longer needed"), el("div", "q", m.content));
   if (!open) { if (meta.status === "answered" && meta.answer) c.append(el("div", "ans", meta.answer)); return c; }
   const send = (body) => api(`/api/items/${meta.item_id}/answer`, body).catch(e => toast(e.message));
   const row = el("div", "row");

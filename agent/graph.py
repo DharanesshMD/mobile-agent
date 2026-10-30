@@ -78,6 +78,9 @@ def observe(state: State, config: RunnableConfig) -> dict:
         c["pause"]()  # blocks while the owner holds control of the phone
     if c["cancel"].is_set():
         return {"status": "cancelled"}
+    goal = state["goal"]
+    for note in (c["steer"]() if c.get("steer") else []):  # the owner changed or added to the task while it runs
+        goal += f"\nOwner update: {note}"
     if state.get("step", 0) >= c["max_steps"]:
         return {"status": "max_steps", "answer": "step budget exhausted"}
     dev = c["device"]
@@ -92,10 +95,10 @@ def observe(state: State, config: RunnableConfig) -> dict:
     small, scale = shrink(png, c["image_width"] if h0 >= w0 else round(c["image_width"] * w0 / h0))
     step = state.get("step", 0) + 1
     send = need_image(c["image_mode"], step, elements, unchanged, state.get("acts", []), state.get("history", []))
-    prompt = build_prompt(state["goal"], state.get("history", []), elements, scale, unchanged, state.get("acts", []),
+    prompt = build_prompt(goal, state.get("history", []), elements, scale, unchanged, state.get("acts", []),
                           getattr(dev, "keyboard_open", False), c["secrets"].labels() if c.get("secrets") else None, landscape=w0 > h0)
     ms = {"shot": shot_ms, "tree": tree_ms, "observe": round((time.time() - t0) * 1000), "image": send}
-    return {"step": step, "last_hash": digest, "unchanged": unchanged,
+    return {"goal": goal, "step": step, "last_hash": digest, "unchanged": unchanged,
             "obs": {"png": small, "send_image": send, "scale": scale, "size": (w0, h0), "elements": [asdict(e) for e in elements],
                     "prompt": prompt, "ms": ms}}
 
@@ -250,7 +253,8 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
         on_step: Callable[[int, dict, str], None] | None = None, settle: float = 0.4,
         handler: Callable[[dict], dict] | None = None, emit: Callable[[dict], None] | None = None,
         cancel: threading.Event | None = None, graph=None, pause: Callable[[], None] | None = None,
-        image_mode: str | None = None, image_width: int | None = None, secrets=None) -> Result:
+        image_mode: str | None = None, image_width: int | None = None, secrets=None,
+        steer: Callable[[], list[str]] | None = None) -> Result:
     """Run a goal to completion. Without a handler, the run stops at the first gate with status needs_approval."""
     w, h = device.size()
     image_mode, image_width = image_mode or IMAGE_MODE, image_width or IMAGE_WIDTH
@@ -264,7 +268,7 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
     config = {"recursion_limit": max_steps * 6 + 20, "configurable": {
         "thread_id": uuid.uuid4().hex, "device": device, "model": model, "size": (w, h), "settle": settle,
         "max_steps": max_steps, "trace": str(trace_dir) if trace_dir else None, "emit": fan_out,
-        "cancel": cancel or threading.Event(), "pause": pause, "secrets": secrets, "image_mode": image_mode, "image_width": image_width,
+        "cancel": cancel or threading.Event(), "pause": pause, "steer": steer, "secrets": secrets, "image_mode": image_mode, "image_width": image_width,
         "system": SYSTEM.replace("WIDTHxHEIGHT", f"{image_width}x{round(h * image_width / w)}")}}
     graph = graph or build_graph()
     cmd: dict | Command = {"goal": goal, "step": 0, "history": [], "acts": [], "unchanged": 0}

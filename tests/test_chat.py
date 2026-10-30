@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import time
 import unittest
 
@@ -156,14 +157,18 @@ class Jobs(unittest.TestCase):
         self.assertIn("Android 14", app.state.db.memory_search(bot, "Android version")[0])
         self.assertIn("finished with status 'done'", spark.calls[-1][1][-1]["content"])
 
-    def test_one_job_per_bot(self):
-        spark = Spark(act(type="mobile_task", goal="g1", say="ok"), act(type="mobile_task", goal="g2", say="ok"))
+    def test_a_second_task_queues_and_a_repeat_is_not_added(self):
+        spark = Spark(act(type="mobile_task", goal="open the camera", say="ok"), act(type="mobile_task", goal="check the battery", say="ok2"),
+                      act(type="mobile_task", goal="open the camera app", say="ok3"))
         c, _, bot, _ = setup(spark, Worker(act(type="handoff", reason="your turn")))
         say(c, bot, "first")
         until(lambda: open_card(c, bot))
         say(c, bot, "second")
-        until(lambda: any("already working" in t for t in texts(c, bot, "assistant")))
-        self.assertEqual(len(c.get(f"/api/bots/{bot}/jobs").json()), 1)
+        until(lambda: "ok2 The phone is busy, so it's queued and starts as soon as it's free." in texts(c, bot, "assistant"))
+        say(c, bot, "the first again")
+        until(lambda: any("already running or queued" in t for t in texts(c, bot, "assistant")))
+        jobs = c.get(f"/api/bots/{bot}/jobs").json()
+        self.assertEqual(sorted(j["status"] for j in jobs), ["queued", "waiting"])  # two tasks, the repeat was not added
 
     def test_worker_confirm_card_and_takeover_rules(self):
         spark = Spark(act(type="mobile_task", goal="send it", say="ok"), act(type="reply", text="sent"))
@@ -585,3 +590,76 @@ class Transcribe(unittest.TestCase):
         c = TestClient(app)
         self.assertEqual(c.post("/api/transcribe", content=wav_bytes()).status_code, 401)
         self.assertEqual(c.post("/api/transcribe", content=wav_bytes(), headers={"Authorization": "Bearer s3cret"}).status_code, 200)
+
+
+class Gated(Spark):
+    """Spark whose first answer waits until the test lets it go, so the owner can write again while it is 'thinking'."""
+    def __init__(self, *actions):
+        super().__init__(*actions)
+        self.entered, self.release = threading.Event(), threading.Event()
+
+    def chat(self, system, messages, max_tokens=0):
+        first = not self.calls
+        out = super().chat(system, messages, max_tokens)
+        if first:
+            self.entered.set()
+            self.release.wait(10)
+        return out
+
+
+class Steering(unittest.TestCase):
+    def test_a_message_sent_mid_turn_is_answered_once_with_both(self):
+        spark = Gated(act(type="reply", text="stale answer"), act(type="reply", text="answer to both"))
+        c, _, bot, _ = setup(spark)
+        say(c, bot, "first question")
+        spark.entered.wait(10)
+        say(c, bot, "and also this")
+        spark.release.set()
+        until(lambda: "answer to both" in texts(c, bot, "assistant"))
+        time.sleep(0.3)  # the second message's own turn must not run: it was already taken into account
+        self.assertEqual(texts(c, bot, "assistant"), ["answer to both"])
+        self.assertEqual(len(spark.calls), 2)
+        self.assertIn("and also this", [m["content"] for m in spark.calls[1][1]])
+
+    def test_a_running_job_can_be_steered_and_stopped(self):
+        spark = Spark(act(type="mobile_task", goal="find a laptop", say="ok"),
+                      act(type="steer_task", note="pick the cheapest one", say="Will do."))
+        worker = Worker(act(type="handoff", reason="your turn"), act(type="done", answer="bought nothing"))
+        c, _, bot, _ = setup(spark, worker)
+        say(c, bot, "find a laptop")
+        card = until(lambda: open_card(c, bot))
+        say(c, bot, "actually the cheapest")
+        until(lambda: "Will do." in texts(c, bot, "assistant"))
+        c.post(f"/api/items/{card['meta']['item_id']}/answer", json={"approved": True})
+        until(lambda: len(worker.prompts) >= 2)
+        self.assertIn("Owner update: pick the cheapest one", worker.prompts[-1])
+        self.assertNotIn("Owner update", worker.prompts[0])
+
+    def test_steering_with_no_job_says_so(self):
+        c, _, bot, _ = setup(Spark(act(type="steer_task", note="x")))
+        say(c, bot, "change it")
+        until(lambda: any("no task running" in t for t in texts(c, bot, "assistant")))
+
+    def test_stop_task_cancels_the_job(self):
+        spark = Spark(act(type="mobile_task", goal="g", say="ok"), act(type="stop_task", say="Stopped it."))
+        c, _, bot, _ = setup(spark, Worker(act(type="handoff", reason="your turn")))
+        say(c, bot, "start")
+        until(lambda: open_card(c, bot))
+        say(c, bot, "never mind")
+        until(lambda: "Stopped it." in texts(c, bot, "assistant"))
+        until(lambda: c.get(f"/api/bots/{bot}/jobs").json()[0]["status"] == "cancelled")
+
+    def test_a_task_that_died_is_visible_to_the_model_and_the_chat(self):
+        db = Database(":memory:")
+        bot = db.create_bot("Assistant")["id"]
+        job = db.create_job(bot, "install the game")
+        db.update_job(job["id"], status="running")
+        spark = Spark(act(type="mobile_task", goal="install the game", say="Starting again."))
+        c, _, bot, app = setup(spark, Worker(act(type="done", answer="installed")), db=db)
+        app.state.jobs.recover()
+        self.assertTrue(any("interrupted by a restart" in t for t in texts(c, bot, "assistant")))
+        say(c, bot, "install the game")
+        until(lambda: "Starting again." in texts(c, bot, "assistant"))
+        system = spark.calls[0][0]
+        self.assertIn("No phone job is running", system)
+        self.assertIn("failed: install the game", system)

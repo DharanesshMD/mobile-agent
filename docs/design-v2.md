@@ -216,3 +216,21 @@ Phone power, lessons from testing: freezing only the emulator (SIGSTOP) kills it
 crashes on resume. So the helper is frozen and resumed with it (verified: 110 s frozen, adb back in 1 s). `resume()` now waits until adb answers and `wm size` works (Android sets boot_completed
 early, and the window service can still be restarting), and if the emulator is gone or never recovers the phone is restarted automatically ("Restarting the phone"). A task submitted while the phone sleeps wakes it first
 (measured: asleep for 105 s, task sent, phone on 4 s later, task done).
+
+## Steering while a query runs
+
+The owner can keep typing while the bot works; nothing in the composer is ever locked.
+
+- **Chat turns:** each message starts a turn, turns for one bot run one at a time. A running turn checks for newer owner messages after every model call and tool result; if one arrived it throws away its pending decision, reloads the chat and decides again with everything said so far, so the owner gets one reply that covers both. `Orchestrator._answered` records the newest owner message a turn has seen, so the queued turn for the second message is skipped instead of answering twice.
+- **Phone jobs:** `steer_task` (change or add to the running or queued job) and `stop_task` (cancel it). The note goes to `JobManager.steer`, is appended to the job's goal, and the worker picks it up in `observe` before its next step (`steer` callback in `graph.run`). A separate new request still waits for the current one ("one job per bot").
+- **UI:** while thinking or a job runs, the composer placeholder says it can take more.
+
+## Task queue, dependencies and checks (30 Oct 2026)
+The phone is shared and does one task at a time. What changed so a stuck or half-done task can no longer freeze everything:
+
+- **Queue.** `JobManager` keeps an ordered list of queued jobs. A new request while one runs is queued (up to 5 per bot), not refused; repeats of the same request are ignored (`same_goal`). Each queued job's status line says what it waits for ("Queued (1): insta bot's task is waiting for you").
+- **Dependencies.** `mobile_task` takes `after` (a job id), and `mobile_plan` queues 2 to 4 steps in order. A step runs when the one before it is `done`, is skipped (status `skipped`, owner told) if that one failed or was stopped, and does not block other tasks while it waits. A step starts with the result of the one before it.
+- **Checks, not trust.** `agent/checks.py` reads facts straight from the phone (app installed, a Google account signed in, app in front). A task can carry `verify`: if the worker says done but the check fails, the job is `failed`, so dependents do not run. The orchestrator also has `phone_check` to plan (what is missing?) and to confirm a result. The job-finished note makes it judge the report against the goal and say plainly whether it worked, partly worked or failed; one retry is allowed.
+- **No frozen phone.** A task waiting for the owner gives the phone up after 15 min (card `expired`, job failed, next task runs). Owner control with no input for 10 min ends by itself. After a server restart, running and waiting jobs fail with a message in their chat, and jobs that never started go back in the queue.
+- **Phone always available.** `Lifecycle.ensure_healthy` wakes the phone and restarts it if adb or the window service does not answer; every task calls it first. If the phone dies mid-task the job restarts it and runs once more. A background check every minute restarts an idle phone that stopped answering twice.
+- Limits and timeouts are in `agent/config.py` (`OWNER_WAIT_MIN`, `HOLD_IDLE_MIN`, `MAX_ACTIVE_PER_BOT`).

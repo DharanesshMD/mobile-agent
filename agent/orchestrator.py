@@ -1,11 +1,13 @@
 """Orchestrator (Muse Spark): talks with the owner, remembers, asks, and delegates phone work to jobs."""
+import difflib
 import json
 import re
 import threading
 import time
 from pathlib import Path
 
-from agent.config import ORCHESTRATOR_MODEL
+from agent.checks import KINDS, run_check
+from agent.config import MAX_ACTIVE_PER_BOT, ORCHESTRATOR_MODEL
 from agent.db import Database
 from agent.hub import Hub
 
@@ -13,6 +15,13 @@ PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
 MAX_TOOL_LOOPS = 4
 MAX_SEARCHES_PER_TURN = 3
 MAX_BOT_CHAIN = 3  # the asking bot plus at most two more
+MAX_PLAN_STEPS = 4
+
+
+def same_goal(a: str, b: str) -> bool:
+    """Is this the same request worded again? (Used so a repeated message does not queue the same phone task twice.)"""
+    a, b = (re.sub(r"\W+", " ", x.lower()).strip() for x in (a, b))
+    return bool(a) and (a == b or difflib.SequenceMatcher(None, a, b).ratio() >= 0.85)
 
 
 def parse_decision(text: str) -> dict:
@@ -32,6 +41,7 @@ class Orchestrator:
         self.vault, self.routines = vault, None  # routines (the scheduler) is attached by the app
         self.db, self.hub, self.model_factory, self.jobs = db, hub, model_factory, jobs
         self._locks: dict[str, threading.Lock] = {}
+        self._answered: dict[str, int] = {}  # bot id -> newest owner message a turn has already taken into account
         self._system = (PROMPTS / "orchestrator.md").read_text()
         self._worker_system = (PROMPTS / "worker_request.md").read_text()
 
@@ -83,9 +93,22 @@ class Orchestrator:
         if others:
             parts.append("Other bots you can ask with ask_bot (they answer from their own memory and focus):\n" +
                          "\n".join(f"- {b['name']}" + (f": {b['persona'][:120]}" if b["persona"] else "") for b in others))
-        active = self.jobs.active_for(bot_id)
-        if active:
-            parts.append(f"A phone job is already {active['status']} for this bot: {active['goal']}")
+        mine = self.db.active_jobs(bot_id)
+        recent = [j for j in self.db.jobs(bot_id, 6) if j["status"] not in ("queued", "running", "waiting")][:3]
+        if recent:
+            parts.append("Recent phone jobs for this bot, newest first (earlier 'On it' messages in the chat refer to these):\n" +
+                         "\n".join(f"- {j['id']} {j['status']}: {j['goal'][:100]}" + (f" -> {j['result'][:100]}" if j["result"] else "") for j in recent))
+        if mine:
+            parts.append("This bot's phone tasks right now, oldest first (the phone does one task at a time):\n" +
+                         "\n".join(f"- {j['id']} [{j['status']}] {j['goal'][:100]}" + (f" (waits for {j['after']})" if j["after"] else "") for j in mine) +
+                         "\nIf the owner's new message changes, adds to or cancels one of these, use steer_task or stop_task. Never add a task that repeats one listed here. "
+                         "A different task goes in with mobile_task and queues behind these; if it needs an earlier task to succeed first, give that task's id as \"after\".")
+        else:
+            parts.append("No phone job is running for this bot right now. Never say a task is in progress or that you are 'already on it'; "
+                         "if the owner asks for a phone task, start it with mobile_task, even if an earlier message in the chat said you were on it.")
+        busy_with = [j for j in self.db.active_jobs() if j["bot_id"] != bot_id]
+        if busy_with:
+            parts.append(f"Other bots have {len(busy_with)} task(s) on the shared phone; this bot's tasks queue behind them.")
         return "\n\n".join(parts)
 
     def _decide(self, model, system: str, msgs: list[dict]) -> dict | None:
@@ -105,19 +128,35 @@ class Orchestrator:
         with lock:
             if not self.db.get_bot(bot_id):
                 return
+            if note is None and self._latest_owner(bot_id) <= self._answered.get(bot_id, 0):
+                return  # a turn that was already running took this message into account (steering), so it was answered
             try:
                 self._turn(bot_id, note)
             except Exception as e:  # keep the chat usable if the model or network fails
                 self.post(bot_id, f"Sorry, I hit a problem and could not answer ({type(e).__name__}). Please try again.")
 
+    def _latest_owner(self, bot_id: str) -> int:
+        rows = self.db._q("select max(id) m from messages where bot_id=? and role='user'", (bot_id,))
+        return rows[0]["m"] or 0
+
     def _turn(self, bot_id: str, note: str | None, chain: tuple = ()) -> None:
         model = self.model_factory(ORCHESTRATOR_MODEL)
         system, msgs = self._context(bot_id), self._history(bot_id)
+        seen = self._answered[bot_id] = self._latest_owner(bot_id)
+        n_chat = len(msgs)  # everything after this is this turn's own notes and tool results
         if note:
             msgs = msgs + [{"role": "user", "content": f"[system note, not from the owner] {note}"}]
         searches = 0
         for _ in range(MAX_TOOL_LOOPS):
             act = self._decide(model, system, msgs)
+            if self._latest_owner(bot_id) > seen:
+                # The owner wrote again while the model was thinking or a tool was running: steer this turn instead of acting on a stale picture.
+                seen = self._answered[bot_id] = self._latest_owner(bot_id)
+                system, chat = self._context(bot_id), self._history(bot_id)
+                msgs = chat + msgs[n_chat:] + [{"role": "user", "content": "[system note, not from the owner] The owner sent a new message while you were working. "
+                                                "Read it above, and decide again with everything they have said so far. Answer both in one reply if they fit together."}]
+                n_chat = len(chat)
+                continue
             if act is None:
                 self.post(bot_id, "I could not work out how to respond. Could you rephrase that?")
                 return
@@ -128,17 +167,15 @@ class Orchestrator:
             if kind == "delegate_task" and (self.db.get_bot(bot_id) or {}).get("kind") == "master":
                 self._delegate(bot_id, act)
                 return
-            if kind == "mobile_task":
-                goal = str(act.get("goal", "")).strip()
-                say = str(act.get("say", "")).strip() or "On it. I'll let you know when it's done."
-                if not goal:
-                    self.post(bot_id, "What should I do on the phone?")
-                    return
-                if self.jobs.active_for(bot_id):
-                    self.post(bot_id, "I'm already working on a task for you. I'll report back when it finishes.")
-                    return
-                self.post(bot_id, say)
-                self.jobs.submit(bot_id, goal)
+            if kind in ("mobile_task", "mobile_plan"):
+                self._queue_tasks(bot_id, act, kind)
+                return
+            if kind == "phone_check":
+                msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
+                               {"role": "user", "content": f"[tool result for phone_check] {self._phone_check(act)}"}]
+                continue
+            if kind in ("steer_task", "stop_task"):
+                self._steer_job(bot_id, kind, act)
                 return
             if kind == "ask_user":
                 self.make_item(bot_id, None, act)
@@ -187,6 +224,81 @@ class Orchestrator:
             self.post(bot_id, str(act.get("text", "")).strip() or "I'm not sure how to do that yet.")
             return
         self.post(bot_id, "I got stuck deciding what to do. Could you tell me more?")
+
+    @staticmethod
+    def _clean_verify(v) -> dict | None:
+        if isinstance(v, dict) and v.get("kind") in KINDS:
+            return {"kind": v["kind"], "query": str(v.get("query", ""))[:80]}
+        return None
+
+    def _phone_check(self, act: dict) -> str:
+        """Read a fact straight from the phone (app installed, Google account signed in, app in front) so a task's result can be checked, not trusted."""
+        dev, lc = self.jobs.device, self.jobs.lifecycle
+        if not hasattr(dev, "packages"):
+            return "error: phone checks are not available"
+        if lc is not None and not lc.ensure_healthy(90):
+            return "error: the phone is not available right now (it is starting). Start the task instead; it waits for the phone."
+        ok, detail = run_check(dev, act)
+        return f"{'yes' if ok else 'no'}: {detail}"
+
+    def _queue_tasks(self, bot_id: str, act: dict, kind: str) -> None:
+        """mobile_task / mobile_plan: queue one phone task, or several in order. Repeats are ignored, a step that needs an earlier one waits for it."""
+        raw = act.get("steps") if kind == "mobile_plan" else [act]
+        steps = [st for st in (raw if isinstance(raw, list) else []) if isinstance(st, dict) and str(st.get("goal", "")).strip()][:MAX_PLAN_STEPS]
+        if not steps:
+            self.post(bot_id, "What should I do on the phone?")
+            return
+        active, prev = self.db.active_jobs(bot_id), None
+        if act.get("after"):
+            dep = self.db.get_job(str(act["after"]))
+            if dep and dep["bot_id"] == bot_id and dep["status"] in ("queued", "running", "waiting"):
+                prev = dep["id"]
+            elif dep and dep["bot_id"] == bot_id and dep["status"] != "done":
+                self.post(bot_id, f"I didn't start that: it needs an earlier task that did not finish ({dep['status']}): {dep['goal'][:80]}. Should I try that one again first?")
+                return
+        new, known, chain = [], list(active), prev  # chain: what the next new step waits for (an existing job id, or the index of an earlier new step)
+        for st in steps:
+            goal = str(st["goal"]).strip()
+            dup = next((j for j in known if same_goal(j["goal"], goal)), None)
+            if dup:
+                chain = dup["id"] if dup["id"] else chain  # a later step still waits for the task that already exists
+                continue
+            if len(known) >= MAX_ACTIVE_PER_BOT:
+                break
+            new.append((goal, self._clean_verify(st.get("verify")), chain))
+            known.append({"id": None, "goal": goal})
+            chain = len(new) - 1
+        if not new:
+            self.post(bot_id, "That is already running or queued, so I did not add it again. I'll report back when it finishes." if len(known) < MAX_ACTIVE_PER_BOT
+                      else "I already have several tasks queued. I'll work through them and then we can add more.")
+            return
+        say = str(act.get("say", "")).strip() or ("On it. I'll let you know when it's done." if len(new) == 1 else
+                                                  f"I'll do this in {len(new)} steps, in order, and tell you how it goes.")
+        if self.jobs.busy():
+            say += " The phone is busy, so it's queued and starts as soon as it's free."
+        self.post(bot_id, say)
+        ids: list[str] = []
+        for goal, verify, dep in new:
+            ids.append(self.jobs.submit(bot_id, goal, ids[dep] if isinstance(dep, int) else dep, verify)["id"])
+
+    def _steer_job(self, bot_id: str, kind: str, act: dict) -> None:
+        """The owner changed their mind about a task that is already queued or running."""
+        job = self.jobs.active_for(bot_id)
+        named = self.db.get_job(str(act.get("job", ""))) if act.get("job") else None
+        if named and named["bot_id"] == bot_id and named["status"] in ("queued", "running", "waiting"):
+            job = named
+        if not job:
+            self.post(bot_id, "There's no task running right now. Tell me what you'd like me to do on the phone and I'll start it.")
+            return
+        if kind == "stop_task":
+            self.jobs.cancel(job["id"])
+            self.post(bot_id, str(act.get("say", "")).strip() or "Stopping the task.")
+            return
+        note = str(act.get("note", "")).strip()
+        if not note or not self.jobs.steer(job["id"], note):
+            self.post(bot_id, "I couldn't pass that on to the task. What should it do differently?")
+            return
+        self.post(bot_id, str(act.get("say", "")).strip() or "Got it, I've passed that to the phone. It will use it on its next step.")
 
     def _routine_tool(self, bot_id: str, kind: str, act: dict) -> str:
         from agent.routines import describe
@@ -290,10 +402,15 @@ class Orchestrator:
         if isinstance(target, str):
             self.post(master_id, target.replace("that you can ask now", "to hand this to") + ". I can run it myself instead if you like.")
             return
-        if self.jobs.active_for(target["id"]):
-            self.post(master_id, f"{target['name']} is already busy with a task. I can run this one myself, or wait for it to finish.")
+        active = self.db.active_jobs(target["id"])
+        if any(same_goal(j["goal"], goal) for j in active):
+            self.post(master_id, f"{target['name']} is already working on that, so I did not add it again.")
             return
-        self.post(master_id, say or f"I asked {target['name']} to do that. Watch its chat for questions; I'll tell you when it's done.")
+        if len(active) >= MAX_ACTIVE_PER_BOT:
+            self.post(master_id, f"{target['name']} already has {len(active)} tasks queued. I can run this one myself, or wait for them to finish.")
+            return
+        self.post(master_id, (say or f"I asked {target['name']} to do that. Watch its chat for questions; I'll tell you when it's done.") +
+                  (" The phone is busy, so it's queued." if self.jobs.busy() else ""))
         self.post(target["id"], f"Master asked you to do this on the phone: {goal}", "bot_note", {"with": master_id})
         job = self.jobs.submit(target["id"], goal)
         self.delegated[job["id"]] = master_id
@@ -311,13 +428,30 @@ class Orchestrator:
             return
         if status == "done":
             self.db.memory_add(bot_id, f"Task done: {job['goal']} -> {result}")
-        note = (f"The phone job finished with status '{status}'. Goal: {job['goal']}. Worker report: {result or '(none)'}. "
-                "Tell the owner the outcome in one or two sentences using reply. If it failed, say what went wrong and offer a next step.")
+        waiting = [j for j in self.db.active_jobs(bot_id) if j["after"] == job["id"]]
+        queued = self.db.active_jobs(bot_id)
+        if status == "skipped":
+            self._turn_with(bot_id, f"A queued phone task was skipped, because the task before it did not finish. Goal: {job['goal']}. {result}. "
+                                    "Tell the owner in one sentence that it did not run and why, and offer to retry the earlier task first.", result)
+            return
+        note = (f"The phone job finished with status '{status}'. Goal: {job['goal']}. Worker report: {result or '(none)'}.\n"
+                "First decide whether the goal was REALLY achieved: the report has to show it, and 'done' alone is not proof. If it does not prove it "
+                "(for example an install that was only tapped, or a sign-in the worker did not confirm), check with phone_check (app_installed, account or foreground) "
+                "before you say so. Then tell the owner in one or two sentences using reply: plainly whether it worked, partly worked or failed. "
+                "If it failed or is incomplete for a fixable reason you may start ONE retry with a clearer goal (mobile_task), and say that you are retrying.")
+        if status != "done" and waiting:
+            note += f" {len(waiting)} queued task(s) depended on this one and will be skipped; say so."
+        elif queued:
+            note += f" {len(queued)} more task(s) for this bot are still queued and start by themselves; mention that briefly."
+        self._turn_with(bot_id, note, f"Task {status}: {result or job['goal']}")
+
+    def _turn_with(self, bot_id: str, note: str, fallback: str) -> None:
+        """A system-note turn (a job finished or was skipped) under the bot's lock; if the model fails the owner still gets the plain outcome."""
         with self._locks.setdefault(bot_id, threading.Lock()):
             try:
                 self._turn(bot_id, note)
             except Exception:
-                self.post(bot_id, f"Task {status}: {result or job['goal']}", "result")
+                self.post(bot_id, fallback, "result")
 
     def worker_request(self, bot_id: str, job: dict, payload: dict) -> dict:
         """The worker needs a plain value. Try memory and the model first; otherwise ask the owner in chat.

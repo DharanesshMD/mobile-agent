@@ -63,6 +63,10 @@ class EmulatorBackend:
         """Usable, not just booted: Android sets boot_completed early, and after a long freeze the window service can still be restarting."""
         return self._adb("shell", "getprop", "sys.boot_completed", timeout=4) == "1" and "size" in self._adb("shell", "wm", "size", timeout=5).lower()
 
+    def healthy(self) -> bool:
+        """Does the phone answer right now? adb up and the window service alive (a hung or half-dead emulator fails this)."""
+        return "size" in self._adb("shell", "wm", "size", timeout=8).lower()
+
     def pause(self) -> None:
         self._adb("shell", "input", "keyevent", "KEYCODE_SLEEP", timeout=4)  # screen off first, so apps stop playing and drawing
         for pid in self.pids() + self.netsim_pids():
@@ -112,14 +116,16 @@ class EmulatorBackend:
 
 class Lifecycle:
     def __init__(self, backend, busy=lambda: False, on_ready=lambda cold: None, clock=time.time,
-                 idle_s: float = SLEEP_AFTER_IDLE_MIN * 60, stop_s: float = STOP_AFTER_PAUSED_MIN * 60, tick_s: float = 10):
+                 idle_s: float = SLEEP_AFTER_IDLE_MIN * 60, stop_s: float = STOP_AFTER_PAUSED_MIN * 60, tick_s: float = 10,
+                 health_every_s: float = 60):
         self.backend, self.busy, self.on_ready, self.clock = backend, busy, on_ready, clock
-        self.idle_s, self.stop_s, self.tick_s = idle_s, stop_s, tick_s
+        self.idle_s, self.stop_s, self.tick_s, self.health_every_s = idle_s, stop_s, tick_s, health_every_s
         self._lock = threading.RLock()
         self._ready = threading.Event()
         self._stop_thread = threading.Event()
         self.last_activity = clock()
         self.detail, self.boot_started, self.last_boot_s = "", 0.0, 60.0
+        self._unhealthy, self._health_at = 0, 0.0
         s = backend.status()
         self.power = {"running": "on", "paused": "sleeping"}.get(s, "off")
         self.since = clock()
@@ -196,6 +202,30 @@ class Lifecycle:
         self.wake()
         return self._ready.wait(timeout)
 
+    def ensure_healthy(self, timeout: float = 300) -> bool:
+        """Block until the phone is on AND answering. A phone that is on but not responding is restarted: tasks and owner actions must never hit a dead phone."""
+        if not self.ensure_awake(timeout):
+            return False
+        healthy = getattr(self.backend, "healthy", None)
+        if healthy is None or healthy():
+            return True
+        return self.recover(timeout)
+
+    def recover(self, timeout: float = 300) -> bool:
+        """Restart a phone that stopped answering and wait until it is on again. Safe to call from several threads: one restarts it, the rest wait."""
+        with self._lock:
+            starter = self.power != "waking"
+            if starter:
+                self._set("waking", "Restarting the phone…")
+                self.boot_started = self.clock()
+        if starter:
+            try:
+                self.backend.stop()
+            except Exception:
+                pass
+            self._wake(True, 0)  # boots it, waits until it answers, and leaves a state the owner can retry from if that fails
+        return self._ready.wait(timeout)
+
     def sleep(self) -> bool:
         with self._lock:
             if self.power != "on" or self.busy():
@@ -224,10 +254,25 @@ class Lifecycle:
             elif self.power == "off" and actual == "running":
                 self._set("on")
                 self.touch()
+        self._watch_health(now)
         if self.power == "on" and not self.busy() and now - self.last_activity >= self.idle_s:
             self.sleep()
         elif self.power == "sleeping" and now - self.since >= self.stop_s:
             self.stop()
+
+    def _watch_health(self, now: float) -> None:
+        """An idle phone that is 'on' but stopped answering twice in a row (checked once a minute) is restarted in the background."""
+        healthy = getattr(self.backend, "healthy", None)
+        if healthy is None or self.power != "on" or self.busy() or now - self._health_at < self.health_every_s:
+            return
+        self._health_at = now
+        if healthy():
+            self._unhealthy = 0
+            return
+        self._unhealthy += 1
+        if self._unhealthy >= 2:
+            self._unhealthy = 0
+            threading.Thread(target=self.recover, daemon=True, name="phone-recover").start()
 
     def start(self) -> None:
         def loop() -> None:

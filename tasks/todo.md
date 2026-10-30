@@ -55,3 +55,6 @@ P2:
 - [ ] Next on cost: trim the system prompt, try an earlier model tier for easy steps, more fast paths (open app + deep links)
 - [ ] Android intent fast paths: alarm, timer, SMS compose, contact and calendar insert, maps, dial, share
 - [ ] Cloud device: Redroid (container, no VM) on a Linux host; test binder support first
+
+## Demo-first plan
+Moved to [docs/demo-plan.md](../docs/demo-plan.md) (29 Oct 2026, pending owner approval).

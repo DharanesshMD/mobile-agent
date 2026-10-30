@@ -281,6 +281,15 @@ class Device:
     def accounts(self) -> list[tuple[str, str]]:
         return parse_accounts(self._run("shell", "dumpsys", "account").decode(errors="replace"))
 
+    def packages(self) -> list[str]:
+        out = self._run("shell", "pm", "list", "packages").decode(errors="replace")
+        return [line.split(":", 1)[1].strip() for line in out.splitlines() if line.startswith("package:")]
+
+    def foreground(self) -> str:
+        """Package name of the app in front."""
+        from agent.checks import parse_focus
+        return parse_focus(self._run("shell", "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'").decode(errors="replace"))
+
     def open_app(self, package: str) -> None:
         if package == "com.android.settings":  # Settings has no launcher entry on AOSP-based images
             return self.open_intent("android.settings.SETTINGS")
