@@ -24,6 +24,13 @@ def find_packages(packages: list[str], query: str) -> list[str]:
     return sorted(hits)[:8]
 
 
+def parse_crashes(crash_log: str) -> list[tuple[str, str]]:
+    """(package, pid) of every app crash in `logcat -b crash`: a Java crash prints "Process: pkg, PID: n", a native one "pid: n ... >>> pkg <<<"."""
+    out = [(m.group(1), m.group(2)) for m in re.finditer(r"Process: ([\w.]+), PID: (\d+)", crash_log)]
+    out += [(m.group(2), m.group(1)) for m in re.finditer(r"pid: (\d+), tid: \d+, name: .*? >>> ([\w.]+) <<<", crash_log)]
+    return out
+
+
 def parse_focus(dumpsys_window: str) -> str:
     """The package of the app in front, from `dumpsys window` (mCurrentFocus=Window{... u0 com.pkg/com.pkg.Activity})."""
     m = re.search(r"mCurrentFocus=Window\{[^}]*? ([\w.]+)/", dumpsys_window) or re.search(r"mFocusedApp=.*? ([\w.]+)/", dumpsys_window)

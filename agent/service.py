@@ -22,9 +22,10 @@ from agent.vault import Vault, load_key
 from agent.db import Database
 from agent.hub import Hub
 from agent.device import is_blank
+from agent.remote import PhoneHub
 from agent.jobs import JobManager
 from agent.orchestrator import Orchestrator
-from agent.master import Watcher, ensure_master
+from agent.master import Watcher, ensure_games_bot, ensure_master, ensure_phone_bot
 from agent.routines import Scheduler
 from agent.store import Store
 
@@ -134,7 +135,8 @@ class Swipe(BaseModel):
 
 def create_app(device, model_factory, token: str | None = None, settle: float = 0.4, store: Store | None = None,
                db: Database | None = None, data_dir: str = "data", vault_key: bytes | None = None,
-               start_scheduler: bool = False, master: bool = False, lifecycle=None) -> FastAPI:
+               start_scheduler: bool = False, master: bool = False, lifecycle=None, virtuals: dict | None = None) -> FastAPI:
+    """`virtuals` maps a name ("games") to the (Device, Lifecycle) of a virtual phone, each with its own bot, lane and live view."""
     app = FastAPI(title="Mobile Agent")
     store = store or Store(None)
     runs: dict[str, Run] = {}
@@ -194,7 +196,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
 
     def start_run(goal: str, model: str, max_steps: int, kind: str = "task") -> Run:
         with guard:
-            if active() or jobs.busy():
+            if active() or jobs.busy(""):
                 raise HTTPException(409, "a run is already active on this phone")
             r = Run(goal, model, kind)
             runs[r.id] = r
@@ -373,17 +375,18 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         r = start_run(goal, "muse-wonder-1.0", 20, "deprovision")
         return {**r.summary(), "reminder": "Also review https://myaccount.google.com/device-activity"}
 
-    frame = {"at": 0.0, "jpeg": b""}
-    frame_lock = threading.Lock()
+    frames: dict[str, dict] = {"": {"at": 0.0, "jpeg": b""}}  # live-view cache per phone ("" is the shared emulator)
+    frame_locks: dict[str, threading.Lock] = {"": threading.Lock()}
+    frame, frame_lock = frames[""], frame_locks[""]
 
-    def owner_frame():
+    def owner_frame(device=device, secure_fallback: bool = True):
         """The picture for the owner's live view. Password and purchase screens are secure windows that Android blanks for screenshots; the owner still
         needs to see them to type, so the view falls back to the emulator's own picture. The agent never gets this (its screenshots stay blank there)."""
         try:
             img = device.frame() if hasattr(device, "frame") else Image.open(io.BytesIO(device.screenshot()))
         except Exception:
             img = None
-        if (img is None or is_blank(img)) and hasattr(device, "host_frame"):
+        if secure_fallback and (img is None or is_blank(img)) and hasattr(device, "host_frame"):  # only the emulator draws a window the owner can read
             try:
                 img = device.host_frame()
             except Exception:
@@ -393,20 +396,26 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         return img
 
     @app.get("/api/device/screenshot", dependencies=[Depends(auth)])
-    def screenshot():
-        if lifecycle and lifecycle.power != "on":
+    def screenshot(phone: str | None = Query(default=None)):
+        """The live view of a phone: the shared emulator, or `?phone=games` (watch only)."""
+        lane = f"virtual:{phone}" if phone else ""
+        dev, lc = jobs.pair(lane) if phone else (device, lifecycle)
+        if phone and dev is None:
+            raise HTTPException(404, "unknown phone")
+        if lc and lc.power != "on":
             raise HTTPException(409, "The phone is not on")  # no touch(): watching never keeps it awake
+        cache, lock = frames.setdefault(lane, {"at": 0.0, "jpeg": b""}), frame_locks.setdefault(lane, threading.Lock())
         # One capture at a time and a short cache, so live viewers never compete with the agent for ADB.
-        with frame_lock:
+        with lock:
             # Fresh frames while the owner is driving the phone; slower when the agent is working, so viewers never starve it.
-            ttl = 0.1 if jobs.held else 2.5 if active() and not state["active"].pending else 0.8
-            if time.time() - frame["at"] > ttl:
-                img = owner_frame().convert("RGB")
+            ttl = (0.1 if jobs.held else 2.5 if active() and not state["active"].pending else 0.8) if not phone else 1.0
+            if time.time() - cache["at"] > ttl:
+                img = owner_frame(dev, secure_fallback=not phone).convert("RGB")
                 img.thumbnail((1200, 540) if img.width > img.height else (540, 1200))  # landscape frames keep the same short side
                 buf = io.BytesIO()
                 img.save(buf, "JPEG", quality=70)
-                frame.update(at=time.time(), jpeg=buf.getvalue())
-            jpeg = frame["jpeg"]
+                cache.update(at=time.time(), jpeg=buf.getvalue())
+            jpeg = cache["jpeg"]
         return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     def stale() -> None:
@@ -503,20 +512,46 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         stale()
         return {"ok": True}
 
+    phones = PhoneHub()
+
+    @app.websocket("/api/phone/ws")
+    async def phone_socket(ws: WebSocket):
+        """The Mobile Agent app on the owner's real phone: it dials in with its device token and then answers requests (agent/remote.py)."""
+        given = ws.query_params.get("token", "")
+        dev = store.find_device(given) if given else None
+        admin = bool(token and given and hmac.compare_digest(given.encode(), token.encode()))
+        if token and not (dev or admin):
+            await ws.close(code=1008)
+            return
+        await phones.serve(ws, dev["id"] if dev else "local")
+
+    @app.get("/api/phones", dependencies=[Depends(auth)])
+    def list_phones():
+        return phones.listing()
+
     db = db or Database(":memory:")
     hub = Hub()
     vault = Vault(db, vault_key or secrets.token_bytes(32))  # an in-memory db gets a throwaway key
     jobs = JobManager(db, hub, device, model_factory, data_dir=data_dir, settle=settle, external_busy=lambda: bool(active()), vault=vault)
     orch = Orchestrator(db, hub, model_factory, jobs, vault)
     jobs.orch = orch
+    jobs.phones = phones
+    for name, (vdev, vlc) in (virtuals or {}).items():
+        jobs.virtuals[name] = (vdev, vlc)
+        vlc.busy = lambda lane=f"virtual:{name}": jobs.busy(lane)  # a running game task keeps its phone awake
+        if name == "games":
+            ensure_games_bot(db, hub, name)
+    phones.on_change = lambda: [hub.publish(b["id"], {"type": "refresh", "what": "phone"}) for b in db.list_bots()]
+    phones.on_connect = lambda pid, info: ensure_phone_bot(db, hub, pid, info)
+    app.state.phones = phones
     if lifecycle:
         jobs.lifecycle = lifecycle
-        lifecycle.busy = lambda: jobs.busy() or jobs.held or bool(active())  # an active task or owner control keeps the phone awake
+        lifecycle.busy = lambda: jobs.busy("") or jobs.held or bool(active())  # an active task or owner control keeps the phone awake
     scheduler = Scheduler(db, orch)
     orch.routines = scheduler
     scheduler.on_change = lambda bot_id: hub.publish(bot_id, {"type": "refresh", "what": "routines"})
     vault.on_change = lambda: [hub.publish(b["id"], {"type": "refresh", "what": "vault"}) for b in db.list_bots()]
-    if not [b for b in db.list_bots() if b["kind"] != "master"]:
+    if not [b for b in db.list_bots() if b["kind"] == "bot"]:  # the master and the phones' bots do not count: there is always an ordinary assistant
         db.create_bot("Assistant", "")
     watcher = Watcher(db, hub)
     if master:
@@ -529,6 +564,8 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         watcher.start()
         if lifecycle:
             lifecycle.start()
+        for _, vlc in (virtuals or {}).values():
+            vlc.start()
     return app
 
 
@@ -544,12 +581,19 @@ def prepare_with_retries(device, tries: int = 10) -> None:
             time.sleep(3)
 
 
+def default_serial(env_serial: str | None, emulator_available: bool) -> str | None:
+    """Every adb call names its phone: with the games phone attached to the same adb server, an unnamed call fails with "more than one device".
+    The shared phone is ANDROID_SERIAL, else the local emulator; a real USB phone with no emulator on this computer stays the only device."""
+    return env_serial or ("emulator-5554" if emulator_available else None)
+
+
 def create_default_app() -> FastAPI:
     from agent.device import Device
     from agent.lifecycle import EmulatorBackend, Lifecycle
+    from agent.virtual import GAMES, LimaRedroidBackend, SERIAL as GAMES_SERIAL
     from agent.model import MetaClient, load_env
     load_env()
-    device = Device(os.environ.get("ANDROID_SERIAL"))
+    device = Device(default_serial(os.environ.get("ANDROID_SERIAL"), EmulatorBackend.available()))
     light = os.environ.get("PHONE_PROFILE", "light") == "light"
     lifecycle = None
     if os.environ.get("PHONE_SLEEP", "on") != "off" and EmulatorBackend.available():
@@ -566,10 +610,16 @@ def create_default_app() -> FastAPI:
                 prepare_with_retries(device)
         except Exception as e:  # a phone that is still settling must not stop the server from starting
             print(f"Could not apply the light profile yet ({type(e).__name__}); continuing.", flush=True)
+    virtuals = {}
+    if os.environ.get("GAMES_PHONE", "on") != "off" and LimaRedroidBackend.available():  # the games phone exists on this computer; nothing is started yet
+        games = Device(GAMES_SERIAL)
+        glc = Lifecycle(LimaRedroidBackend(), on_ready=lambda cold: games.reconnect())  # a new boot or a long freeze: forget cached connections
+        glc.last_boot_s = 15  # a cold start (the VM, then the container) takes about 15 s: the progress bar should not promise a minute
+        virtuals[GAMES] = (games, glc)
     app = create_app(device, lambda m: MetaClient(m),
                      token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
                      db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True,
-                     lifecycle=lifecycle)
+                     lifecycle=lifecycle, virtuals=virtuals)
     print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)
     return app
 

@@ -1,7 +1,8 @@
-"""Background phone jobs: one shared phone, a queue that respects dependencies, owner takeover, and worker gates turned into chat cards.
+"""Background phone jobs: a queue per phone that respects dependencies, owner takeover, and worker gates turned into chat cards.
 
-Jobs run one at a time in the order they were asked, except that a job with `after` waits until that job is done and is skipped if it did not
-succeed. A job waiting for the owner gives the phone up after OWNER_WAIT_MIN, owner control of the phone ends after HOLD_IDLE_MIN without input,
+Every phone is its own lane: the shared emulator (lane ""), each virtual phone ("virtual:games") and each real phone ("phone:<id>"). A lane runs one job at a
+time in the order they were asked, and lanes run in parallel, so a long game task never blocks the other bots. A job with `after` waits until that job is
+done (in any lane) and is skipped if it did not succeed. A job waiting for the owner gives the phone up after OWNER_WAIT_MIN, owner control of the phone ends after HOLD_IDLE_MIN without input,
 and a job that hits a dead phone restarts it and runs once more, so the queue cannot freeze on one stuck task or one dead emulator.
 """
 import shutil
@@ -15,6 +16,7 @@ from agent.config import HOLD_IDLE_MIN, OWNER_WAIT_MIN, WORKER_MODEL
 from agent.db import Database
 from agent.graph import build_graph, run as run_graph
 from agent.hub import Hub
+from agent.remote import RemoteDevice
 from agent.vault import SecretUse, Vault
 
 ACTIVE = ("queued", "running", "waiting")
@@ -31,6 +33,8 @@ def is_phone_error(e: Exception) -> bool:
 class JobRun:
     def __init__(self, job: dict, status_msg_id: int):
         self.job_id, self.bot_id, self.goal, self.after, self.verify = job["id"], job["bot_id"], job["goal"], job.get("after"), job.get("verify")
+        self.target = job.get("target") or ""  # "" is the shared emulator, "virtual:games" the games phone, "phone:<id>" the owner's real phone
+        self.lane = self.target  # one running job per lane
         self.timed_out = False
         self.status_msg_id = status_msg_id
         self.cancel = threading.Event()
@@ -50,20 +54,50 @@ class JobManager:
         self.external_busy = external_busy or (lambda: False)
         self.vault = vault
         self.lifecycle = None  # phone power (sleep and wake), attached by the app
+        self.phones = None  # real phones connected through the app (agent/remote.py), attached by the app
+        self.virtuals: dict[str, tuple] = {}  # name -> (Device, Lifecycle) of each virtual phone (agent/virtual.py), attached by the app
         self.orch = None  # set by the app after construction
         self.graph = build_graph()
         self.runs: dict[str, JobRun] = {}
-        self.current: JobRun | None = None
-        self._pending: list[JobRun] = []  # queued jobs in the order they were asked
+        self._running: dict[str, JobRun] = {}  # lane -> its running job
+        self._pending: list[JobRun] = []  # queued jobs in the order they were asked, all lanes
         self._cv = threading.Condition()
-        self.held = False
-        self._thread: threading.Thread | None = None
+        self.held = False  # the owner has control of the shared emulator (the only phone with owner control)
+        self._threads: dict[str, threading.Thread] = {}
+        self._started = False
 
     # --- lifecycle -----------------------------------------------------------------------------------------------
     def start(self) -> None:
         self.recover()
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="phone-jobs")
-        self._thread.start()
+        self._started = True
+        for lane in {"", *(jr.lane for jr in self._pending)}:
+            self._ensure_lane(lane)
+
+    def _ensure_lane(self, lane: str) -> None:
+        """Each lane has its own worker thread, started when the lane first has work."""
+        with self._cv:
+            t = self._threads.get(lane)
+            if not self._started or (t and t.is_alive()):
+                return
+            self._threads[lane] = t = threading.Thread(target=self._loop, args=(lane,), daemon=True, name=f"phone-jobs{':' + lane if lane else ''}")
+        t.start()
+
+    @property
+    def current(self) -> "JobRun | None":
+        """The job running on the shared emulator."""
+        return self._running.get("")
+
+    def running(self) -> list["JobRun"]:
+        return list(self._running.values())
+
+    def lane_of(self, bot_id: str) -> str:
+        """Which phone a bot's jobs run on: the games phone's bot and a real phone's bot have their own, every other bot uses the shared emulator."""
+        bot = self.db.get_bot(bot_id) or {}
+        if bot.get("kind") == "phone" and bot.get("phone_id"):
+            return f"phone:{bot['phone_id']}"
+        if bot.get("kind") == "virtual" and bot.get("phone_id"):
+            return f"virtual:{bot['phone_id']}"
+        return ""
 
     def recover(self) -> None:
         """After a restart nothing is really running: fail the jobs that were running or waiting and close their cards.
@@ -97,37 +131,62 @@ class JobManager:
                           (bot_id, *ACTIVE))
         return rows[0] if rows else None
 
-    def busy(self) -> bool:
-        return self.current is not None or bool(self._pending)
+    def busy(self, lane: str | None = None) -> bool:
+        """Is a phone busy? With a lane, that phone only; without, any phone."""
+        with self._cv:
+            if lane is None:
+                return bool(self._running) or bool(self._pending)
+            return lane in self._running or any(r.lane == lane for r in self._pending)
 
-    def state(self) -> dict:
-        cur = self.current
+    def busy_for_bot(self, bot_id: str) -> bool:
+        return self.busy(self.lane_of(bot_id))
+
+    def pair(self, lane: str) -> tuple:
+        """(device, lifecycle) of a lane's phone: the shared emulator, or a virtual phone."""
+        if lane.startswith("virtual:"):
+            return self.virtuals.get(lane.split(":", 1)[1], (None, None))
+        if lane.startswith("phone:"):
+            return None, None  # a real phone is reached through the hub, with no power to manage
+        return self.device, self.lifecycle
+
+    def state(self, lane: str = "") -> dict:
+        """The Mobile panel's view of one phone (the shared emulator by default, or `virtual:games`), plus a summary of every lane."""
+        with self._cv:
+            cur = self._running.get(lane)
+            queue = [r for r in self._pending if r.lane == lane]
         job = self.db.get_job(cur.job_id) if cur else None
-        if self.held:
+        held = self.held and lane == ""
+        if held:
             state = "control"
         elif job:
             state = "waiting" if job["status"] == "waiting" else "working"
         else:
             state = "ready"
-        power = self.lifecycle.info() if self.lifecycle else {"power": "on"}
+        device, lifecycle = self.pair(lane)
+        power = lifecycle.info() if lifecycle else {"power": "on"}
         try:  # never ask a sleeping phone anything: its adb connection would hang
-            orientation = self.device.orientation() if power["power"] == "on" and hasattr(self.device, "orientation") else "portrait"
+            orientation = device.orientation() if device is not None and power["power"] == "on" and hasattr(device, "orientation") else "portrait"
         except Exception:
             orientation = "portrait"
-        return {"state": state, "held": self.held, "job": job, "queued": len(self._pending), "queue": [{"id": r.job_id, "bot_id": r.bot_id, "goal": r.goal[:100], "after": r.after} for r in self._pending], "orientation": orientation, "phone": power}
+        lanes = {f"virtual:{name}": {"power": (lc.info() if lc else {"power": "on"})["power"], "busy": self.busy(f"virtual:{name}")} for name, (_, lc) in self.virtuals.items()}
+        return {"phones": self.phones.listing() if self.phones else [], "state": state, "held": held, "job": job, "queued": len(queue),
+                "queue": [{"id": r.job_id, "bot_id": r.bot_id, "goal": r.goal[:100], "after": r.after} for r in queue], "orientation": orientation, "phone": power,
+                "lanes": lanes}
 
     # --- submit and cancel ---------------------------------------------------------------------------------------
     def submit(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None) -> dict:
         """Queue a phone job. With `after` (a job id) it waits for that job to finish successfully and is skipped if it does not.
         With `verify` (a phone check) the worker's "done" only counts if the phone really shows it."""
-        job = self.db.create_job(bot_id, goal, after, verify, routine)
-        msg = self.db.add_message(bot_id, "assistant", "status", "Waiting for the phone…" if self.busy() or after else "Starting…", {"job_id": job["id"]})
+        target = self.lane_of(bot_id)  # a phone's bot only ever works on that phone, and no other bot ever uses it
+        job = self.db.create_job(bot_id, goal, after, verify, routine, target)
+        msg = self.db.add_message(bot_id, "assistant", "status", "Waiting for the phone…" if self.busy(target) or after else "Starting…", {"job_id": job["id"]})
         self.hub.publish(bot_id, {"type": "message", "message": msg})
         jr = JobRun(job, msg["id"])
         self.runs[job["id"]] = jr
         with self._cv:
             self._pending.append(jr)
             self._cv.notify_all()
+        self._ensure_lane(jr.lane)
         self._announce_queue()
         return job
 
@@ -184,7 +243,7 @@ class JobManager:
             self.release_control()
 
     def _pause(self, jr: JobRun) -> None:
-        if not self.held:
+        if not self.held or jr.target:  # owner control is about the emulator
             return
         self._set_status(jr, "Paused: you have control of the phone")
         with self._cv:
@@ -219,21 +278,21 @@ class JobManager:
             return "run"
         return "wait" if dep["status"] in ACTIVE else "skip"
 
-    def _take_next(self) -> JobRun:
-        """Block until a queued job can run and claim it (the oldest runnable one, so a job waiting on a dependency never blocks the others)."""
+    def _take_next(self, lane: str = "") -> JobRun:
+        """Block until a queued job of this lane can run and claim it (the oldest runnable one, so a job waiting on a dependency never blocks the others)."""
         while True:
             skipped, pick = [], None
             with self._cv:
-                for jr in list(self._pending):
+                for jr in [r for r in self._pending if r.lane == lane]:
                     v = self._verdict(jr)
                     if v == "skip":
                         skipped.append(jr)
                         self._pending.remove(jr)
-                    elif v == "run" and pick is None and not self.external_busy():
+                    elif v == "run" and pick is None and (lane != "" or not self.external_busy()):  # a task started from the web page uses the emulator
                         pick = jr
                 if pick:
                     self._pending.remove(pick)
-                    self.current = pick  # claimed under the lock, so busy() never reads "idle" between the queue and the phone
+                    self._running[lane] = pick  # claimed under the lock, so busy() never reads "idle" between the queue and the phone
                 elif not skipped:
                     self._cv.wait(1.0)  # woken by a new job, a finished job or a cancel; the timeout covers external changes
             self._expire_hold()
@@ -254,8 +313,11 @@ class JobManager:
     def _announce_queue(self) -> None:
         """Tell each queued job in its chat what it is waiting for."""
         with self._cv:
-            pending, cur = list(self._pending), self.current
-        for i, jr in enumerate(pending):
+            pending, running = list(self._pending), dict(self._running)
+        seen: dict[str, int] = {}
+        for jr in pending:
+            i, cur = seen.get(jr.lane, 0), running.get(jr.lane)
+            seen[jr.lane] = i + 1
             dep = self.db.get_job(jr.after) if jr.after else None
             if dep and dep["status"] in ACTIVE:
                 text = f"Waiting for an earlier task first: {dep['goal'][:60]}"
@@ -270,15 +332,15 @@ class JobManager:
             except Exception:
                 pass  # the status line is cosmetic
 
-    def _loop(self) -> None:
+    def _loop(self, lane: str = "") -> None:
         while True:
-            jr = self._take_next()
+            jr = self._take_next(lane)
             try:
                 self._execute(jr)
             except Exception as e:  # never let the worker thread die
                 self.db.update_job(jr.job_id, status="failed", ended=time.time(), result=f"{type(e).__name__}: {e}")
             finally:
-                self.current = None
+                self._running.pop(lane, None)
                 self.runs.pop(jr.job_id, None)
                 with self._cv:
                     self._cv.notify_all()
@@ -298,10 +360,20 @@ class JobManager:
             if dep and dep["result"]:
                 jr.goal += f"\nResult of the previous step: {dep['result'][:400]}"
                 self.db.update_job(jr.job_id, goal=jr.goal)
-        if self.lifecycle:
-            if self.lifecycle.power != "on":
+        device, lifecycle = self.device, self.lifecycle
+        if jr.target.startswith("virtual:"):  # the games phone: its own device and power, never the emulator
+            device, lifecycle = self.pair(jr.target)
+            if device is None:
+                return self._fail(jr, "The games phone is not set up on this computer (see docs/virtual-android.md).")
+        elif jr.target.startswith("phone:"):  # the owner's own phone: no emulator to wake, but the app on it has to be connected
+            pid = self.phones.pick(jr.target.split(":", 1)[1]) if self.phones else None
+            if not pid:
+                return self._fail(jr, "Your phone is not connected. Open the Mobile Agent app on it (and allow it to run in the background), then ask again.")
+            device, lifecycle = RemoteDevice(self.phones, pid), None
+        if lifecycle:
+            if lifecycle.power != "on":
                 self._set_status(jr, "Waking the phone…")  # a sleeping phone resumes in about a second, a stopped one boots in about a minute
-            if not self.lifecycle.ensure_healthy(300):
+            if not lifecycle.ensure_healthy(480):
                 return self._fail(jr, "The phone did not wake up in time")
             self._set_status(jr, "Starting…")
         trace = self.data_dir / "runs" / jr.job_id
@@ -309,30 +381,30 @@ class JobManager:
         while True:
             jr.notes.clear()  # updates sent while it was queued, or before a retry, are already part of the goal
             try:
-                res = run_graph(jr.goal, self.device, self.model_factory(WORKER_MODEL), self.max_steps, trace_dir=trace,
+                res = run_graph(jr.goal, device, self.model_factory(WORKER_MODEL), self.max_steps, trace_dir=trace,
                                 settle=self.settle, handler=lambda p: self._handler(jr, p), emit=lambda e: self._emit(jr, e),
                                 cancel=jr.cancel, pause=lambda: self._pause(jr), graph=self.graph, steer=lambda: self._take_notes(jr),
                                 secrets=SecretUse(self.vault, jr.job_id) if self.vault else None)
                 status, result = res.status, res.answer
                 break
             except Exception as e:
-                if self.lifecycle and attempt < self.phone_retries and is_phone_error(e) and not jr.cancel.is_set():
+                if lifecycle and attempt < self.phone_retries and is_phone_error(e) and not jr.cancel.is_set():
                     attempt += 1  # the phone hung or went offline mid-task: restart it and run the task once more
                     self._set_status(jr, "The phone stopped responding. Restarting it…")
-                    if self.lifecycle.recover(300):
+                    if lifecycle.recover(300):
                         self._set_status(jr, "Starting again…")
                         continue
                 result = f"{type(e).__name__}: {str(e)[:200]}"
                 break
         if status == "done" and jr.verify:
-            ok, detail = run_check(self.device, jr.verify)
+            ok, detail = run_check(device, jr.verify)
             if not ok:  # the worker said it was done but the phone disagrees: the job counts as failed, so tasks that depend on it do not run
                 status, result = "failed", f"The worker reported done, but the check on the phone failed: {detail}. Worker said: {result}"[:500]
         if jr.timed_out:
             status, result = "failed", f"Timed out after {round(self.owner_wait_s / 60)} min waiting for the owner. The task was stopped and the phone released."
         job = self.db.update_job(jr.job_id, status=status, ended=time.time(), result=result, trace_dir=str(trace))
-        if self.lifecycle:
-            self.lifecycle.touch()  # the idle timer starts when the task ends
+        if lifecycle:
+            lifecycle.touch()  # the idle timer starts when the task ends
         self._drop_status(jr)
         self._close_items(jr)
         self._save_artifact(jr, trace, status)

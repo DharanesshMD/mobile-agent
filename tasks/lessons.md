@@ -28,3 +28,18 @@ Polling a slow download one short wait at a time used all 25 steps at 9%. Make w
 
 ## Chat text is not a card answer
 The owner typed "done" in chat while the task waited on a handoff card, and the bot said "continuing" while nothing resumed. Whatever the owner can say in chat that means "go on" must call the same code path as the card, for handoffs only, never for approvals.
+
+## 9. Apps can refuse to run on the emulator: detect the crash, stop, say so
+Clash of Clans reads emulator properties at start-up and kills itself ("keeps stopping"). The worker saw only a splash screen and waited for a village that never came, 14+ steps, then the orchestrator retried.
+- Read Android's crash log every step (`logcat -b crash`), count crashes per package, tell the model, stop at CRASH_LIMIT with a plain reason.
+- A crash-stopped task is never retried automatically, and the reason is remembered in the bot's memory.
+
+## 10. Restarting the server by hand: same PATH, one process
+I restarted the service from a shell without `adb` on PATH: the phone looked "booting" forever and jobs failed with "did not wake up". `pgrep` also returned two pids and `kill "a\nb"` killed neither, so two services fought over one emulator.
+- Start it with `export PATH=/opt/homebrew/share/android-commandlinetools/platform-tools:$PATH`, and check `which adb` first.
+- Kill by pid list (`pkill -f`), then `pgrep` again to confirm exactly one process before starting.
+
+## 11. The project's server is the one in .claude/launch.json (port 8000): never start a second copy
+The Claude app starts `mobile-agent` (port 8000, adb on PATH) from `/Users/dharun/Personal/Projects/.claude/launch.json`. I had also started my own copy on 8001, so two services shared one SQLite db and one emulator.
+- Before starting a server: `pgrep -fl "agent.service"` and `lsof -iTCP -sTCP:LISTEN | grep python`. If one exists, restart that one (kill its pid, then preview_start `mobile-agent`), do not add another.
+

@@ -75,6 +75,10 @@
   .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; }
   .chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); display: block; }
   .chip.sleeping i { background: #6b7385; } .chip.off i { background: var(--bad); } .chip.waking i { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+  .yourphone { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+  .yourphone b { font-weight: 650; font-size: 14px; } .yourphone .dim { color: var(--dim); }
+  .yourphone .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #3ecf8e; margin-right: 7px; } .yourphone .dot.off { background: var(--dim); }
+  .yourphone .code { font-size: 22px; letter-spacing: .12em; font-weight: 650; font-variant-numeric: tabular-nums; }
   .phonecard { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 28px 18px; border: 1px dashed var(--line); border-radius: 22px; background: var(--panel); min-height: 260px; }
   .phonecard svg { width: 34px; height: 34px; fill: none; stroke: var(--dim); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .phonecard .ttl { font-weight: 650; } .phonecard .sub { color: var(--dim); font-size: 13px; max-width: 260px; } .phonecard .err { color: var(--bad); font-size: 13px; max-width: 260px; }
@@ -326,6 +330,8 @@ function renderBots() {
     btn.onclick = () => { selectBot(b.id); $("app").classList.remove("show-side"); };
     const row = el("div", "botrow" + (b.kind === "master" ? " master" : "")), more = el("button", "more");
     if (b.kind === "master") row.append(el("span", "tag", "Master"));
+    if (b.kind === "phone") row.append(el("span", "tag", "Phone"));
+    if (b.kind === "virtual") row.append(el("span", "tag", "Games"));
     if (b.unread && !(S.bot && S.bot.id === b.id)) btn.append(el("span", "unread"));
     more.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></svg>';
     more.setAttribute("aria-label", "Bot options");
@@ -425,6 +431,7 @@ function onEvent(ev) {
     if (m.kind === "action_item" && m.meta.status === "open") pollMobile();
   } else if (ev.type === "message_delete") { S.msgs.delete(ev.id); renderFeed(); }
   else if (ev.type === "refresh" && ((ev.what === "routines" && S.tab === "details") || (ev.what === "vault" && S.tab === "vault"))) renderTab();
+  else if (ev.type === "refresh" && ev.what === "phone") { loadBots(); pollMobile().then(() => { if (S.tab === "mobile") renderTab(); }); }
   if (S.tab === "library") renderTab();
 }
 let botsTimer; function loadBotsSoon() { clearTimeout(botsTimer); botsTimer = setTimeout(loadBots, 400); }
@@ -600,7 +607,10 @@ const STATE_TEXT = { ready: "Ready", working: "Working", waiting: "Waiting for y
 const power = () => (S.mobile.phone && S.mobile.phone.power) || "on";
 const effState = () => power() === "on" ? S.mobile.state : power();
 const ICONS = { sleeping: '<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/>', off: '<path d="M12 3v8M6.5 6.8a8 8 0 1011 0"/>', waking: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>' };
-async function wakePhone() { try { S.mobile = await api("/api/mobile/wake", {}); } catch (e) { toast(e.message); } pollMobile(); }
+// The games phone is a second virtual Android with its own bot: its Mobile tab shows that phone (watch only), so its calls name it.
+const phoneQ = () => S.bot && S.bot.kind === "virtual" ? "phone=games" : "";
+const phoneUrl = (path, extra) => path + "?" + [extra, phoneQ()].filter(Boolean).join("&");
+async function wakePhone() { try { S.mobile = await api(phoneUrl("/api/mobile/wake"), {}); } catch (e) { toast(e.message); } pollMobile(); }
 // What the phone is doing instead of a picture: asleep, off, or starting (with progress).
 function phoneCard() {
   const p = S.mobile.phone || {}, c = el("div", "phonecard"), ic = el("div"); ic.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[p.power] || ICONS.off}</svg>`; c.append(ic);
@@ -611,30 +621,62 @@ function phoneCard() {
     c.append(el("div", "sub", p.expected && p.expected > 5 ? `${p.elapsed || 0}s of about ${p.expected}s` : "Just a moment"));
   } else {
     c.append(el("div", "ttl", p.power === "sleeping" ? "The phone is asleep" : "The phone is off"));
-    c.append(el("div", "sub", p.power === "sleeping" ? "It resumes in about a second. To save power it turns fully off after a while asleep." : "Starting it takes about a minute. Tasks start it for you."));
+    c.append(el("div", "sub", p.power === "sleeping" ? "It resumes in about a second. To save power it turns fully off after a while asleep." : (S.bot && S.bot.kind === "virtual" ? "Starting it takes about 15 seconds. Tasks start it for you." : "Starting it takes about a minute. Tasks start it for you.")));
     if (failed) c.append(el("div", "err", p.detail));
     const b = el("button", "primary", p.power === "sleeping" ? "Wake the phone" : "Start the phone"); b.onclick = wakePhone; c.append(b);
   }
   return c;
+}
+// Pairing for the owner's own phone: a code to type into the Mobile Agent app.
+function pairBox() {
+  const out = el("div"), btn = el("button", "ghost", "Get a pairing code");
+  btn.onclick = async () => {
+    try { const r = await api("/api/pair/code", {}); out.replaceChildren(el("div", "code", r.code), el("div", "dim", `Enter it in the app with this server address: ${location.origin}. Valid for ${Math.round(r.expires_in / 60)} minutes.` + (/^(localhost|127\.)/.test(location.hostname) ? " A real phone cannot reach localhost: start the server with HOST=0.0.0.0 and APP_TOKEN set and use this computer's address on your Wi-Fi (for example http://192.168.1.20:8001), or a Tailscale address." : ""))); } catch (e) { toast(e.message); }
+  };
+  const box = el("div"); box.append(btn, out); return box;
+}
+// On the shared bots: the owner's own phone has its own bot, or can be connected with the Mobile Agent app.
+function yourPhone() {
+  const box = el("div", "yourphone"), mine = S.bots.filter(b => b.kind === "phone");
+  if (mine.length) {
+    box.append(el("b", "", "Your own phone"), el("div", "dim", "Tasks for your phone go through its own bot, so they never mix with the shared emulator."));
+    for (const b of mine) { const open = el("button", "ghost", "Open " + b.name); open.onclick = () => selectBot(b.id); box.append(open); }
+    return box;
+  }
+  box.append(el("b", "", "Use your own phone"), el("div", "dim", "Install the Mobile Agent app on your Android phone and pair it. It gets its own bot, which runs tasks on your phone in the background (games and apps that refuse to run on the emulator work there)."), pairBox());
+  return box;
+}
+// The Mobile tab of a phone's own bot: the real phone's status instead of the emulator view.
+function phoneBotPanel() {
+  const me = (S.mobile.phones || []).find(p => p.id === S.bot.phone_id), box = el("div", "yourphone");
+  const head = el("div"); head.innerHTML = me ? '<span class="dot"></span>' : '<span class="dot off"></span>'; head.append(el("b", "", S.bot.name), el("span", "dim", me ? " · connected" : " · not connected")); box.append(head);
+  box.append(el("div", "dim", me ? "Tasks run in the background on this phone through the Mobile Agent app. You will see the phone move while it works. Stop from the notification on the phone, or here in the chat."
+    : "Open the Mobile Agent app on your phone and keep it allowed to run in the background. If you signed out of the app, pair it again with a new code."));
+  if (!me) box.append(pairBox());
+  return box;
 }
 function sleepNote() {
   const p = S.mobile.phone || {}, n = el("div", "sleepnote"); n.id = "sleepNote";
   if (p.power !== "on") return n;
   if (p.sleeps_in === undefined) { n.textContent = "Stays awake while it has work"; return n; }
   n.append(el("span", "", `Sleeps in ${p.sleeps_in >= 60 ? Math.ceil(p.sleeps_in / 60) + " min" : p.sleeps_in + " s"} if idle`));
-  const b = el("button", "ghost", "Sleep now"); b.onclick = async () => { try { S.mobile = await api("/api/mobile/sleep", {}); } catch (e) { toast(e.message); } pollMobile(); }; n.append(b); return n;
+  const b = el("button", "ghost", "Sleep now"); b.onclick = async () => { try { S.mobile = await api(phoneUrl("/api/mobile/sleep"), {}); } catch (e) { toast(e.message); } pollMobile(); }; n.append(b); return n;
 }
 async function renderTab() {
   const t = $("tab"); if (!S.bot) return;
   if (S.tab === "mobile") {
     t.replaceChildren(); S.shownPower = power();
-    const cap = el("div", "cap"); cap.append(el("div", "", S.bot.kind === "master" ? "The shared phone" : S.bot.name + "'s phone"));
+    if (S.bot.kind === "phone") { t.append(phoneBotPanel()); return; }  // a real phone: its status, not a picture
+    const cap = el("div", "cap"); cap.append(el("div", "", S.bot.kind === "master" ? "The shared phone" : S.bot.kind === "virtual" ? "Games phone" : S.bot.name + "'s phone"));
     const chip = el("div", "chip " + effState()); chip.id = "stateChip"; chip.append(el("i"), el("span", "", STATE_TEXT[effState()] || effState())); cap.append(chip);
-    if (power() !== "on") { t.append(phoneCard(), cap); return; }  // no picture while it sleeps: nothing to show, and watching must not wake it
+    if (power() !== "on") { t.append(phoneCard(), cap); if (S.bot.kind !== "virtual") t.append(yourPhone()); return; }  // no picture while it sleeps: nothing to show, and watching must not wake it
     const th = el("div", "thumb"), img = el("img"); img.id = "thumbImg"; img.alt = "Live view of the phone"; th.append(img);
-    const open = el("button", "open", "Open"); open.onclick = () => openOverlay({}); th.append(open);
+    const games = S.bot.kind === "virtual";
+    if (!games) { const open = el("button", "open", "Open"); open.onclick = () => openOverlay({}); th.append(open); }  // the games phone is watch only
     cap.append(sleepNote());
-    t.append(th, cap); th.classList.toggle("landscape", !!S.landscape); refreshShot();
+    if (games) cap.append(el("div", "sleepnote", "Watch only: this light virtual Android is driven by its bot. Games draw one picture, so the bot works from screenshots."));
+    t.append(th, cap); if (!games) t.append(yourPhone());
+    th.classList.toggle("landscape", !!S.landscape); refreshShot();
   } else if (S.tab === "vault") {
     t.replaceChildren(); const v = el("div", "vault");
     v.append(el("div", "note", "Saved secrets are encrypted and never shown. To add one, ask the bot (for example: save my Netflix password): it shows a secure input card in the chat that disappears once saved. The agent types a secret only after you approve each use."));
@@ -707,7 +749,7 @@ function updateLayout() {
   app.classList.toggle("landscape", show); if (show) app.classList.remove("show-side");
 }
 async function pollMobile() {
-  try { S.mobile = await api("/api/mobile/state"); } catch { return; }
+  try { S.mobile = await api(phoneUrl("/api/mobile/state")); } catch { return; }
   applyOrientation(S.mobile.orientation === "landscape");
   const eff = effState(), chip = $("stateChip"); if (chip) { chip.className = "chip " + eff; chip.lastChild.textContent = STATE_TEXT[eff] || eff; }
   $("phoneChip").className = "chip " + eff; $("phoneChip").lastChild.textContent = "Phone: " + (STATE_TEXT[eff] || "").toLowerCase();
@@ -723,7 +765,7 @@ async function refreshShot() {
   if (shotBusy) { shotAgain = true; return; }  // a request is in flight: fetch again right after it, so a tap's result is never missed
   shotBusy = true;
   try {
-    const r = await fetch("/api/device/screenshot?t=" + Date.now(), { headers: auth() });
+    const r = await fetch(phoneUrl("/api/device/screenshot", "t=" + Date.now()), { headers: auth() });
     if (r.status === 409) { pollMobile(); shotBusy = false; return; }  // the phone is not on: show its state, not a picture
     if (r.ok) { const u = URL.createObjectURL(await r.blob()), old = img.src; img.onload = () => applyOrientation(img.naturalWidth > img.naturalHeight); img.src = u; if (old.startsWith("blob:")) URL.revokeObjectURL(old); }
   } catch {}

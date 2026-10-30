@@ -21,9 +21,18 @@ from langgraph.types import Command, interrupt
 
 from agent.device import Element
 from agent.config import IMAGE_MODE, IMAGE_WIDTH
-from agent.config import MAX_JOB_MINUTES, MAX_WAIT_S
-from agent.loop import GATES, SYSTEM, build_prompt, execute, need_image, parse_action, shrink
+from agent.config import CRASH_LIMIT, MAX_JOB_MINUTES, MAX_WAIT_S
+from agent.loop import ANIMATED_AFTER, ANIMATED_SAME, GATES, SYSTEM, build_prompt, coarse, coarse_diff, execute, need_image, parse_action, shrink
 from agent.loop import settle as settle_screen
+
+
+CRASH_PREFIX = "App keeps crashing: "  # the orchestrator recognises a failed task by this start and does not retry it
+
+
+def crash_report(pkg: str, n: int, emulator: bool) -> str:
+    why = (" It closes itself right after it starts, which some apps and games do on an emulated phone (they detect it and refuse to run)."
+           if emulator else "")
+    return f"{CRASH_PREFIX}{pkg} crashed {n} times while opening, so I stopped instead of trying again and again.{why} It cannot be fixed by tapping."
 
 
 class State(TypedDict, total=False):
@@ -32,6 +41,7 @@ class State(TypedDict, total=False):
     history: list[str]
     acts: list[dict]
     last_hash: str
+    last_sig: bytes  # a coarse picture of the last screen, to see that an animated game screen did not really change
     unchanged: int
     obs: dict
     action: dict
@@ -39,6 +49,8 @@ class State(TypedDict, total=False):
     status: str
     answer: str
     waits: int  # steps spent only waiting (a download, a loading screen): they do not use the step budget
+    crash_seen: list[str]  # "package:pid" of crashes already counted, so each is counted once
+    crashes: dict  # package -> crashes during this task
 
 
 @dataclass
@@ -90,20 +102,43 @@ def observe(state: State, config: RunnableConfig) -> dict:
         return {"status": "max_steps", "answer": f"time budget exhausted ({round(c['max_minutes'])} min); the phone may still be working on it"}
     dev = c["device"]
     t0 = time.time()
-    with ThreadPoolExecutor(2) as ex:  # the screenshot and the UI tree are independent ADB calls
+    with ThreadPoolExecutor(3) as ex:  # the screenshot, the UI tree and the crash log are independent ADB calls
         f_shot, f_tree = ex.submit(_timed, dev.screenshot), ex.submit(_timed, dev.elements)
+        f_crash = ex.submit(dev.crashes) if hasattr(dev, "crashes") else None
         (png, shot_ms), (elements, tree_ms) = f_shot.result(), f_tree.result()
+        try:
+            logged = f_crash.result() if f_crash else []
+        except Exception:  # the crash log is a help, never a reason to stop
+            logged = []
+    seen, crashes = list(state.get("crash_seen", [])), dict(state.get("crashes", {}))
+    for pkg, pid in logged:
+        if f"{pkg}:{pid}" not in seen:
+            seen.append(f"{pkg}:{pid}")
+            if "crash_seen" in state:  # the first look only records what crashed before this task began
+                crashes[pkg] = crashes.get(pkg, 0) + 1
+    crash_state = {"crash_seen": seen, "crashes": crashes}
+    worst = max(crashes, key=crashes.get, default=None)
+    if worst and crashes[worst] >= CRASH_LIMIT:
+        return {**crash_state, "status": "failed", "answer": crash_report(worst, crashes[worst], bool(getattr(dev, "is_emulator", lambda: False)()))}
     w0, h0 = struct.unpack(">II", png[16:24])  # the screenshot's own size (PNG header): right even if the phone rotated mid-task
     digest = hashlib.sha1(png).hexdigest()
-    unchanged = state.get("unchanged", 0) + 1 if digest == state.get("last_hash") else 0
+    sig = coarse(png)
+    same = digest == state.get("last_hash")
+    if not same and getattr(dev, "unsettled", 0) >= ANIMATED_AFTER and state.get("last_sig"):
+        same = coarse_diff(sig, state["last_sig"]) <= ANIMATED_SAME  # a game animates all the time, so no two frames are identical: judge the picture, not the bytes
+    unchanged = state.get("unchanged", 0) + 1 if same else 0
     # The image width is the portrait width; in landscape keep the same short side so the picture is not tiny.
     small, scale = shrink(png, c["image_width"] if h0 >= w0 else round(c["image_width"] * w0 / h0))
     step = state.get("step", 0) + 1
     send = need_image(c["image_mode"], step, elements, unchanged, state.get("acts", []), state.get("history", []))
     prompt = build_prompt(goal, state.get("history", []), elements, scale, unchanged, state.get("acts", []),
                           getattr(dev, "keyboard_open", False), c["secrets"].labels() if c.get("secrets") else None, landscape=w0 > h0)
+    if crashes:
+        prompt += ("\n\nANDROID REPORTS APP CRASHES during this task: " + ", ".join(f"{p} crashed {n}x" for p, n in crashes.items())
+                   + ". A loading screen is NOT loading if the app keeps crashing. If a 'keeps stopping' dialog is showing, tap Close app. "
+                     f"Open the app again at most once more; after {CRASH_LIMIT} crashes the task is stopped.")
     ms = {"shot": shot_ms, "tree": tree_ms, "observe": round((time.time() - t0) * 1000), "image": send}
-    return {"goal": goal, "step": step, "last_hash": digest, "unchanged": unchanged,
+    return {**crash_state, "goal": goal, "step": step, "last_hash": digest, "last_sig": sig, "unchanged": unchanged,
             "obs": {"png": small, "send_image": send, "scale": scale, "size": (w0, h0), "elements": [asdict(e) for e in elements],
                     "prompt": prompt, "ms": ms}}
 
@@ -283,7 +318,11 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
         "cancel": cancel or threading.Event(), "pause": pause, "steer": steer, "secrets": secrets, "image_mode": image_mode, "image_width": image_width,
         "system": SYSTEM.replace("WIDTHxHEIGHT", f"{image_width}x{round(h * image_width / w)}")}}
     graph = graph or build_graph()
-    cmd: dict | Command = {"goal": goal, "step": 0, "history": [], "acts": [], "unchanged": 0}
+    try:  # crashes before this task began do not count against it
+        before = [f"{p}:{i}" for p, i in device.crashes()] if hasattr(device, "crashes") else []
+    except Exception:
+        before = []
+    cmd: dict | Command = {"goal": goal, "step": 0, "history": [], "acts": [], "unchanged": 0, "crash_seen": before, "crashes": {}}
     while True:
         out = graph.invoke(cmd, config)
         pending = out.get("__interrupt__")

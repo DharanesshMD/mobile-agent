@@ -1,0 +1,18 @@
+# Lima VM that hosts the Redroid (Android in a container) spike. Apple Virtualization.framework, Ubuntu 24.04 arm64.
+vmType: vz
+arch: aarch64
+cpus: 4
+memory: 4GiB
+disk: 30GiB
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: aarch64
+mounts: []          # nothing from the Mac is shared into the VM
+containerd:
+  system: false
+  user: false
+portForwards:
+  # adb of the Android container. Not 5555: on the Mac that port belongs to the official emulator (emulator-5554's adb port).
+  - guestPort: 5565
+    hostIP: "127.0.0.1"
+    hostPort: 5565

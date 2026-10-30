@@ -42,6 +42,7 @@ P1:
 - [ ] Open-weight path: run the orchestrator on Muse Spark Open through Baseten (bonus prize, uses the partner credits)
 - [ ] Sleep and wake lifecycle visible in the Mobile panel (emulator backend now, docker backend later)
 - [ ] Android client: pairing, chat, action cards, OTP relay
+- [ ] Phone app for the owner's real phone (control it in the background): see [docs/phone-client.md](../docs/phone-client.md)
 
 P2:
 - [ ] Replay mode for reviewers, README polish, 3-minute video script, record on Nov 3
@@ -54,7 +55,8 @@ P2:
 - [x] Intent fast paths (alarm, timer, dial, SMS/email/contact/event prefill, maps, share): contact task 11 steps to 3-5; 11/11 scenarios
 - [ ] Next on cost: trim the system prompt, try an earlier model tier for easy steps, more fast paths (open app + deep links)
 - [ ] Android intent fast paths: alarm, timer, SMS compose, contact and calendar insert, maps, dial, share
-- [ ] Cloud device: Redroid (container, no VM) on a Linux host; test binder support first
+- [x] Virtual Android for games: Redroid in a Lima VM on the Mac as the "Games phone" (own bot, own lane, live view): see [docs/virtual-android.md](../docs/virtual-android.md)
+- [ ] Cloud device: Redroid on a separate arm64 Linux host (Graviton), later
 
 ## Demo-first plan
 Moved to [docs/demo-plan.md](../docs/demo-plan.md) (29 Oct 2026, pending owner approval).

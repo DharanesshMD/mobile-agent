@@ -18,7 +18,7 @@ from pathlib import Path
 from agent.config import SLEEP_AFTER_IDLE_MIN, STOP_AFTER_PAUSED_MIN
 
 ROOT = Path(__file__).resolve().parent.parent
-BOOT_TIMEOUT = 240
+BOOT_TIMEOUT = 420  # a cold boot takes about a minute, but 4+ minutes when the Mac is short on memory or busy
 
 
 class EmulatorBackend:
@@ -76,7 +76,7 @@ class EmulatorBackend:
         """Unfreeze and wait until adb really answers again. False if the emulator is gone or never recovers (the caller then reboots it)."""
         for pid in self.netsim_pids() + self.pids():
             os.kill(pid, signal.SIGCONT)
-        for i in range(60):
+        for i in range(180):  # up to 90 s: after a long freeze on a busy Mac this is still much faster than a cold boot
             if not self.pids():
                 return False
             if i == 6:

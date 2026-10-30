@@ -39,6 +39,42 @@ def ensure_master(db: Database, hub: Hub | None = None) -> dict:
     return m
 
 
+PHONE_PERSONA = ("The bot of your own phone. It works on that phone in the background through the Mobile Agent app: every task you give it runs there, "
+                 "and nothing else uses that phone.")
+
+
+def ensure_phone_bot(db: Database, hub: Hub | None, phone_id: str, info: dict) -> dict:
+    """The persistent bot of a real phone, created the first time the phone connects and kept (with its chat and routines) across reconnects."""
+    bot = db.phone_bot(phone_id)
+    if bot:
+        return bot
+    name = str(info.get("name") or info.get("model") or "My phone").strip()[:40] or "My phone"
+    bot = db.create_bot(name, PHONE_PERSONA, kind="phone", phone_id=phone_id)
+    msg = db.add_message(bot["id"], "assistant", "text", f"Your phone ({name}) is connected. Tell me what to do on it: I work on it in the background, and these tasks never touch the shared emulator.")
+    if hub:
+        hub.publish(bot["id"], {"type": "message", "message": msg})
+    return bot
+
+
+GAMES_PERSONA = ("The bot of the games phone: a light virtual Android (Android 13 in a container) for games and heavy apps. It runs only here, "
+                 "in the background, and never uses the shared emulator.")
+GAMES_INTRO = ("This is the games phone: a light virtual Android for games and heavy apps. What to expect, honestly: there is no Google Play here, so apps are "
+               "installed from APK files; graphics are software-rendered (low quality, fine for playing); games draw one picture, so I work from screenshots and "
+               "may need a few tries; and some games refuse to run on virtual devices. For those, connect your own phone with the Mobile Agent app.")
+
+
+def ensure_games_bot(db: Database, hub: Hub | None, phone_id: str = "games") -> dict:
+    """The persistent bot of the games phone, created at start-up when the phone exists on this computer."""
+    bot = db.phone_bot(phone_id, "virtual")
+    if bot:
+        return bot
+    bot = db.create_bot("Games phone", GAMES_PERSONA, kind="virtual", phone_id=phone_id)
+    msg = db.add_message(bot["id"], "assistant", "text", GAMES_INTRO)
+    if hub:
+        hub.publish(bot["id"], {"type": "message", "message": msg})
+    return bot
+
+
 def _describe(r: dict) -> str:
     s = r["schedule"]
     return f"{r['name']} ({'daily at ' + s['daily_at'] if 'daily_at' in s else 'every ' + str(s['every_minutes']) + ' min'}{'' if r['enabled'] else ', paused'})"

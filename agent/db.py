@@ -10,13 +10,13 @@ from pathlib import Path
 COLORS = ["#4c9aff", "#3ecf8e", "#f5b84b", "#ff7a90", "#a78bfa", "#2dd4bf"]
 
 SCHEMA = """
-create table if not exists bots(id text primary key, name text not null, persona text not null default '', color text, created real, kind text not null default 'bot');
+create table if not exists bots(id text primary key, name text not null, persona text not null default '', color text, created real, kind text not null default 'bot', phone_id text);
 create table if not exists alerts(key text primary key, at real);
 create table if not exists messages(id integer primary key autoincrement, bot_id text not null, role text not null, kind text not null,
   content text not null default '', meta text not null default '{}', created real, updated real);
 create index if not exists messages_bot on messages(bot_id, id);
 create table if not exists jobs(id text primary key, bot_id text not null, goal text not null, status text not null, started real, ended real,
-  result text not null default '', trace_dir text, after text, verify text, routine text);
+  result text not null default '', trace_dir text, after text, verify text, routine text, target text);
 create table if not exists items(id text primary key, bot_id text not null, job_id text, message_id integer, kind text not null,
   payload text not null default '{}', status text not null default 'open', answer text, created real, answered real);
 create table if not exists library(id text primary key, bot_id text not null, job_id text, title text not null, path text not null, created real);
@@ -58,7 +58,7 @@ class Database:
             if "kind" not in [r["name"] for r in self.conn.execute("pragma table_info(bots)")]:  # databases created before the master bot
                 self.conn.execute("alter table bots add column kind text not null default 'bot'")
                 self.conn.commit()
-            for table, cols in (("jobs", ("after", "verify", "routine")), ("routines", ("last_status",))):  # databases created before these columns
+            for table, cols in (("jobs", ("after", "verify", "routine", "target")), ("routines", ("last_status",)), ("bots", ("phone_id",))):  # databases created before these columns
                 have = [r["name"] for r in self.conn.execute(f"pragma table_info({table})")]
                 for col in cols:
                     if col not in have:
@@ -80,11 +80,16 @@ class Database:
             return cur.lastrowid
 
     # bots
-    def create_bot(self, name: str, persona: str = "", kind: str = "bot") -> dict:
+    def create_bot(self, name: str, persona: str = "", kind: str = "bot", phone_id: str | None = None) -> dict:
         bid = uuid.uuid4().hex[:10]
         color = "#8b7cf6" if kind == "master" else COLORS[int(bid, 16) % len(COLORS)]
-        self._x("insert into bots(id,name,persona,color,created,kind) values(?,?,?,?,?,?)", (bid, name.strip()[:60], persona.strip()[:4000], color, time.time(), kind))
+        self._x("insert into bots(id,name,persona,color,created,kind,phone_id) values(?,?,?,?,?,?,?)",
+                (bid, name.strip()[:60], persona.strip()[:4000], color, time.time(), kind, phone_id))
         return self.get_bot(bid)
+
+    def phone_bot(self, phone_id: str, kind: str = "phone") -> dict | None:
+        """The bot of one phone (kind 'phone' for a real phone, 'virtual' for a virtual one such as the games phone): the only bot whose tasks run on it."""
+        return self._one("select * from bots where kind=? and phone_id=? limit 1", (kind, phone_id))
 
     def master_bot(self) -> dict | None:
         return self._one("select * from bots where kind='master' limit 1")
@@ -160,11 +165,11 @@ class Database:
         return list(reversed(rows))
 
     # jobs
-    def create_job(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None) -> dict:
+    def create_job(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None, target: str = "") -> dict:
         """`after` is the id of a job that must finish successfully before this one runs; `verify` is a phone check (agent/checks.py) that must pass for it to count as done."""
         jid = uuid.uuid4().hex[:10]
-        self._x("insert into jobs(id,bot_id,goal,status,started,after,verify,routine) values(?,?,?,?,?,?,?,?)",
-                (jid, bot_id, goal, "queued", time.time(), after, json.dumps(verify) if verify else None, routine))
+        self._x("insert into jobs(id,bot_id,goal,status,started,after,verify,routine,target) values(?,?,?,?,?,?,?,?,?)",
+                (jid, bot_id, goal, "queued", time.time(), after, json.dumps(verify) if verify else None, routine, target or None))
         return self.get_job(jid)
 
     def get_job(self, jid: str) -> dict | None:

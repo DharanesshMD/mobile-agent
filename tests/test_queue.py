@@ -7,8 +7,9 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from agent.checks import find_packages, parse_focus, run_check
+from agent.checks import find_packages, parse_crashes, parse_focus, run_check
 from agent.db import Database
+from agent.graph import CRASH_PREFIX, run as run_graph
 from agent.jobs import is_phone_error
 from agent.lifecycle import Lifecycle
 from agent.orchestrator import same_goal
@@ -375,6 +376,60 @@ class RetryLimit(unittest.TestCase):
         say(c, bot, "try again please")
         until(lambda: "ok" in texts(c, bot, "assistant"))
         self.assertEqual(app.state.orch._retries[bot], 0)
+
+
+class CrashyPhone(RealisticPhone):
+    """Every tap 'opens the app' and the app crashes at once, as Clash of Clans does on an emulator."""
+    def __init__(self, emulator=True):
+        super().__init__()
+        self.logged, self.emulator = [("com.android.vending", "11")], emulator  # one crash from before the task
+
+    def tap(self, x, y):
+        super().tap(x, y)
+        self.logged.append(("com.supercell.clashofclans", str(1000 + len(self.logged))))
+
+    def crashes(self):
+        return list(self.logged)
+
+    def is_emulator(self):
+        return self.emulator
+
+
+class AppCrashes(unittest.TestCase):
+    JAVA = ("10-30 17:39:43.991  8593  8593 E AndroidRuntime: FATAL EXCEPTION: main\n"
+            "10-30 17:39:43.991  8593  8593 E AndroidRuntime: Process: com.supercell.clashofclans, PID: 8593\n")
+    NATIVE = "pid: 4242, tid: 4300, name: UnityMain  >>> com.example.game <<<\n"
+
+    def test_java_and_native_crashes_are_read_from_the_crash_log(self):
+        self.assertEqual(parse_crashes(self.JAVA + self.NATIVE), [("com.supercell.clashofclans", "8593"), ("com.example.game", "4242")])
+        self.assertEqual(parse_crashes("nothing here"), [])
+
+    def test_the_worker_stops_after_repeated_crashes_with_an_honest_reason(self):
+        phone = CrashyPhone()
+        tap = {"type": "tap", "element": 0}
+        model = Worker(*([tap] * 6))
+        res = run_graph("open clash of clans", phone, model, settle=0)
+        self.assertEqual(res.status, "failed")
+        self.assertTrue(res.answer.startswith(CRASH_PREFIX))
+        self.assertIn("com.supercell.clashofclans crashed 3 times", res.answer)
+        self.assertIn("emulated phone", res.answer)
+        self.assertEqual(len(phone.taps), 3)  # it did not keep trying
+        self.assertNotIn("CRASHES", model.prompts[0])  # the crash from before the task is not counted
+        self.assertIn("com.supercell.clashofclans crashed 1x", model.prompts[1])  # the model learns about it on the next step
+
+    def test_a_real_phone_is_not_blamed_on_emulation(self):
+        res = run_graph("open it", CrashyPhone(emulator=False), Worker(*([{"type": "tap", "element": 0}] * 6)), settle=0)
+        self.assertNotIn("emulated", res.answer)
+
+    def test_a_crashed_task_is_not_retried_and_the_owner_hears_why(self):
+        spark = Spark(act(type="mobile_task", goal="open clash of clans", say="ok"),
+                      act(type="reply", text="Clash of Clans crashes on this phone, so I can't open it. The website is an option."))
+        c, _, bot, app = setup(spark, Worker(act(type="fail", reason=CRASH_PREFIX + "com.supercell.clashofclans crashed 3 times")))
+        say(c, bot, "open clash of clans")
+        until(lambda: any("crashes on this phone" in t for t in texts(c, bot, "assistant")))
+        self.assertEqual(app.state.orch._retries[bot], 1)  # no automatic retry is left
+        self.assertIn("do NOT start a retry", spark.calls[-1][1][-1]["content"])
+        self.assertTrue(any("crashed 3 times" in m for m in app.state.orch.db.memory_search(bot, "crashed")))  # remembered for later chats
 
 
 if __name__ == "__main__":

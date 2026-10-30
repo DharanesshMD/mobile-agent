@@ -104,7 +104,7 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         if active:  # stop the phone task and let it finish before its data is removed
             jobs.cancel(active["id"])
             for _ in range(60):
-                if not jobs.active_for(bot_id) and not (jobs.current and jobs.current.bot_id == bot_id):
+                if not jobs.active_for(bot_id) and not any(r.bot_id == bot_id for r in jobs.running()):
                     break
                 time.sleep(0.25)
         job_ids = db.job_ids(bot_id)
@@ -116,11 +116,16 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         fresh = db.create_bot("Assistant", "") if last else None
         return {"ok": True, "bot": fresh, "erased_secrets": erased}
 
+    def own_lane(bot_id: str) -> str:
+        """The Mobile panel of the games phone's bot shows that phone; every other bot shows the shared emulator (a real phone's panel uses the phone list)."""
+        lane = jobs.lane_of(bot_id)
+        return lane if lane.startswith("virtual:") else ""
+
     @app.get("/api/bots/{bot_id}/state", dependencies=[Depends(auth)])
     def bot_state(bot_id: str):
         b = bot_or_404(bot_id)
         return {"bot": b, "messages": db.messages(bot_id, 200), "last_seq": hub.last_seq(bot_id),
-                "jobs": db.jobs(bot_id, 10), "mobile": jobs.state()}
+                "jobs": db.jobs(bot_id, 10), "mobile": jobs.state(own_lane(bot_id))}
 
     @app.post("/api/bots/{bot_id}/messages", dependencies=[Depends(auth)])
     def post_message(bot_id: str, body: NewMessage):
@@ -245,23 +250,36 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
             raise HTTPException(404, "unknown item")
         return FileResponse(item["path"], media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
+    def phone_lane(phone: str | None) -> str:
+        """`?phone=games` selects the games phone; no value is the shared emulator."""
+        if not phone:
+            return ""
+        lane = f"virtual:{phone}"
+        if lane not in {f"virtual:{n}" for n in jobs.virtuals}:
+            raise HTTPException(404, "unknown phone")
+        return lane
+
     @app.get("/api/mobile/state", dependencies=[Depends(auth)])
-    def mobile_state():
-        return jobs.state()
+    def mobile_state(phone: str | None = Query(default=None)):
+        return jobs.state(phone_lane(phone))
 
     @app.post("/api/mobile/wake", dependencies=[Depends(auth)])
-    def mobile_wake():
-        if jobs.lifecycle:
-            jobs.lifecycle.wake()
-        return jobs.state()
+    def mobile_wake(phone: str | None = Query(default=None)):
+        lane = phone_lane(phone)
+        lifecycle = jobs.pair(lane)[1]
+        if lifecycle:
+            lifecycle.wake()
+        return jobs.state(lane)
 
     @app.post("/api/mobile/sleep", dependencies=[Depends(auth)])
-    def mobile_sleep():
-        if not jobs.lifecycle:
+    def mobile_sleep(phone: str | None = Query(default=None)):
+        lane = phone_lane(phone)
+        lifecycle = jobs.pair(lane)[1]
+        if not lifecycle:
             raise HTTPException(409, "This phone cannot sleep")
-        if not jobs.lifecycle.sleep():
+        if not lifecycle.sleep():
             raise HTTPException(409, "The phone is busy or already asleep")
-        return jobs.state()
+        return jobs.state(lane)
 
     @app.post("/api/mobile/control", dependencies=[Depends(auth)])
     def mobile_control(body: Control):

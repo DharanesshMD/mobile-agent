@@ -50,6 +50,15 @@ def _node_state(node) -> str:
     return ", ".join(bits)
 
 
+LAUNCH_RE = re.compile(r"^\s*([A-Za-z0-9_.]+/[A-Za-z0-9_.$]+)\s*$", re.M)
+
+
+def parse_launcher_activity(resolve_output: str) -> str:
+    """The component ("pkg/.Activity") from `cmd package resolve-activity --brief`, or "" when the package has no launcher activity."""
+    m = LAUNCH_RE.search(resolve_output)
+    return m.group(1) if m else ""
+
+
 def parse_accounts(dumpsys_account: str) -> list[tuple[str, str]]:
     """(name, type) pairs from `dumpsys account`, e.g. ("me@gmail.com", "com.google")."""
     return sorted({(m.group(1).strip(), m.group(2).strip()) for m in ACCOUNT_RE.finditer(dumpsys_account)})
@@ -311,10 +320,24 @@ class Device:
         from agent.checks import parse_focus
         return parse_focus(self._run("shell", "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'").decode(errors="replace"))
 
+    def crashes(self) -> list[tuple[str, str]]:
+        """(package, pid) of the app crashes Android has logged since the phone booted."""
+        from agent.checks import parse_crashes
+        return parse_crashes(self._run("shell", "logcat", "-b", "crash", "-d").decode(errors="replace"))
+
     def open_app(self, package: str) -> None:
         if package == "com.android.settings":  # Settings has no launcher entry on AOSP-based images
             return self.open_intent("android.settings.SETTINGS")
-        self._run("shell", "monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1")
+        try:
+            out = self._run("shell", "monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1")
+            if b"No activities found" not in out:
+                return
+        except subprocess.CalledProcessError:  # monkey exits 251 on some images (the Redroid games phone) although the app is installed
+            pass
+        component = parse_launcher_activity(self._run("shell", "cmd", "package", "resolve-activity", "--brief", "-c", "android.intent.category.LAUNCHER", package).decode(errors="replace"))
+        if not component:
+            raise ValueError(f"{package} has no launcher activity (it is not installed, or it is not an app you can open)")
+        self.start_intent(["-n", component])
 
     def open_url(self, url: str) -> None:
         self._run("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", shlex.quote(url))

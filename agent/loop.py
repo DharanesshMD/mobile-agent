@@ -52,7 +52,10 @@ to offer installing it from the Play Store when signed in, otherwise "fail". For
 exact toggle or row. If the screen did not change after an action, try a
 different approach instead of repeating it. Prefer element ids over coordinates. If a value you need is not
 visible, the row that names it (for example "Android version") often opens a detail screen: tap it instead of
-scrolling back and forth."""
+scrolling back and forth.
+In a game or any app with no listed elements, work from the screenshot. Do exactly what the goal asks and no more: when it asks for a few moves, one level or
+one action, count what you have done, stop at that number and finish with "done", describing what the screen shows (what you see, any numbers or text you can read).
+Do not keep exploring after the goal is met."""
 
 KEYS = {"back": "KEYCODE_BACK", "home": "KEYCODE_HOME", "enter": "KEYCODE_ENTER"}
 GATES = {"ask", "handoff", "request_otp", "need_info", "type_secret", "need_secret"}
@@ -182,13 +185,34 @@ def _signature(png: bytes) -> Image.Image:
     return img.crop((0, int(h * 0.06), w, int(h * 0.94))).resize((48, 106))
 
 
+ANIMATED_SAME = 4.0  # mean grey-level difference of two coarse frames still counted as "the same screen" while the app animates all the time
+
+
+def coarse(png: bytes) -> bytes:
+    """A small grey picture of the screen, for telling "the same screen, only the sprites move" from a real change."""
+    return _signature(png).tobytes()
+
+
+def coarse_diff(a: bytes, b: bytes) -> float:
+    return sum(abs(x - y) for x, y in zip(a, b)) / max(1, len(a))
+
+
+ANIMATED_AFTER = 2  # consecutive settles that ran out of time: the app animates all the time (a game), so waiting longer never helps
+ANIMATED_TIMEOUT = 1.2
+
+
 def settle(device, pause: float, timeout: float = 4.0, tolerance: float = 1.5) -> None:
-    """Wait until two consecutive screens match closely, so we judge the screen after the transition."""
+    """Wait until two consecutive screens match closely, so we judge the screen after the transition.
+    A game that animates all the time never matches: after ANIMATED_AFTER such timeouts in a row the wait is cut to ANIMATED_TIMEOUT (until a screen settles again)."""
     time.sleep(pause)
+    if getattr(device, "unsettled", 0) >= ANIMATED_AFTER:
+        timeout = min(timeout, ANIMATED_TIMEOUT)
     deadline, prev = time.time() + timeout, None
     while time.time() < deadline:
         cur = _signature(device.screenshot())
         if prev is not None and ImageStat.Stat(ImageChops.difference(prev, cur)).mean[0] <= tolerance:
+            device.unsettled = 0
             return
         prev = cur
         time.sleep(0.15)
+    device.unsettled = getattr(device, "unsettled", 0) + 1

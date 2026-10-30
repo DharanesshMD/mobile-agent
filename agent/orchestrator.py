@@ -9,6 +9,8 @@ from pathlib import Path
 from agent.checks import KINDS, run_check
 from agent.config import MAX_ACTIVE_PER_BOT, ORCHESTRATOR_MODEL
 from agent.db import Database
+from agent.graph import CRASH_PREFIX
+from agent.remote import RemoteDevice
 from agent.hub import Hub
 
 PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
@@ -115,9 +117,35 @@ class Orchestrator:
             parts.append("Cards waiting for the owner in this chat:\n" + "\n".join(f"- {i['kind']}: {i['payload'].get('question', '')[:110]}" for i in cards) +
                          "\nIf the owner says they finished a 'handoff' card (\"done\", \"continue\", \"my part is done\"), use resume_task: typing in chat does not resume it by itself. "
                          "Approvals, choices, codes and secrets can only be answered on their card; tell the owner to use it.")
-        busy_with = [j for j in self.db.active_jobs() if j["bot_id"] != bot_id]
+        if bot["kind"] == "virtual":
+            _, lc = self.jobs.pair(self.jobs.lane_of(bot_id))
+            parts.append("You are the bot of the GAMES PHONE: a light virtual Android (Android 13 in a container) for games and heavy apps. Every phone task you queue runs on it, "
+                         "in the background, and never on the shared emulator; no other bot can use it. There is no Google Play on it: apps are installed from APK files by the owner, "
+                         "so find_app tells you what is installed (do not try to install from the Play Store). Games draw one picture and have no UI tree: the worker plays from "
+                         "screenshots and coordinates, so keep tasks short and concrete (one level, a few moves) and expect several tries. Some games refuse to run on virtual "
+                         "devices: if one crashes or closes at start, say so plainly and suggest the owner's own phone (the Mobile Agent app) instead of retrying. "
+                         f"The games phone is {(lc.info() if lc else {'power': 'unavailable'})['power']} right now (a sleeping or stopped one wakes by itself, which takes a few seconds).")
+        elif bot["kind"] == "phone":
+            up = bool(self.jobs.phones and self.jobs.phones.online(bot["phone_id"]))
+            parts.append(f"You are the bot of the owner's OWN phone ({bot['name']}). Every phone task you queue runs on that phone, in the background, through the Mobile Agent app; "
+                         "never on the shared emulator, and no other bot can use that phone. It acts on the phone's real screen, so keep tasks short and clear. "
+                         + ("The phone is connected now." if up else "The phone is NOT connected right now: tasks cannot run until the owner opens the Mobile Agent app on it."))
+        else:
+            games = [b for b in self.db.list_bots() if b["kind"] == "virtual"]
+            if games:
+                parts.append("The games phone (a light virtual Android for games and heavy apps, apps installed from APK, no Google Play) has its own bot: " +
+                             ", ".join(b["name"] for b in games) + ". You cannot run tasks on it; tell the owner to ask that bot" +
+                             (" (Master can hand a task to it)." if bot["kind"] != "master" else ", or hand the task to it with delegate."))
+            mine_phones = [b for b in self.db.list_bots() if b["kind"] == "phone"]
+            if mine_phones:
+                parts.append("The owner's own phone has its own bot: " + ", ".join(b["name"] for b in mine_phones) + ". You cannot run tasks on it; for something "
+                             "on their own phone (games and apps that refuse to run on the emulator, their real accounts) tell them to ask that bot." +
+                             (" Master can hand such a task to it." if bot["kind"] != "master" else " You can hand such a task to it with delegate."))
+        lane = self.jobs.lane_of(bot_id)
+        busy_with = [j for j in self.db.active_jobs() if j["bot_id"] != bot_id and self.jobs.lane_of(j["bot_id"]) == lane]
         if busy_with:
-            parts.append(f"Other bots have {len(busy_with)} task(s) on the shared phone; this bot's tasks queue behind them.")
+            parts.append(f"Other bots have {len(busy_with)} task(s) on the same phone; this bot's tasks queue behind them." if lane else
+                         f"Other bots have {len(busy_with)} task(s) on the shared phone; this bot's tasks queue behind them.")
         return "\n\n".join(parts)
 
     def _decide(self, model, system: str, msgs: list[dict]) -> dict | None:
@@ -187,7 +215,7 @@ class Orchestrator:
                 return
             if kind == "phone_check":
                 msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
-                               {"role": "user", "content": f"[tool result for phone_check] {self._phone_check(act)}"}]
+                               {"role": "user", "content": f"[tool result for phone_check] {self._phone_check(bot_id, act)}"}]
                 continue
             if kind == "resume_task":
                 self._resume_handoff(bot_id, act)
@@ -249,9 +277,19 @@ class Orchestrator:
             return {"kind": v["kind"], "query": str(v.get("query", ""))[:80]}
         return None
 
-    def _phone_check(self, act: dict) -> str:
+    def _phone_check(self, bot_id: str, act: dict) -> str:
         """Read a fact straight from the phone (app installed, Google account signed in, app in front) so a task's result can be checked, not trusted."""
         dev, lc = self.jobs.device, self.jobs.lifecycle
+        own = self.db.get_bot(bot_id) or {}
+        if own.get("kind") == "virtual":  # a fact from the games phone
+            dev, lc = self.jobs.pair(self.jobs.lane_of(bot_id))
+            if dev is None:
+                return "error: the games phone is not set up"
+        elif own.get("kind") == "phone":  # a fact from the owner's own phone
+            pid = self.jobs.phones.pick(own.get("phone_id")) if self.jobs.phones else None
+            if not pid:
+                return "error: the owner's phone is not connected"
+            dev, lc = RemoteDevice(self.jobs.phones, pid), None
         if not hasattr(dev, "packages"):
             return "error: phone checks are not available"
         if lc is not None and not lc.ensure_healthy(90):
@@ -280,7 +318,11 @@ class Orchestrator:
             elif dep and dep["bot_id"] == bot_id and dep["status"] != "done":
                 self.post(bot_id, f"I didn't start that: it needs an earlier task that did not finish ({dep['status']}): {dep['goal'][:80]}. Should I try that one again first?")
                 return
-        new, known, chain = [], list(active), prev  # chain: what the next new step waits for (an existing job id, or the index of an earlier new step)
+        new, known, chain = [], list(active), prev
+        own = self.db.get_bot(bot_id) or {}
+        if own.get("kind") == "phone" and not (self.jobs.phones and self.jobs.phones.online(own.get("phone_id"))):
+            self.post(bot_id, f"Your phone ({own['name']}) is not connected right now. Open the Mobile Agent app on it and let it run in the background, then ask me again.")
+            return  # chain: what the next new step waits for (an existing job id, or the index of an earlier new step)
         for st in steps:
             goal = str(st["goal"]).strip()
             dup = next((j for j in known if same_goal(j["goal"], goal)), None)
@@ -298,7 +340,7 @@ class Orchestrator:
             return
         say = str(act.get("say", "")).strip() or ("On it. I'll let you know when it's done." if len(new) == 1 else
                                                   f"I'll do this in {len(new)} steps, in order, and tell you how it goes.")
-        if self.jobs.busy():
+        if self.jobs.busy_for_bot(bot_id):
             say += " The phone is busy, so it's queued and starts as soon as it's free."
         self.post(bot_id, say)
         ids: list[str] = []
@@ -451,7 +493,7 @@ class Orchestrator:
             self.post(master_id, f"{target['name']} already has {len(active)} tasks queued. I can run this one myself, or wait for them to finish.")
             return
         self.post(master_id, (say or f"I asked {target['name']} to do that. Watch its chat for questions; I'll tell you when it's done.") +
-                  (" The phone is busy, so it's queued." if self.jobs.busy() else ""))
+                  (" The phone is busy, so it's queued." if self.jobs.busy_for_bot(target["id"]) else ""))
         self.post(target["id"], f"Master asked you to do this on the phone: {goal}", "bot_note", {"with": master_id})
         job = self.jobs.submit(target["id"], goal)
         self.delegated[job["id"]] = master_id
@@ -476,6 +518,10 @@ class Orchestrator:
             self.db.memory_add(bot_id, f"Task done: {job['goal']} -> {result}")
         waiting = [j for j in self.db.active_jobs(bot_id) if j["after"] == job["id"]]
         queued = self.db.active_jobs(bot_id)
+        crashed = status == "failed" and result.startswith(CRASH_PREFIX)
+        if crashed:  # retrying a crashing app only repeats the crash: say so, remember it, and let the owner decide
+            self._retries[bot_id] = MAX_AUTO_RETRIES
+            self.db.memory_add(bot_id, f"Task failed: {job['goal']} -> {result}")
         if status == "skipped":
             self._turn_with(bot_id, f"A queued phone task was skipped, because the task before it did not finish. Goal: {job['goal']}. {result}. "
                                     "Tell the owner in one sentence that it did not run and why, and offer to retry the earlier task first.", result)
@@ -485,6 +531,9 @@ class Orchestrator:
                 "(for example an install that was only tapped, or a sign-in the worker did not confirm), check with phone_check (app_installed, account or foreground) "
                 "before you say so. Then tell the owner in one or two sentences using reply: plainly whether it worked, partly worked or failed. "
                 "If it failed or is incomplete for a fixable reason you may start ONE retry with a clearer goal (mobile_task), and say that you are retrying.")
+        if crashed:
+            note += (" The app crashed on its own several times, so do NOT start a retry and do NOT promise to try again. Tell the owner plainly that this app "
+                     "crashes on the phone and why (see the report), and offer an alternative only if one really exists (for example running it on the owner's own phone). Do not invent one.")
         if status == "max_steps":
             note += (" The worker ran out of its step or time budget, so the task is probably only partly done (a long download or install may still be running on the phone). "
                      "Check the real state with phone_check, and if the goal is not met start ONE retry that continues from where the phone is now, saying that you are continuing.")
