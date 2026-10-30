@@ -16,7 +16,7 @@ create table if not exists messages(id integer primary key autoincrement, bot_id
   content text not null default '', meta text not null default '{}', created real, updated real);
 create index if not exists messages_bot on messages(bot_id, id);
 create table if not exists jobs(id text primary key, bot_id text not null, goal text not null, status text not null, started real, ended real,
-  result text not null default '', trace_dir text, after text, verify text);
+  result text not null default '', trace_dir text, after text, verify text, routine text);
 create table if not exists items(id text primary key, bot_id text not null, job_id text, message_id integer, kind text not null,
   payload text not null default '{}', status text not null default 'open', answer text, created real, answered real);
 create table if not exists library(id text primary key, bot_id text not null, job_id text, title text not null, path text not null, created real);
@@ -24,7 +24,7 @@ create table if not exists vault(id text primary key, owner text not null, label
   ciphertext blob not null, created real);
 create table if not exists vault_audit(id integer primary key autoincrement, secret_id text, label text, job_id text, app text, at real);
 create table if not exists routines(id text primary key, bot_id text not null, name text not null, prompt text not null, schedule text not null,
-  enabled integer not null default 1, next_run real, last_run real, created real);
+  enabled integer not null default 1, next_run real, last_run real, created real, last_status text);
 create virtual table if not exists memory using fts5(text, bot_id unindexed, created unindexed);
 """
 
@@ -58,10 +58,12 @@ class Database:
             if "kind" not in [r["name"] for r in self.conn.execute("pragma table_info(bots)")]:  # databases created before the master bot
                 self.conn.execute("alter table bots add column kind text not null default 'bot'")
                 self.conn.commit()
-            for col in ("after", "verify"):  # databases created before task dependencies and checks
-                if col not in [r["name"] for r in self.conn.execute("pragma table_info(jobs)")]:
-                    self.conn.execute(f"alter table jobs add column {col} text")
-                    self.conn.commit()
+            for table, cols in (("jobs", ("after", "verify", "routine")), ("routines", ("last_status",))):  # databases created before these columns
+                have = [r["name"] for r in self.conn.execute(f"pragma table_info({table})")]
+                for col in cols:
+                    if col not in have:
+                        self.conn.execute(f"alter table {table} add column {col} text")
+                        self.conn.commit()
 
     def _q(self, sql: str, args=()) -> list[dict]:
         with self.lock:
@@ -158,11 +160,11 @@ class Database:
         return list(reversed(rows))
 
     # jobs
-    def create_job(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None) -> dict:
+    def create_job(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None) -> dict:
         """`after` is the id of a job that must finish successfully before this one runs; `verify` is a phone check (agent/checks.py) that must pass for it to count as done."""
         jid = uuid.uuid4().hex[:10]
-        self._x("insert into jobs(id,bot_id,goal,status,started,after,verify) values(?,?,?,?,?,?,?)",
-                (jid, bot_id, goal, "queued", time.time(), after, json.dumps(verify) if verify else None))
+        self._x("insert into jobs(id,bot_id,goal,status,started,after,verify,routine) values(?,?,?,?,?,?,?,?)",
+                (jid, bot_id, goal, "queued", time.time(), after, json.dumps(verify) if verify else None, routine))
         return self.get_job(jid)
 
     def get_job(self, jid: str) -> dict | None:
@@ -244,7 +246,7 @@ class Database:
         return self._q("select * from routines where bot_id=? order by created", (bot_id,))
 
     def routine_update(self, rid: str, **fields) -> dict | None:
-        cols = {"enabled", "next_run", "last_run"}
+        cols = {"enabled", "next_run", "last_run", "last_status"}
         sets = {k: v for k, v in fields.items() if k in cols}
         if sets:
             self._x(f"update routines set {', '.join(f'{k}=?' for k in sets)} where id=?", (*sets.values(), rid))
@@ -255,6 +257,10 @@ class Database:
             n = self.conn.execute("delete from routines where id=?", (rid,)).rowcount
             self.conn.commit()
         return n > 0
+
+    def routine_busy(self, rid: str) -> bool:
+        """Is a task started by this routine still queued, running or waiting?"""
+        return bool(self._q("select 1 from jobs where routine=? and status in ('queued','running','waiting') limit 1", (rid,)))
 
     def routines_due(self, now: float) -> list[dict]:
         return self._q("select * from routines where enabled=1 and next_run<=?", (now,))

@@ -23,6 +23,9 @@ class ModelError(RuntimeError):
     pass
 
 
+RETRY_DELAYS = (1, 2, 4, 8, 15, 30)  # seconds between attempts for rate limits, server errors and network failures (about a minute in all)
+
+
 class MetaClient:
     def __init__(self, model: str = "muse-wonder-1.0", effort: str = "minimal",
                  api_key: str | None = None, base: str | None = None):
@@ -44,17 +47,18 @@ class MetaClient:
     def _post(self, path: str, body: dict) -> dict:
         req = urllib.request.Request(f"{self.base}{path}", json.dumps(body).encode(),
                                      {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"})
-        for attempt in range(3):
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            last = attempt == len(RETRY_DELAYS)
             try:
                 return json.load(urllib.request.urlopen(req, timeout=120))
             except urllib.error.HTTPError as e:
-                if e.code in (429, 500, 502, 503) and attempt < 2:
-                    time.sleep(2 ** attempt)
+                if e.code in (429, 500, 502, 503) and not last:
+                    time.sleep(RETRY_DELAYS[attempt])
                     continue
                 raise ModelError(f"HTTP {e.code}: {e.read()[:300].decode(errors='replace')}") from e
-            except (OSError, http.client.HTTPException, json.JSONDecodeError) as e:  # dropped connection, timeout, bad body
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
+            except (OSError, http.client.HTTPException, json.JSONDecodeError) as e:  # dropped connection, DNS failure, timeout, bad body
+                if not last:  # a Wi-Fi blip or a DNS hiccup lasts seconds: an unattended task must ride it out (about a minute) instead of dying
+                    time.sleep(RETRY_DELAYS[attempt])
                     continue
                 raise ModelError(str(e)) from e
         raise ModelError("unreachable")

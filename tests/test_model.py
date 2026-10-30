@@ -50,11 +50,26 @@ class Retries(unittest.TestCase):
             c.chat("s", [{"role": "user", "content": "x"}])
             self.assertEqual(c.tokens["cached"], 7)
 
-    def test_gives_up_after_three_attempts_with_a_model_error(self):
+    def test_gives_up_after_the_retry_schedule_with_a_model_error(self):
+        from agent.model import RETRY_DELAYS
         with mock.patch("urllib.request.urlopen", side_effect=http.client.RemoteDisconnected("closed")) as m, mock.patch("time.sleep"):
             with self.assertRaises(ModelError):
                 self.client().chat("s", [{"role": "user", "content": "x"}])
-            self.assertEqual(m.call_count, 3)
+            self.assertEqual(m.call_count, len(RETRY_DELAYS) + 1)
+
+    def test_a_dns_blip_of_several_attempts_is_ridden_out(self):
+        # the failure that killed a 30-minute task: "nodename nor servname provided" for a few seconds
+        seq = [urllib.error.URLError(OSError(8, "nodename nor servname provided, or not known"))] * 4 + [FakeResponse(OK)]
+
+        def urlopen(*a, **k):
+            item = seq.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        with mock.patch("urllib.request.urlopen", urlopen), mock.patch("time.sleep") as sleep:
+            self.client().chat("s", [{"role": "user", "content": "x"}])
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [1, 2, 4, 8])
 
     def test_rate_limit_is_retried_but_a_bad_request_is_not(self):
         def http_error(code):

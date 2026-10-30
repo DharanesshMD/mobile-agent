@@ -31,10 +31,13 @@ class Schedules(unittest.TestCase):
 
 class FakeOrch:
     def __init__(self):
-        self.turns = []
+        self.turns, self.posts = [], []
 
-    def turn(self, bot_id, note=None):
+    def turn(self, bot_id, note=None, routine=None):
         self.turns.append((bot_id, note))
+
+    def post(self, bot_id, text, kind="text", meta=None):
+        self.posts.append((bot_id, text, kind))
 
 
 class Firing(unittest.TestCase):
@@ -122,9 +125,6 @@ class Api(unittest.TestCase):
         self.assertEqual(c.get(f"/api/bots/{bot}/routines").json(), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class Refresh(unittest.TestCase):
     def test_creating_a_routine_in_chat_pushes_a_refresh_event(self):
@@ -135,3 +135,96 @@ class Refresh(unittest.TestCase):
         self.assertTrue(any(e.get("type") == "refresh" and e.get("what") == "routines" for e in app.state.hub.since(bot, -1)))
         app.state.vault.put("x", "y")
         self.assertTrue(any(e.get("what") == "vault" for e in app.state.hub.since(bot, -1)))
+
+
+class Reliability(unittest.TestCase):
+    def test_a_daily_routine_that_is_hours_late_waits_for_tomorrow_and_says_so(self):
+        db, now, orch = Database(":memory:"), [datetime(2026, 10, 30, 6, 0).astimezone().timestamp()], FakeOrch()
+        bot = db.create_bot("b")["id"]
+        s = Scheduler(db, orch, clock=lambda: now[0])
+        r = s.add(bot, "Morning brief", "brief me", {"daily_at": "07:30"})
+        now[0] = datetime(2026, 10, 30, 22, 0).astimezone().timestamp()  # the server was off all day
+        self.assertEqual(s.tick(), 0)
+        self.assertEqual(orch.turns, [])
+        row = db.get_routine(r["id"])
+        self.assertTrue(row["last_status"].startswith("missed"))
+        self.assertGreater(row["next_run"], now[0])  # tomorrow 07:30
+        self.assertIn("missed the routine 'Morning brief'", orch.posts[0][1])
+
+    def test_a_daily_routine_a_little_late_still_runs(self):
+        db, now, orch = Database(":memory:"), [datetime(2026, 10, 30, 6, 0).astimezone().timestamp()], FakeOrch()
+        bot = db.create_bot("b")["id"]
+        s = Scheduler(db, orch, clock=lambda: now[0])
+        s.add(bot, "Morning brief", "brief me", {"daily_at": "07:30"})
+        now[0] = datetime(2026, 10, 30, 8, 0).astimezone().timestamp()  # 30 minutes late
+        self.assertEqual(s.tick(), 1)
+
+    def test_routines_survive_a_restart_and_keep_their_schedule(self):
+        db, now, orch = Database(":memory:"), [1000.0], FakeOrch()
+        bot = db.create_bot("b")["id"]
+        Scheduler(db, orch, clock=lambda: now[0]).add(bot, "x", "do it", {"every_minutes": 5})
+        later = Scheduler(db, orch, clock=lambda: now[0])  # a new process over the same database
+        now[0] += 301
+        self.assertEqual(later.tick(), 1)
+
+    def test_several_routines_due_together_all_fire(self):
+        db, now, orch = Database(":memory:"), [1000.0], FakeOrch()
+        a, b = db.create_bot("a")["id"], db.create_bot("b")["id"]
+        s = Scheduler(db, orch, clock=lambda: now[0])
+        s.add(a, "one", "p1", {"every_minutes": 5})
+        s.add(b, "two", "p2", {"every_minutes": 5})
+        now[0] += 301
+        self.assertEqual(s.tick(), 2)
+        until(lambda: len(orch.turns) == 2)
+
+
+class EndToEnd(unittest.TestCase):
+    """A routine through the real orchestrator, queue and worker."""
+
+    def test_a_phone_routine_runs_the_task_and_records_how_it_went(self):
+        from test_chat import Worker
+        spark = Spark(act(type="mobile_task", goal="check the battery", say="On it."), act(type="reply", text="Battery is 80%."))
+        c, _, bot, app = setup(spark, Worker(act(type="done", answer="80%")))
+        r = app.state.scheduler.add(bot, "Battery", "check the battery", {"every_minutes": 60})
+        c.post(f"/api/routines/{r['id']}/run")
+        until(lambda: "Battery is 80%." in texts(c, bot, "assistant"), timeout=30)
+        until(lambda: app.state.db.get_routine(r["id"])["last_status"] == "done")
+        job = app.state.db.jobs(bot, 5)[0]
+        self.assertEqual((job["status"], job["routine"]), ("done", r["id"]))  # the task is tagged with its routine
+        self.assertEqual(texts(c, bot, "user"), [])  # the owner never messaged
+
+    def test_a_chat_only_routine_is_marked_replied(self):
+        c, _, bot, app = setup(Spark(act(type="reply", text="Good morning!")))
+        r = app.state.scheduler.add(bot, "Hello", "greet me", {"every_minutes": 60})
+        c.post(f"/api/routines/{r['id']}/run")
+        until(lambda: app.state.db.get_routine(r["id"])["last_status"] == "replied")
+
+    def test_runs_never_pile_up_while_the_last_one_is_still_working(self):
+        from test_chat import Worker, open_card
+        spark = Spark(act(type="mobile_task", goal="slow job", say="ok"))
+        c, _, bot, app = setup(spark, Worker(act(type="handoff", reason="your turn")))
+        sched = app.state.scheduler
+        r = sched.add(bot, "Slow", "do the slow job", {"every_minutes": 5})
+        self.assertEqual(c.post(f"/api/routines/{r['id']}/run").status_code, 200)
+        until(lambda: open_card(c, bot))  # the first run is alive, waiting for the owner
+        self.assertEqual(c.post(f"/api/routines/{r['id']}/run").status_code, 409)  # "Run now" says so
+        calls = len(spark.calls)
+        due = db_row = app.state.db.get_routine(r["id"])
+        app.state.db.routine_update(r["id"], next_run=0)  # the schedule says it is due again
+        self.assertEqual(sched.tick(), 1)  # claimed
+        until(lambda: "skipped" in (app.state.db.get_routine(r["id"])["last_status"] or ""))
+        self.assertEqual(len(spark.calls), calls)  # no new model turn, no second task
+        self.assertEqual(len(c.get(f"/api/bots/{bot}/jobs").json()), 1)
+
+    def test_a_retry_after_a_failed_routine_run_stays_tagged(self):
+        from test_chat import Worker
+        spark = Spark(act(type="mobile_task", goal="try it", say="ok"), act(type="mobile_task", goal="try it again", say="retry"), act(type="reply", text="done"))
+        c, _, bot, app = setup(spark, Worker(act(type="fail", reason="x")), Worker(act(type="done", answer="fine")))
+        r = app.state.scheduler.add(bot, "R", "try it", {"every_minutes": 60})
+        c.post(f"/api/routines/{r['id']}/run")
+        until(lambda: sorted(j["status"] for j in app.state.db.jobs(bot, 5)) == ["done", "failed"], timeout=30)
+        self.assertEqual({j["routine"] for j in app.state.db.jobs(bot, 5)}, {r["id"]})
+
+
+if __name__ == "__main__":
+    unittest.main()

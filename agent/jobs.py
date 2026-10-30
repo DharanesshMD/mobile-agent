@@ -117,10 +117,10 @@ class JobManager:
         return {"state": state, "held": self.held, "job": job, "queued": len(self._pending), "queue": [{"id": r.job_id, "bot_id": r.bot_id, "goal": r.goal[:100], "after": r.after} for r in self._pending], "orientation": orientation, "phone": power}
 
     # --- submit and cancel ---------------------------------------------------------------------------------------
-    def submit(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None) -> dict:
+    def submit(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None) -> dict:
         """Queue a phone job. With `after` (a job id) it waits for that job to finish successfully and is skipped if it does not.
         With `verify` (a phone check) the worker's "done" only counts if the phone really shows it."""
-        job = self.db.create_job(bot_id, goal, after, verify)
+        job = self.db.create_job(bot_id, goal, after, verify, routine)
         msg = self.db.add_message(bot_id, "assistant", "status", "Waiting for the phone…" if self.busy() or after else "Starting…", {"job_id": job["id"]})
         self.hub.publish(bot_id, {"type": "message", "message": msg})
         jr = JobRun(job, msg["id"])

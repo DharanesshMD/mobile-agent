@@ -304,6 +304,8 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     @app.post("/api/routines/{rid}/run", dependencies=[Depends(auth)])
     def routines_run(rid: str):
         r = routine_or_404(rid)
+        if scheduler.busy(r):
+            raise HTTPException(409, "The last run of this routine is still working.")
         threading.Thread(target=scheduler.fire, args=(r, True), kwargs={}, daemon=True).start()
         return {"ok": True}
 

@@ -13,6 +13,7 @@ from agent.orchestrator import Orchestrator
 
 MIN_MINUTES, MAX_MINUTES = 5, 10080
 TICK_SECONDS = 15
+MISSED_GRACE_S = 2 * 3600  # a daily routine more than this late (the server was off) waits for tomorrow instead of firing at a strange hour
 
 
 def parse_schedule(raw: dict) -> dict:
@@ -69,25 +70,43 @@ class Scheduler:
         self.on_change(bot_id)
         return r
 
-    def fire(self, routine: dict, manual: bool = False) -> None:
-        """Hand the routine to the bot as a system note; the bot decides to reply or start a phone job."""
+    def busy(self, routine: dict) -> bool:
+        return self.db.routine_busy(routine["id"])
+
+    def fire(self, routine: dict, manual: bool = False) -> str:
+        """Hand the routine to the bot as a system note; the bot decides to reply or start a phone job. Returns what happened.
+        A routine whose last run is still queued or working is not started again: runs never pile up."""
         r = routine
         if not manual:  # reschedule first so a slow turn cannot cause a double fire
-            self.db.routine_update(r["id"], next_run=next_run(r["schedule"], self.clock()), last_run=self.clock())
-        else:
-            self.db.routine_update(r["id"], last_run=self.clock())
+            self.db.routine_update(r["id"], next_run=next_run(r["schedule"], self.clock()))
+        if self.busy(r):
+            self.db.routine_update(r["id"], last_status="skipped: the last run is still working")
+            self.on_change(r["bot_id"])
+            return "busy"
+        self.db.routine_update(r["id"], last_run=self.clock(), last_status="started")
         note = (f"The owner's routine '{r['name']}' ({describe(r['schedule'])}) has just fired. The owner did not message you: you are reaching out first. "
                 f"Routine instructions: {r['prompt']}\nDo it now. If it needs the phone, start a mobile_task; otherwise reply with the result, briefly.")
         self.on_change(r["bot_id"])
-        self.orch.turn(r["bot_id"], note)
+        self.orch.turn(r["bot_id"], note, routine=r["id"])
+        if not self.busy(r) and (self.db.get_routine(r["id"]) or {}).get("last_status") == "started":
+            self.db.routine_update(r["id"], last_status="replied")  # it answered in chat without needing the phone
+            self.on_change(r["bot_id"])
+        return "started"
 
     def tick(self) -> int:
         """Fire everything due. Returns how many fired."""
-        due = self.db.routines_due(self.clock())
+        now, due, fired = self.clock(), self.db.routines_due(self.clock()), 0
         for r in due:
+            self.db.routine_update(r["id"], next_run=next_run(r["schedule"], now))  # claim it before anything else runs
+            if "daily_at" in r["schedule"] and now - r["next_run"] > MISSED_GRACE_S:
+                self.db.routine_update(r["id"], last_status="missed: the server was off at that time")
+                self.orch.post(r["bot_id"], f"I missed the routine '{r['name']}' ({describe(r['schedule'])}) because the server was off. It will run again at its next time.",
+                               "bot_note", {"routine": r["id"]})
+                self.on_change(r["bot_id"])
+                continue
             threading.Thread(target=self.fire, args=(r,), daemon=True, name=f"routine-{r['id']}").start()
-            self.db.routine_update(r["id"], next_run=next_run(r["schedule"], self.clock()))  # claim it before the thread runs
-        return len(due)
+            fired += 1
+        return fired
 
     def start(self) -> None:
         def loop() -> None:

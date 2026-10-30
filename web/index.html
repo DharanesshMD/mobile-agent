@@ -682,7 +682,7 @@ async function renderTab() {
     const box = el("div", "vault");
     for (const r of rows) {
       const row = el("div", "sec"), nm = el("div", "", r.name);
-      nm.append(el("span", "", when(r) + (r.enabled ? " · next " + new Date(r.next_run * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : " · paused")));
+      nm.append(el("span", "", when(r) + (r.enabled ? " · next " + new Date(r.next_run * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : " · paused") + (r.last_status ? " · last run: " + r.last_status : "")));
       const run = el("button", "ghost", "Run now"), pause = el("button", "ghost", r.enabled ? "Pause" : "Resume"), del = el("button", "danger", "Delete");
       const act = (fn) => async () => { try { await fn(); } catch (e) { toast(e.message); } renderTab(); };
       run.onclick = act(() => api(`/api/routines/${r.id}/run`, {})); pause.onclick = act(() => api(`/api/routines/${r.id}`, { enabled: !r.enabled }, "PATCH"));

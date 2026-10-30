@@ -43,6 +43,7 @@ class Orchestrator:
         self.db, self.hub, self.model_factory, self.jobs = db, hub, model_factory, jobs
         self._locks: dict[str, threading.Lock] = {}
         self._retries: dict[str, int] = {}  # bot id -> automatic retries since the owner last wrote (a failed task may be retried once, never in a loop)
+        self._origin: dict[str, str] = {}  # bot id -> the routine whose turn is running, so the tasks it starts are tagged with it
         self._finishing: set[str] = set()  # bots whose current turn was started by a finished task, not by the owner
         self._answered: dict[str, int] = {}  # bot id -> newest owner message a turn has already taken into account
         self._system = (PROMPTS / "orchestrator.md").read_text()
@@ -130,12 +131,14 @@ class Orchestrator:
         return None
 
     # --- turns ---------------------------------------------------------------------------------------------------
-    def turn(self, bot_id: str, note: str | None = None) -> None:
+    def turn(self, bot_id: str, note: str | None = None, routine: str | None = None) -> None:
         """One orchestrator turn: read the chat, decide, act. Runs in a worker thread; never raises."""
         lock = self._locks.setdefault(bot_id, threading.Lock())
         with lock:
             if not self.db.get_bot(bot_id):
                 return
+            if routine:
+                self._origin[bot_id] = routine
             if note is None and self._latest_owner(bot_id) <= self._answered.get(bot_id, 0):
                 return  # a turn that was already running took this message into account (steering), so it was answered
             if note is None:
@@ -144,6 +147,8 @@ class Orchestrator:
                 self._turn(bot_id, note)
             except Exception as e:  # keep the chat usable if the model or network fails
                 self.post(bot_id, f"Sorry, I hit a problem and could not answer ({type(e).__name__}). Please try again.")
+            finally:
+                self._origin.pop(bot_id, None)
 
     def _latest_owner(self, bot_id: str) -> int:
         rows = self.db._q("select max(id) m from messages where bot_id=? and role='user'", (bot_id,))
@@ -298,7 +303,7 @@ class Orchestrator:
         self.post(bot_id, say)
         ids: list[str] = []
         for goal, verify, dep in new:
-            ids.append(self.jobs.submit(bot_id, goal, ids[dep] if isinstance(dep, int) else dep, verify)["id"])
+            ids.append(self.jobs.submit(bot_id, goal, ids[dep] if isinstance(dep, int) else dep, verify, self._origin.get(bot_id))["id"])
 
     def _resume_handoff(self, bot_id: str, act: dict) -> None:
         """The owner says, in chat, that they finished the part they took over on the phone: answer the handoff card for them so the task goes on.
@@ -459,6 +464,10 @@ class Orchestrator:
                 job["status"], f"{bot['name']}'s task did not complete ({job['status']}): {job['goal']}\n{job['result']}")
             self.post(master_id, text, "bot_note", {"with": bot_id})
         status, result = job["status"], job["result"]
+        if job.get("routine") and self.db.get_routine(job["routine"]):  # the routine list shows how its last run went
+            self.db.routine_update(job["routine"], last_status=status)
+            if self.routines:
+                self.routines.on_change(bot_id)
         if status == "cancelled":
             self.post(bot_id, "Stopped the task.")
             return
@@ -483,18 +492,21 @@ class Orchestrator:
             note += f" {len(waiting)} queued task(s) depended on this one and will be skipped; say so."
         elif queued:
             note += f" {len(queued)} more task(s) for this bot are still queued and start by themselves; mention that briefly."
-        self._turn_with(bot_id, note, f"Task {status}: {result or job['goal']}")
+        self._turn_with(bot_id, note, f"Task {status}: {result or job['goal']}", job.get("routine"))
 
-    def _turn_with(self, bot_id: str, note: str, fallback: str) -> None:
+    def _turn_with(self, bot_id: str, note: str, fallback: str, routine: str | None = None) -> None:
         """A system-note turn (a job finished or was skipped) under the bot's lock; if the model fails the owner still gets the plain outcome."""
         with self._locks.setdefault(bot_id, threading.Lock()):
             self._finishing.add(bot_id)
+            if routine:
+                self._origin[bot_id] = routine  # a retry of a routine's task still belongs to that routine
             try:
                 self._turn(bot_id, note)
             except Exception:
                 self.post(bot_id, fallback, "result")
             finally:
                 self._finishing.discard(bot_id)
+                self._origin.pop(bot_id, None)
 
     def worker_request(self, bot_id: str, job: dict, payload: dict) -> dict:
         """The worker needs a plain value. Try memory and the model first; otherwise ask the owner in chat.
