@@ -16,6 +16,7 @@ MAX_TOOL_LOOPS = 4
 MAX_SEARCHES_PER_TURN = 3
 MAX_BOT_CHAIN = 3  # the asking bot plus at most two more
 MAX_PLAN_STEPS = 4
+MAX_AUTO_RETRIES = 1
 
 
 def same_goal(a: str, b: str) -> bool:
@@ -41,6 +42,8 @@ class Orchestrator:
         self.vault, self.routines = vault, None  # routines (the scheduler) is attached by the app
         self.db, self.hub, self.model_factory, self.jobs = db, hub, model_factory, jobs
         self._locks: dict[str, threading.Lock] = {}
+        self._retries: dict[str, int] = {}  # bot id -> automatic retries since the owner last wrote (a failed task may be retried once, never in a loop)
+        self._finishing: set[str] = set()  # bots whose current turn was started by a finished task, not by the owner
         self._answered: dict[str, int] = {}  # bot id -> newest owner message a turn has already taken into account
         self._system = (PROMPTS / "orchestrator.md").read_text()
         self._worker_system = (PROMPTS / "worker_request.md").read_text()
@@ -106,6 +109,11 @@ class Orchestrator:
         else:
             parts.append("No phone job is running for this bot right now. Never say a task is in progress or that you are 'already on it'; "
                          "if the owner asks for a phone task, start it with mobile_task, even if an earlier message in the chat said you were on it.")
+        cards = self.db.open_items(bot_id)
+        if cards:
+            parts.append("Cards waiting for the owner in this chat:\n" + "\n".join(f"- {i['kind']}: {i['payload'].get('question', '')[:110]}" for i in cards) +
+                         "\nIf the owner says they finished a 'handoff' card (\"done\", \"continue\", \"my part is done\"), use resume_task: typing in chat does not resume it by itself. "
+                         "Approvals, choices, codes and secrets can only be answered on their card; tell the owner to use it.")
         busy_with = [j for j in self.db.active_jobs() if j["bot_id"] != bot_id]
         if busy_with:
             parts.append(f"Other bots have {len(busy_with)} task(s) on the shared phone; this bot's tasks queue behind them.")
@@ -130,6 +138,8 @@ class Orchestrator:
                 return
             if note is None and self._latest_owner(bot_id) <= self._answered.get(bot_id, 0):
                 return  # a turn that was already running took this message into account (steering), so it was answered
+            if note is None:
+                self._retries[bot_id] = 0  # the owner is talking again: a new request gets its own retry
             try:
                 self._turn(bot_id, note)
             except Exception as e:  # keep the chat usable if the model or network fails
@@ -174,6 +184,9 @@ class Orchestrator:
                 msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
                                {"role": "user", "content": f"[tool result for phone_check] {self._phone_check(act)}"}]
                 continue
+            if kind == "resume_task":
+                self._resume_handoff(bot_id, act)
+                return
             if kind in ("steer_task", "stop_task"):
                 self._steer_job(bot_id, kind, act)
                 return
@@ -248,6 +261,12 @@ class Orchestrator:
         if not steps:
             self.post(bot_id, "What should I do on the phone?")
             return
+        if bot_id in self._finishing:  # this turn follows a finished task: starting another is a retry, and a retry happens once
+            if self._retries.get(bot_id, 0) >= MAX_AUTO_RETRIES:
+                self.post(bot_id, "I already retried this once and it still did not finish, so I'm stopping here instead of looping. "
+                                  "Tell me how you'd like to go on (for example: keep trying, or do something else).")
+                return
+            self._retries[bot_id] = self._retries.get(bot_id, 0) + 1
         active, prev = self.db.active_jobs(bot_id), None
         if act.get("after"):
             dep = self.db.get_job(str(act["after"]))
@@ -280,6 +299,23 @@ class Orchestrator:
         ids: list[str] = []
         for goal, verify, dep in new:
             ids.append(self.jobs.submit(bot_id, goal, ids[dep] if isinstance(dep, int) else dep, verify)["id"])
+
+    def _resume_handoff(self, bot_id: str, act: dict) -> None:
+        """The owner says, in chat, that they finished the part they took over on the phone: answer the handoff card for them so the task goes on.
+        Only handoffs: an approval, choice, code or secret must be given on its own card, never inferred from a loose "done"."""
+        item = next((i for i in self.db.open_items(bot_id) if i["kind"] == "handoff" and i["job_id"]), None)
+        if not item:
+            self.post(bot_id, "Nothing is waiting for you to finish on the phone. If a card is open, use it to approve, choose or enter a code.")
+            return
+        if not self.jobs.resume(item["job_id"], {"done": True}):
+            self.post(bot_id, "That task is no longer waiting for you.")
+            return
+        self.db.close_item(item["id"], "answered", "Done")
+        m = self.db.get_message(item["message_id"]) if item["message_id"] else None
+        if m:
+            self.hub.publish(bot_id, {"type": "message", "message": self.db.update_message(m["id"], meta={**m["meta"], "status": "answered", "answer": "Done"})})
+        self.jobs.release_control()  # they are no longer driving the phone
+        self.post(bot_id, str(act.get("say", "")).strip() or "Thanks, I'm continuing the task now.")
 
     def _steer_job(self, bot_id: str, kind: str, act: dict) -> None:
         """The owner changed their mind about a task that is already queued or running."""
@@ -427,6 +463,7 @@ class Orchestrator:
             self.post(bot_id, "Stopped the task.")
             return
         if status == "done":
+            self._retries[bot_id] = 0
             self.db.memory_add(bot_id, f"Task done: {job['goal']} -> {result}")
         waiting = [j for j in self.db.active_jobs(bot_id) if j["after"] == job["id"]]
         queued = self.db.active_jobs(bot_id)
@@ -439,6 +476,9 @@ class Orchestrator:
                 "(for example an install that was only tapped, or a sign-in the worker did not confirm), check with phone_check (app_installed, account or foreground) "
                 "before you say so. Then tell the owner in one or two sentences using reply: plainly whether it worked, partly worked or failed. "
                 "If it failed or is incomplete for a fixable reason you may start ONE retry with a clearer goal (mobile_task), and say that you are retrying.")
+        if status == "max_steps":
+            note += (" The worker ran out of its step or time budget, so the task is probably only partly done (a long download or install may still be running on the phone). "
+                     "Check the real state with phone_check, and if the goal is not met start ONE retry that continues from where the phone is now, saying that you are continuing.")
         if status != "done" and waiting:
             note += f" {len(waiting)} queued task(s) depended on this one and will be skipped; say so."
         elif queued:
@@ -448,10 +488,13 @@ class Orchestrator:
     def _turn_with(self, bot_id: str, note: str, fallback: str) -> None:
         """A system-note turn (a job finished or was skipped) under the bot's lock; if the model fails the owner still gets the plain outcome."""
         with self._locks.setdefault(bot_id, threading.Lock()):
+            self._finishing.add(bot_id)
             try:
                 self._turn(bot_id, note)
             except Exception:
                 self.post(bot_id, fallback, "result")
+            finally:
+                self._finishing.discard(bot_id)
 
     def worker_request(self, bot_id: str, job: dict, payload: dict) -> dict:
         """The worker needs a plain value. Try memory and the model first; otherwise ask the owner in chat.

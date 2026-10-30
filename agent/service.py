@@ -21,6 +21,7 @@ from agent.chat_api import register_chat
 from agent.vault import Vault, load_key
 from agent.db import Database
 from agent.hub import Hub
+from agent.device import is_blank
 from agent.jobs import JobManager
 from agent.orchestrator import Orchestrator
 from agent.master import Watcher, ensure_master
@@ -375,6 +376,22 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     frame = {"at": 0.0, "jpeg": b""}
     frame_lock = threading.Lock()
 
+    def owner_frame():
+        """The picture for the owner's live view. Password and purchase screens are secure windows that Android blanks for screenshots; the owner still
+        needs to see them to type, so the view falls back to the emulator's own picture. The agent never gets this (its screenshots stay blank there)."""
+        try:
+            img = device.frame() if hasattr(device, "frame") else Image.open(io.BytesIO(device.screenshot()))
+        except Exception:
+            img = None
+        if (img is None or is_blank(img)) and hasattr(device, "host_frame"):
+            try:
+                img = device.host_frame()
+            except Exception:
+                pass  # not an emulator: keep what we have
+        if img is None:
+            raise HTTPException(503, "Could not read the screen")
+        return img
+
     @app.get("/api/device/screenshot", dependencies=[Depends(auth)])
     def screenshot():
         if lifecycle and lifecycle.power != "on":
@@ -384,7 +401,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
             # Fresh frames while the owner is driving the phone; slower when the agent is working, so viewers never starve it.
             ttl = 0.1 if jobs.held else 2.5 if active() and not state["active"].pending else 0.8
             if time.time() - frame["at"] > ttl:
-                img = (device.frame() if hasattr(device, "frame") else Image.open(io.BytesIO(device.screenshot()))).convert("RGB")
+                img = owner_frame().convert("RGB")
                 img.thumbnail((1200, 540) if img.width > img.height else (540, 1200))  # landscape frames keep the same short side
                 buf = io.BytesIO()
                 img.save(buf, "JPEG", quality=70)

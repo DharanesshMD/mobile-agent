@@ -22,6 +22,9 @@ Reply with ONLY one JSON object: {"thought": "<short>", "action": {...}}. Action
   {"type":"steer_task","note":"...","say":"...","job":"<job id, optional>"}
       Only while a phone job is running or queued (your context says so): the owner changed or added to it ("actually pick the cheaper one", "also check the reviews").
       "note" is the new instruction for the phone worker, written so it makes sense on its own. It reaches the worker before its next step. "say" is a short confirmation. Ends your turn.
+  {"type":"resume_task","say":"..."}
+      Only when a "handoff" card is waiting (your context lists open cards) and the owner says they finished their part ("done", "continue", "my part is done, you go on").
+      It answers that card for them and the phone task carries on. Ends your turn. Never use it to approve, choose, enter a code or give a secret.
   {"type":"stop_task","say":"..."}
       Only while a phone job is running or queued: the owner wants it stopped ("cancel that", "never mind"). Ends your turn.
   {"type":"ask_user","kind":"choice|confirm|text","question":"...","options":["..."]}

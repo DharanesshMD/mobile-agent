@@ -238,5 +238,144 @@ class Recovery(unittest.TestCase):
         until(lambda: "stop" in backend.calls and "start" in backend.calls, timeout=10)
 
 
+
+class SecureScreens(unittest.TestCase):
+    """Password and purchase screens are blank to screencap. The owner's live view falls back to the emulator's own picture; the agent never does."""
+
+    @staticmethod
+    def jpeg_color(res):
+        import io
+        from PIL import Image
+        return Image.open(io.BytesIO(res.content)).convert("RGB").getpixel((10, 10))
+
+    def app_with(self, phone):
+        return TestClient(create_app(phone, lambda m: Spark(), settle=0, db=Database(":memory:"), data_dir=tempfile.mkdtemp()))
+
+    def test_blank_detection(self):
+        from PIL import Image
+        from agent.device import is_blank
+        self.assertTrue(is_blank(Image.new("RGB", (100, 200), (0, 0, 0))))
+        self.assertFalse(is_blank(Image.new("RGB", (100, 200), (30, 30, 30))))
+        secure = Image.new("RGB", (100, 200), (0, 0, 0))
+        secure.paste((255, 255, 255), (0, 0, 100, 10))  # the status bar stays visible on a secure screen
+        secure.paste((255, 255, 255), (30, 192, 70, 196))  # and so does the navigation pill
+        self.assertTrue(is_blank(secure))
+        secure.paste((90, 90, 90), (20, 80, 80, 120))  # but real content in the middle is not blank
+        self.assertFalse(is_blank(secure))
+
+    def test_the_live_view_shows_the_real_screen_when_android_blanks_it(self):
+        from PIL import Image
+
+        class Secure(Phone):
+            def frame(self):
+                return Image.new("RGB", (100, 200), (0, 0, 0))  # what screencap gives for a secure window
+
+            def host_frame(self):
+                return Image.new("RGB", (100, 200), (200, 30, 30))  # what the emulator draws
+
+        c = self.app_with(Secure())
+        r, g, b = self.jpeg_color(c.get("/api/device/screenshot"))
+        self.assertGreater(r, 150)
+        self.assertLess(g, 80)
+
+    def test_a_normal_screen_does_not_use_the_slower_host_capture(self):
+        from PIL import Image
+
+        class Normal(Phone):
+            host_calls = 0
+
+            def frame(self):
+                return Image.new("RGB", (100, 200), (30, 90, 200))
+
+            def host_frame(self):
+                Normal.host_calls += 1
+                return Image.new("RGB", (100, 200), (200, 30, 30))
+
+        c = self.app_with(Normal())
+        self.assertGreater(self.jpeg_color(c.get("/api/device/screenshot"))[2], 150)
+        self.assertEqual(Normal.host_calls, 0)
+
+    def test_a_device_that_is_not_an_emulator_keeps_the_blank_frame(self):
+        from PIL import Image
+
+        class Real(Phone):
+            def frame(self):
+                return Image.new("RGB", (100, 200), (0, 0, 0))
+
+            def host_frame(self):
+                raise subprocess.CalledProcessError(1, "adb emu")
+
+        res = self.app_with(Real()).get("/api/device/screenshot")
+        self.assertEqual(res.status_code, 200)
+        self.assertLess(sum(self.jpeg_color(res)), 20)  # still black (JPEG may not be exactly 0)
+
+    def test_host_frame_reads_the_emulator_screenshot_file(self):
+        from pathlib import Path
+        from PIL import Image
+        from agent.device import Device
+        d = Device()
+        d.use_u2 = False
+
+        def fake_run(*args):
+            assert args[:3] == ("emu", "screenrecord", "screenshot")
+            Image.new("RGB", (10, 20), (1, 2, 3)).save(Path(args[3]) / "Screenshot_1.png")
+            return b"OK"
+
+        d._run = fake_run
+        self.assertEqual(d.host_frame().getpixel((0, 0))[:3], (1, 2, 3))
+
+
+
+class ChatResumesHandoff(unittest.TestCase):
+    def test_saying_done_in_chat_resumes_a_handoff_and_the_task_finishes(self):
+        spark = Spark(act(type="mobile_task", goal="sign in to the store", say="ok"),
+                      act(type="resume_task", say="Continuing."), act(type="reply", text="signed in"))
+        c, _, bot, app = setup(spark, Worker(act(type="handoff", reason="enter your password"), act(type="done", answer="signed in")))
+        say(c, bot, "sign in")
+        until(lambda: open_card(c, bot))
+        say(c, bot, "my part is done, you continue")
+        until(lambda: statuses(c, bot) == {"sign in to the store": "done"})
+        card = next(m for m in msgs(c, bot) if m["kind"] == "action_item")
+        self.assertEqual((card["meta"]["status"], card["meta"]["answer"]), ("answered", "Done"))
+        self.assertIn("Cards waiting for the owner", spark.calls[1][0])  # the model was told a handoff was open
+        self.assertIn("Continuing.", texts(c, bot, "assistant"))
+
+    def test_chat_cannot_approve_a_confirmation(self):
+        spark = Spark(act(type="mobile_task", goal="send the message", say="ok"), act(type="resume_task"))
+        c, _, bot, _ = setup(spark, Worker(act(type="ask", question="Send the message?")))
+        say(c, bot, "go")
+        until(lambda: open_card(c, bot))
+        say(c, bot, "yes do it")
+        until(lambda: any("Nothing is waiting for you to finish" in t for t in texts(c, bot, "assistant")))
+        self.assertEqual(open_card(c, bot)["meta"]["status"], "open")  # still waiting for a real approval
+        self.assertEqual(statuses(c, bot), {"send the message": "waiting"})
+
+    def test_resume_with_nothing_waiting_says_so(self):
+        c, _, bot, _ = setup(Spark(act(type="resume_task")))
+        say(c, bot, "done")
+        until(lambda: any("Nothing is waiting" in t for t in texts(c, bot, "assistant")))
+
+
+
+class RetryLimit(unittest.TestCase):
+    def test_a_failed_task_is_retried_once_and_then_the_bot_stops_and_asks(self):
+        spark = Spark(act(type="mobile_task", goal="install the game", say="ok"),
+                      act(type="mobile_task", goal="install the game, continue", say="Retrying."),   # the retry after the first failure
+                      act(type="mobile_task", goal="install the game, again", say="Retrying again."),  # a second retry must be refused
+                      act(type="reply", text="unused"))
+        c, _, bot, _ = setup(spark, Worker(act(type="fail", reason="slow")), Worker(act(type="fail", reason="slow")))
+        say(c, bot, "install it")
+        until(lambda: any("stopping here instead of looping" in t for t in texts(c, bot, "assistant")), timeout=30)
+        self.assertEqual(len(c.get(f"/api/bots/{bot}/jobs").json()), 2)  # the original and exactly one retry
+
+    def test_the_owner_asking_again_gets_a_fresh_retry(self):
+        db = Database(":memory:")
+        c, _, bot, app = setup(Spark(act(type="reply", text="ok")), db=db)
+        app.state.orch._retries[bot] = 1
+        say(c, bot, "try again please")
+        until(lambda: "ok" in texts(c, bot, "assistant"))
+        self.assertEqual(app.state.orch._retries[bot], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

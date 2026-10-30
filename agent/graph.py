@@ -21,6 +21,7 @@ from langgraph.types import Command, interrupt
 
 from agent.device import Element
 from agent.config import IMAGE_MODE, IMAGE_WIDTH
+from agent.config import MAX_JOB_MINUTES, MAX_WAIT_S
 from agent.loop import GATES, SYSTEM, build_prompt, execute, need_image, parse_action, shrink
 from agent.loop import settle as settle_screen
 
@@ -37,6 +38,7 @@ class State(TypedDict, total=False):
     thought: str
     status: str
     answer: str
+    waits: int  # steps spent only waiting (a download, a loading screen): they do not use the step budget
 
 
 @dataclass
@@ -81,8 +83,11 @@ def observe(state: State, config: RunnableConfig) -> dict:
     goal = state["goal"]
     for note in (c["steer"]() if c.get("steer") else []):  # the owner changed or added to the task while it runs
         goal += f"\nOwner update: {note}"
-    if state.get("step", 0) >= c["max_steps"]:
+    step_now, waits = state.get("step", 0), state.get("waits", 0)
+    if step_now - waits >= c["max_steps"] or step_now >= c["max_steps"] * 4:  # waiting for a download is free, up to a hard cap
         return {"status": "max_steps", "answer": "step budget exhausted"}
+    if time.time() > c["deadline"]:
+        return {"status": "max_steps", "answer": f"time budget exhausted ({round(c['max_minutes'])} min); the phone may still be working on it"}
     dev = c["device"]
     t0 = time.time()
     with ThreadPoolExecutor(2) as ex:  # the screenshot and the UI tree are independent ADB calls
@@ -209,7 +214,14 @@ def act(state: State, config: RunnableConfig) -> dict:
     elements = [Element(e["id"], e["label"], tuple(e["center"]), e["clickable"], e.get("state", "")) for e in obs["elements"]]
     t0 = time.time()
     try:
-        info = execute(c["device"], a, elements, obs["scale"], tuple(obs.get("size") or c["size"]))
+        if a["type"] == "wait" and a.get("seconds") is not None:
+            secs = max(1, min(int(a["seconds"]), MAX_WAIT_S))
+            end = time.time() + secs
+            while time.time() < end and not c["cancel"].is_set():  # in small slices, so Stop works at once
+                time.sleep(0.25)
+            info = f"waited {secs} s"
+        else:
+            info = execute(c["device"], a, elements, obs["scale"], tuple(obs.get("size") or c["size"]))
         outcome = "ok" + (f": {info}" if info else "")
     except Exception as e:  # bad element id, adb error: tell the model and carry on
         outcome = f"error: {e}"
@@ -218,7 +230,7 @@ def act(state: State, config: RunnableConfig) -> dict:
     t1 = time.time()
     settle_screen(c["device"], c["settle"])
     _log_timing(config, n, {**obs.get("ms", {}), "act": act_ms, "settle": round((time.time() - t1) * 1000), "action": a["type"]})
-    return {"history": state.get("history", []) + [f"{n}. {json.dumps(a)} -> {outcome}"]}
+    return {"history": state.get("history", []) + [f"{n}. {json.dumps(a)} -> {outcome}"], "waits": state.get("waits", 0) + (a["type"] == "wait")}
 
 
 def _done(state: State) -> str:
@@ -254,7 +266,7 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
         handler: Callable[[dict], dict] | None = None, emit: Callable[[dict], None] | None = None,
         cancel: threading.Event | None = None, graph=None, pause: Callable[[], None] | None = None,
         image_mode: str | None = None, image_width: int | None = None, secrets=None,
-        steer: Callable[[], list[str]] | None = None) -> Result:
+        steer: Callable[[], list[str]] | None = None, max_minutes: float = MAX_JOB_MINUTES) -> Result:
     """Run a goal to completion. Without a handler, the run stops at the first gate with status needs_approval."""
     w, h = device.size()
     image_mode, image_width = image_mode or IMAGE_MODE, image_width or IMAGE_WIDTH
@@ -265,7 +277,7 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
         if emit:
             emit(event)
 
-    config = {"recursion_limit": max_steps * 6 + 20, "configurable": {
+    config = {"recursion_limit": max_steps * 4 * 3 + 30, "configurable": {"deadline": time.time() + max_minutes * 60, "max_minutes": max_minutes,
         "thread_id": uuid.uuid4().hex, "device": device, "model": model, "size": (w, h), "settle": settle,
         "max_steps": max_steps, "trace": str(trace_dir) if trace_dir else None, "emit": fan_out,
         "cancel": cancel or threading.Event(), "pause": pause, "steer": steer, "secrets": secrets, "image_mode": image_mode, "image_width": image_width,
@@ -280,4 +292,7 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
         payload = pending[0].value
         if handler is None:
             return Result("needs_approval", payload["text"], out.get("step", 0), out.get("history", []), payload)
-        cmd = Command(resume=handler(payload))
+        t_gate = time.time()
+        answer = handler(payload)
+        config["configurable"]["deadline"] += time.time() - t_gate  # time the owner took does not count against the task
+        cmd = Command(resume=answer)

@@ -32,7 +32,8 @@ Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {
   {"type":"key","key":"back|home|enter"}
   {"type":"open_app","package":"com.example.app"}
   {"type":"open_url","url":"https://..."}
-  {"type":"wait"}                          screen still loading
+  {"type":"wait","seconds":30}             screen still loading, or a download or install is running: wait that long (1 to 60, default short) then look again.
+                                           Waiting costs no steps. For a download or install use 30 to 60 and keep waiting while the progress moves; it can take 10 minutes or more
   {"type":"ask","question":"..."}          stop and ask the owner before anything consequential
   {"type":"handoff","reason":"..."}        the owner must act on the phone (sign in, password, captcha, 2FA prompt)
   {"type":"type_secret","label":"...","app":"..."}  type a saved secret (password, card or ID number) into the focused field; the owner approves each use and you never see the value. Only labels listed under "Saved secrets" exist
@@ -102,7 +103,8 @@ def build_prompt(goal: str, history: list[str], elements, scale: float, unchange
     listing = "\n".join(f"{e.id}: {e.label!r} at ({round(e.center[0] / scale)},{round(e.center[1] / scale)})"
                         f"{' [clickable]' if e.clickable else ''}{f' [{e.state}]' if getattr(e, 'state', '') else ''}"
                         for e in elements) or "(UI element list unavailable right now: use screenshot coordinates)"
-    hint = f"\nWARNING: the screen has not changed for {unchanged} action(s); change approach." if unchanged else ""
+    waiting = bool(acts) and acts[-1]["type"] == "wait"  # an unchanged screen while waiting is expected
+    hint = f"\nWARNING: the screen has not changed for {unchanged} action(s); change approach." if unchanged and not waiting else ""
     if oscillating(acts):
         hint += ("\nWARNING: you keep scrolling up and down without progress. Stop scrolling; tap a row that "
                  "could open the detail you need, or use the search field.")

@@ -4,11 +4,19 @@ import os
 import re
 import shlex
 import subprocess
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from pathlib import Path
 
 from PIL import Image
+
+
+def is_blank(img) -> bool:
+    """Is the app area black, as `screencap` returns for a secure window? The status and navigation bars are not secure and stay visible, so only the middle counts."""
+    w, h = img.size
+    return img.convert("L").crop((0, int(h * 0.08), w, int(h * 0.92))).resize((16, 32)).getextrema()[1] <= 4
 
 
 @dataclass
@@ -156,6 +164,19 @@ class Device:
             except Exception:
                 pass
         return Image.open(io.BytesIO(self._run("exec-out", "screencap", "-p")))
+
+    def host_frame(self):
+        """The screen as the emulator itself draws it. Android blanks `screencap` for secure windows (password and purchase screens set FLAG_SECURE),
+        but the emulator window still shows them. For the owner's live view ONLY: the agent's own screenshots stay blank there on purpose, so it never
+        sees what the owner types. Raises on a device that is not an emulator."""
+        with tempfile.TemporaryDirectory() as d:
+            self._run("emu", "screenrecord", "screenshot", d)
+            shots = sorted(Path(d).glob("*.png"))
+            if not shots:
+                raise RuntimeError("the emulator did not save a screenshot")
+            img = Image.open(shots[-1])
+            img.load()
+            return img
 
     def elements(self, limit: int = 70) -> list[Element]:
         root = None

@@ -22,3 +22,9 @@ One job waiting for the owner held the only phone for 17 hours and queued everyt
 
 ## A reply that promises an action must take it
 The master said "I'll disconnect the sign-in" and queued nothing. In the same turn either queue the task or say plainly it cannot be done. And never trust a worker's "done": check the fact on the phone (`agent/checks.py`) before reporting success or running a dependent task.
+
+## A step budget must not count waiting
+Polling a slow download one short wait at a time used all 25 steps at 9%. Make waiting a single long, cancellable action that is free in the budget, and bound the task by wall-clock time instead. Same for anything that retries: cap automatic retries in code (not only in the prompt), or a failed task loops and burns model calls.
+
+## Chat text is not a card answer
+The owner typed "done" in chat while the task waited on a handoff card, and the bot said "continuing" while nothing resumed. Whatever the owner can say in chat that means "go on" must call the same code path as the card, for handoffs only, never for approvals.

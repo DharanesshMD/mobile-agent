@@ -137,11 +137,44 @@ class LoopTests(unittest.TestCase):
         self.assertIn("error", model.calls[1])
 
     def test_unchanged_screen_triggers_warning_and_step_budget(self):
-        model = FakeModel([reply(type="wait")] * 3)
+        model = FakeModel([reply(type="key", key="back")] * 3)
         dev = FakeDevice([png(5)])
         res = run("g", dev, model, max_steps=3, settle=0)
         self.assertEqual(res.status, "max_steps")
         self.assertIn("has not changed", model.calls[2])
+
+    def test_waiting_does_not_use_the_step_budget_and_is_not_called_stuck(self):
+        # a download: several waits on a screen that barely changes, then done. Four waits would have ended a 3-step budget before.
+        model = FakeModel([reply(type="wait", seconds=1)] * 4 + [reply(type="done", answer="installed")])
+        res = run("g", FakeDevice([png(5)]), model, max_steps=3, settle=0)
+        self.assertEqual((res.status, res.answer), ("done", "installed"))
+        self.assertNotIn("has not changed", model.calls[4])  # an unchanged screen while waiting is expected
+        self.assertIn("waited 1 s", res.history[0])
+
+    def test_a_wait_can_be_stopped_at_once(self):
+        import threading, time
+        cancel = threading.Event()
+        threading.Timer(0.3, cancel.set).start()
+        t = time.time()
+        res = run("g", FakeDevice([png(5)]), FakeModel([reply(type="wait", seconds=60)]), settle=0, cancel=cancel)
+        self.assertEqual(res.status, "cancelled")
+        self.assertLess(time.time() - t, 5)
+
+    def test_the_time_budget_ends_a_task_that_never_finishes(self):
+        res = run("g", FakeDevice([png(5)]), FakeModel([reply(type="done", answer="x")]), max_minutes=0, settle=0)
+        self.assertEqual(res.status, "max_steps")
+        self.assertIn("time budget exhausted", res.answer)
+
+    def test_the_time_the_owner_takes_does_not_count_against_the_budget(self):
+        import time
+        model = FakeModel([reply(type="handoff", reason="sign in"), reply(type="done", answer="ok")])
+
+        def slow_owner(payload):
+            time.sleep(1.5)  # longer than the whole budget below
+            return {"done": True}
+
+        res = run("g", FakeDevice([png(1), png(2)]), model, max_minutes=0.025, settle=0, handler=slow_owner)
+        self.assertEqual(res.status, "done")
 
 
 if __name__ == "__main__":
