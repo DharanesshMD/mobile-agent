@@ -5,6 +5,7 @@ time in the order they were asked, and lanes run in parallel, so a long game tas
 done (in any lane) and is skipped if it did not succeed. A job waiting for the owner gives the phone up after OWNER_WAIT_MIN, owner control of the phone ends after HOLD_IDLE_MIN without input,
 and a job that hits a dead phone restarts it and runs once more, so the queue cannot freeze on one stuck task or one dead emulator.
 """
+import json
 import shutil
 import subprocess
 import threading
@@ -55,6 +56,7 @@ class JobManager:
         self.vault = vault
         self.lifecycle = None  # phone power (sleep and wake), attached by the app
         self.phones = None  # real phones connected through the app (agent/remote.py), attached by the app
+        self.app_cache: dict = self._load_app_cache()  # phone key -> (when, user-installed packages)
         self.virtuals: dict[str, tuple] = {}  # name -> (Device, Lifecycle) of each virtual phone (agent/virtual.py), attached by the app
         self.orch = None  # set by the app after construction
         self.graph = build_graph()
@@ -65,6 +67,21 @@ class JobManager:
         self.held = False  # the owner has control of the shared emulator (the only phone with owner control)
         self._threads: dict[str, threading.Thread] = {}
         self._started = False
+
+    def _load_app_cache(self) -> dict:
+        try:
+            return {k: (float(v[0]), list(v[1])) for k, v in json.loads((self.data_dir / "app_cache.json").read_text()).items()}
+        except Exception:
+            return {}
+
+    def remember_apps(self, key: str, apps: list[str]) -> None:
+        """The apps last seen on a phone (kept across restarts), so a phone that is asleep can still be chosen for the app it has."""
+        self.app_cache[key] = (time.time(), list(apps))
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            (self.data_dir / "app_cache.json").write_text(json.dumps(self.app_cache))
+        except OSError:
+            pass
 
     # --- lifecycle -----------------------------------------------------------------------------------------------
     def start(self) -> None:
@@ -403,6 +420,11 @@ class JobManager:
         if jr.timed_out:
             status, result = "failed", f"Timed out after {round(self.owner_wait_s / 60)} min waiting for the owner. The task was stopped and the phone released."
         job = self.db.update_job(jr.job_id, status=status, ended=time.time(), result=result, trace_dir=str(trace))
+        if jr.target != "phone" and not jr.target.startswith("phone:") and hasattr(device, "third_party_packages"):  # remember what is installed while the phone is awake
+            try:
+                self.remember_apps("emulator" if not jr.target else jr.target.split(":", 1)[1], device.third_party_packages())
+            except Exception:
+                pass
         if lifecycle:
             lifecycle.touch()  # the idle timer starts when the task ends
         self._drop_status(jr)

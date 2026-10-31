@@ -43,3 +43,10 @@ I restarted the service from a shell without `adb` on PATH: the phone looked "bo
 The Claude app starts `mobile-agent` (port 8000, adb on PATH) from `/Users/dharun/Personal/Projects/.claude/launch.json`. I had also started my own copy on 8001, so two services shared one SQLite db and one emulator.
 - Before starting a server: `pgrep -fl "agent.service"` and `lsof -iTCP -sTCP:LISTEN | grep python`. If one exists, restart that one (kill its pid, then preview_start `mobile-agent`), do not add another.
 
+## 12. Route by capability; never offer an action the phone cannot do
+The Games phone bot asked the owner to approve "install it from the Play Store?" on a phone with no Play Store; the owner approved, it failed, and nothing else was tried. The worker prompt told every phone to offer a Play install, and the bot did not know what its phone could not do.
+- Every bot's context carries a phone directory (agent/phones.py): what each phone can and cannot do, its state, its Google account fact, and apps known not to run there (mined from crash-stopped jobs). A phone's bot is told what its own phone cannot do and may not offer or promise it.
+- The worker prompt and Device carry `has_play`; a phone without Play refuses Play links and `com.android.vending` with a message the model can act on, and its prompt says to `fail` when an app is not installed.
+- When a task Master handed over fails, Master gets a turn to try another phone (at most 2 reroutes per request, never the same goal on a phone that already tried it), then explains honestly. Check where an app is installed with `phone_check` + `on` before routing.
+- Share what a phone needs without copying secrets: apps move as APK files (`move_app`, never data); a Google sign-in is never copied, it is a sign-in task on that phone's bot with the vault's `type_secret`. A phone with no Google services is told so, not offered a sign-in.
+

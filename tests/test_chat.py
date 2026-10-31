@@ -109,7 +109,7 @@ class OrchestratorTurns(unittest.TestCase):
         self.assertEqual(c.get("/api/bots").json()[0]["last"], "Hi there")
 
     def test_bad_json_then_model_failure_are_handled(self):
-        c, _, bot, _ = setup(Spark("garbage", "still garbage"))
+        c, _, bot, _ = setup(Spark("{garbage", "{still garbage"))  # broken JSON twice (plain prose with no braces is shown as the answer, see ProseReplies)
         say(c, bot, "hello")
         until(lambda: any("could not work out" in t for t in texts(c, bot)))
         c2, _, bot2, _ = setup(Spark())  # raises on first call

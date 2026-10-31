@@ -69,6 +69,8 @@ class Device:
     fast screenshot), and falls back to plain ADB (`uiautomator dump`, `screencap`) otherwise. Taps, swipes and typing stay
     on `adb shell input`, which measured faster. Set PHONE_READER=adb to force the fallback."""
 
+    has_play = True  # False on a phone without Google Play (the games phone): the worker then never offers or opens a Play Store install
+
     def __init__(self, serial: str | None = None, adb: str = "adb", use_u2: bool | None = None):
         self.serial = serial
         self.base = [adb, *(["-s", serial] if serial else [])]
@@ -112,8 +114,8 @@ class Device:
             except subprocess.CalledProcessError:
                 pass
 
-    def _run(self, *args: str) -> bytes:
-        return subprocess.run([*self.base, *args], check=True, capture_output=True, timeout=60).stdout
+    def _run(self, *args: str, timeout: float = 60) -> bytes:
+        return subprocess.run([*self.base, *args], check=True, capture_output=True, timeout=timeout).stdout
 
     def size(self) -> tuple[int, int]:
         """Current screen size including rotation (a game in landscape is 1600x720 on a 720x1600 phone). `wm size` always reports the physical
@@ -315,10 +317,35 @@ class Device:
         out = self._run("shell", "pm", "list", "packages").decode(errors="replace")
         return [line.split(":", 1)[1].strip() for line in out.splitlines() if line.startswith("package:")]
 
+    def apk_paths(self, package: str) -> list[str]:
+        """Where the APK files of an installed app are on the phone (a base APK and any splits), from `pm path`. Empty if it is not installed."""
+        out = self._run("shell", "pm", "path", package).decode(errors="replace")
+        return [line.split(":", 1)[1].strip() for line in out.splitlines() if line.startswith("package:")]
+
+    def pull(self, remote: str, local: str) -> None:
+        self._run("pull", remote, str(local), timeout=300)
+
+    def install_apks(self, paths: list[str]) -> None:
+        """Install an app from its APK files (a base APK plus splits go in together), replacing an older copy. Only the app, never anyone's data."""
+        out = self._run("install-multiple", "-r", *map(str, paths), timeout=300).decode(errors="replace")
+        if "Success" not in out:
+            raise ValueError("install failed: " + out.strip()[-200:])
+
     def foreground(self) -> str:
         """Package name of the app in front."""
         from agent.checks import parse_focus
         return parse_focus(self._run("shell", "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'").decode(errors="replace"))
+
+    def third_party_packages(self) -> list[str]:
+        """Packages the owner or the agent installed (not the system image): the apps worth knowing about when choosing a phone."""
+        out = self._run("shell", "pm", "list", "packages", "-3").decode(errors="replace")
+        return sorted(line.split(":", 1)[1].strip() for line in out.splitlines() if line.startswith("package:"))
+
+    def battery(self) -> tuple[int | None, bool]:
+        """(charge level in percent, is it charging) from `dumpsys battery`."""
+        out = self._run("shell", "dumpsys", "battery").decode(errors="replace")
+        level = re.search(r"^\s*level:\s*(\d+)", out, re.M)
+        return (int(level.group(1)) if level else None, bool(re.search(r"^\s*(AC|USB|Wireless) powered:\s*true", out, re.M)))
 
     def crashes(self) -> list[tuple[str, str]]:
         """(package, pid) of the app crashes Android has logged since the phone booted."""

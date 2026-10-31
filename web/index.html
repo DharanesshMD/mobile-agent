@@ -26,8 +26,6 @@
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
   .app { display: grid; grid-template-columns: 280px minmax(0, 1fr) 340px; height: 100vh; }
-  @media (max-width: 1100px) { .app { grid-template-columns: 260px minmax(0, 1fr); } .panel { display: none; } .app.show-panel .panel { display: flex; position: fixed; right: 0; top: 0; bottom: 0; width: min(360px, 92vw); z-index: 20; box-shadow: -10px 0 40px #0008; } }
-  @media (max-width: 720px) { .app { grid-template-columns: minmax(0, 1fr); } .side { display: none; } .app.show-side .side { display: flex; position: fixed; left: 0; top: 0; bottom: 0; width: min(300px, 88vw); z-index: 20; } .menu-btn { display: inline-block !important; } }
 
   /* sidebar */
   .side { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
@@ -47,6 +45,7 @@
   .bot .p { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .botrow { position: relative; }
   .botrow .bot { padding-right: 42px; }
+  .botrow.tagged .bot .n { margin-right: 52px; }
   .botrow .more { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; padding: 0; border: 0; border-radius: 8px; display: grid; place-items: center; color: var(--dim); background: transparent; opacity: 0; transition: opacity .12s, background .12s; }
   .botrow .more svg { width: 16px; height: 16px; fill: currentColor; }
   .botrow:hover .more, .botrow .more.open, .botrow .more:focus-visible { opacity: 1; }
@@ -200,6 +199,9 @@
   @media (max-width: 760px) { .dock-hint { display: none; } }
   .lightbox { position: fixed; inset: 0; background: #000d; z-index: 60; display: none; align-items: center; justify-content: center; }
   .lightbox.on { display: flex; } .lightbox img { max-height: 92vh; max-width: 92vw; border-radius: 12px; }
+  /* Responsive layout. It must come after the base .side, .panel and .menu-btn rules, or those win and nothing collapses on a narrow window. */
+  @media (max-width: 1100px) { .app { grid-template-columns: 260px minmax(0, 1fr); } .panel { display: none; } .app.show-panel .panel { display: flex; position: fixed; right: 0; top: 0; bottom: 0; width: min(360px, 92vw); z-index: 20; box-shadow: -10px 0 40px #0008; } }
+  @media (max-width: 720px) { .app { grid-template-columns: minmax(0, 1fr); } .side { display: none; } .app.show-side .side { display: flex; position: fixed; left: 0; top: 0; bottom: 0; width: min(300px, 88vw); z-index: 20; } .menu-btn { display: inline-block !important; } }
 </style>
 </head>
 <body>
@@ -332,6 +334,7 @@ function renderBots() {
     if (b.kind === "master") row.append(el("span", "tag", "Master"));
     if (b.kind === "phone") row.append(el("span", "tag", "Phone"));
     if (b.kind === "virtual") row.append(el("span", "tag", "Games"));
+    if (row.querySelector(".tag")) row.classList.add("tagged");  // the name stops before the tag instead of running under it
     if (b.unread && !(S.bot && S.bot.id === b.id)) btn.append(el("span", "unread"));
     more.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></svg>';
     more.setAttribute("aria-label", "Bot options");

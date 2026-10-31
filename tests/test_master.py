@@ -135,7 +135,8 @@ class Api(unittest.TestCase):
 
     def test_master_hands_a_task_to_the_bot_that_fits_and_hears_back(self):
         spark = Spark(act(type="delegate_task", bot="assistant", goal="open youtube and play a BTS video", say="Asked Assistant to play it."),
-                      act(type="reply", text="Playing a BTS video."))  # the second reply is Assistant reporting to the owner
+                      act(type="reply", text="Playing a BTS video."),  # Assistant reporting to the owner in its own chat
+                      act(type="reply", text="Playing a BTS video."))  # and Master giving the owner the answer in its chat (either order)
         c, app, master, assistant = master_app(spark, Worker(act(type="done", answer="playing")))
         say(c, master["id"], "have the assistant play a bts video")
         until(lambda: any(m["kind"] == "bot_note" and m["content"].startswith("Assistant finished") for m in msgs(c, master["id"])))
@@ -146,6 +147,7 @@ class Api(unittest.TestCase):
         notes = [m["content"] for m in msgs(c, assistant["id"]) if m["kind"] == "bot_note"]
         self.assertEqual(notes, ["Master asked you to do this on the phone: open youtube and play a BTS video"])
         until(lambda: "Playing a BTS video." in texts(c, assistant["id"], "assistant"))  # the bot reports in its own chat too
+        until(lambda: "Playing a BTS video." in texts(c, master["id"], "assistant"))  # and Master answers the owner itself
 
     def test_delegating_to_an_unknown_or_busy_bot_is_explained(self):
         spark = Spark(act(type="delegate_task", bot="Nobody", goal="g", say=""))

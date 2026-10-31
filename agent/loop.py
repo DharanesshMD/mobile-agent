@@ -57,7 +57,30 @@ In a game or any app with no listed elements, work from the screenshot. Do exact
 one action, count what you have done, stop at that number and finish with "done", describing what the screen shows (what you see, any numbers or text you can read).
 Do not keep exploring after the goal is met."""
 
+PLAY_INSTALL_RULE = ('use "ask"\n'
+                     'to offer installing it from the Play Store when signed in, otherwise "fail".')
+NO_PLAY_RULE = ('this phone has NO Google Play, so it cannot be installed here (apps reach this phone only as APK files from the owner): '
+                'use "fail" at once with the reason "<app> is not installed on this phone and cannot be installed here (no Play Store, it needs an APK)". '
+                'Never use "ask" to offer a Play Store install and never open a Play Store link on this phone.')
+PLAY_HOSTS = ("play.google.com", "market.android.com", "play.app.goo.gl")
+NO_PLAY_MESSAGE = ("this phone has no Google Play: a Play Store link cannot open here. Do not try to install apps from the Play Store; "
+                   "if the app is not installed, use fail (it needs an APK, or a phone that has Google Play)")
+
 KEYS = {"back": "KEYCODE_BACK", "home": "KEYCODE_HOME", "enter": "KEYCODE_ENTER"}
+
+
+def system_prompt(has_play: bool = True) -> str:
+    """The worker's instructions. A phone without Google Play must never be told it can install from the Play Store."""
+    if has_play:
+        return SYSTEM
+    assert PLAY_INSTALL_RULE in SYSTEM
+    return SYSTEM.replace(PLAY_INSTALL_RULE, NO_PLAY_RULE, 1)
+
+
+def is_play_url(url: str) -> bool:
+    """A link into the Play Store: market://, or a play.google.com page, also inside an intent:// URL."""
+    u = url.strip().lower()
+    return u.startswith("market://") or "market://" in u or any(f"//{h}" in u or u.startswith(h) for h in PLAY_HOSTS)
 GATES = {"ask", "handoff", "request_otp", "need_info", "type_secret", "need_secret"}
 
 
@@ -169,8 +192,12 @@ def execute(device, act: dict, elements, scale: float, size: tuple[int, int]) ->
     elif kind == "key":
         device.key(KEYS[act["key"]])
     elif kind == "open_app":
+        if not getattr(device, "has_play", True) and str(act["package"]) == "com.android.vending":
+            raise ValueError(NO_PLAY_MESSAGE)
         device.open_app(str(act["package"]))
     elif kind == "open_url":
+        if not getattr(device, "has_play", True) and is_play_url(str(act["url"])):
+            raise ValueError(NO_PLAY_MESSAGE)  # the model reads this as the action's outcome and can choose "fail" instead of a WebView error page
         device.open_url(str(act["url"]))
     elif kind == "wait":
         time.sleep(1.5)

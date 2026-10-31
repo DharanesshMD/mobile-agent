@@ -125,6 +125,7 @@ class PhoneHub:
 
 class RemoteDevice:
     """The `Device` interface, backed by a phone that is connected through the hub."""
+    has_play = True  # a real phone has Google Play
 
     def __init__(self, hub: PhoneHub, phone_id: str):
         self.hub, self.phone_id = hub, phone_id

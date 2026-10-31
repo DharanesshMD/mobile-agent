@@ -49,6 +49,12 @@ def ensure_phone_bot(db: Database, hub: Hub | None, phone_id: str, info: dict) -
     if bot:
         return bot
     name = str(info.get("name") or info.get("model") or "My phone").strip()[:40] or "My phone"
+    taken = {b["name"] for b in db.list_bots()}
+    if name in taken:  # a second phone (or the same phone paired again) must not get a bot with the same name
+        n = 2
+        while f"{name} {n}" in taken:
+            n += 1
+        name = f"{name} {n}"
     bot = db.create_bot(name, PHONE_PERSONA, kind="phone", phone_id=phone_id)
     msg = db.add_message(bot["id"], "assistant", "text", f"Your phone ({name}) is connected. Tell me what to do on it: I work on it in the background, and these tasks never touch the shared emulator.")
     if hub:

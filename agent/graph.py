@@ -22,7 +22,7 @@ from langgraph.types import Command, interrupt
 from agent.device import Element
 from agent.config import IMAGE_MODE, IMAGE_WIDTH
 from agent.config import CRASH_LIMIT, MAX_JOB_MINUTES, MAX_WAIT_S
-from agent.loop import ANIMATED_AFTER, ANIMATED_SAME, GATES, SYSTEM, build_prompt, coarse, coarse_diff, execute, need_image, parse_action, shrink
+from agent.loop import ANIMATED_AFTER, ANIMATED_SAME, GATES, build_prompt, coarse, coarse_diff, execute, need_image, parse_action, shrink, system_prompt
 from agent.loop import settle as settle_screen
 
 
@@ -51,6 +51,7 @@ class State(TypedDict, total=False):
     waits: int  # steps spent only waiting (a download, a loading screen): they do not use the step budget
     crash_seen: list[str]  # "package:pid" of crashes already counted, so each is counted once
     crashes: dict  # package -> crashes during this task
+    launchers: list  # packages with a launcher icon: only these are apps whose crash can stop a task (system services crash in the background on their own)
 
 
 @dataclass
@@ -110,13 +111,18 @@ def observe(state: State, config: RunnableConfig) -> dict:
             logged = f_crash.result() if f_crash else []
         except Exception:  # the crash log is a help, never a reason to stop
             logged = []
-    seen, crashes = list(state.get("crash_seen", [])), dict(state.get("crashes", {}))
-    for pkg, pid in logged:
-        if f"{pkg}:{pid}" not in seen:
-            seen.append(f"{pkg}:{pid}")
-            if "crash_seen" in state:  # the first look only records what crashed before this task began
-                crashes[pkg] = crashes.get(pkg, 0) + 1
-    crash_state = {"crash_seen": seen, "crashes": crashes}
+    seen, crashes, launchers = list(state.get("crash_seen", [])), dict(state.get("crashes", {})), state.get("launchers")
+    fresh = [(pkg, pid) for pkg, pid in logged if f"{pkg}:{pid}" not in seen]
+    if fresh and launchers is None:  # find out once which packages are real apps (a virtual phone's Bluetooth service crashes all the time and is not the task's app)
+        try:
+            launchers = sorted(dev.launcher_apps()) if hasattr(dev, "launcher_apps") else []
+        except Exception:
+            launchers = []
+    for pkg, pid in fresh:
+        seen.append(f"{pkg}:{pid}")
+        if "crash_seen" in state and (not launchers or pkg in launchers):  # the first look only records what crashed before this task began
+            crashes[pkg] = crashes.get(pkg, 0) + 1
+    crash_state = {"crash_seen": seen, "crashes": crashes, "launchers": launchers}
     worst = max(crashes, key=crashes.get, default=None)
     if worst and crashes[worst] >= CRASH_LIMIT:
         return {**crash_state, "status": "failed", "answer": crash_report(worst, crashes[worst], bool(getattr(dev, "is_emulator", lambda: False)()))}
@@ -316,7 +322,7 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
         "thread_id": uuid.uuid4().hex, "device": device, "model": model, "size": (w, h), "settle": settle,
         "max_steps": max_steps, "trace": str(trace_dir) if trace_dir else None, "emit": fan_out,
         "cancel": cancel or threading.Event(), "pause": pause, "steer": steer, "secrets": secrets, "image_mode": image_mode, "image_width": image_width,
-        "system": SYSTEM.replace("WIDTHxHEIGHT", f"{image_width}x{round(h * image_width / w)}")}}
+        "system": system_prompt(getattr(device, "has_play", True)).replace("WIDTHxHEIGHT", f"{image_width}x{round(h * image_width / w)}")}}
     graph = graph or build_graph()
     try:  # crashes before this task began do not count against it
         before = [f"{p}:{i}" for p, i in device.crashes()] if hasattr(device, "crashes") else []

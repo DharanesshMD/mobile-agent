@@ -391,6 +391,9 @@ class CrashyPhone(RealisticPhone):
     def crashes(self):
         return list(self.logged)
 
+    def launcher_apps(self):
+        return ["com.supercell.clashofclans", "com.android.settings"]
+
     def is_emulator(self):
         return self.emulator
 
@@ -417,6 +420,15 @@ class AppCrashes(unittest.TestCase):
         self.assertNotIn("CRASHES", model.prompts[0])  # the crash from before the task is not counted
         self.assertIn("com.supercell.clashofclans crashed 1x", model.prompts[1])  # the model learns about it on the next step
 
+    def test_a_background_system_service_crashing_does_not_stop_the_task(self):
+        class Noisy(CrashyPhone):
+            def tap(self, x, y):
+                RealisticPhone.tap(self, x, y)
+                self.logged.append(("com.android.bluetooth", str(2000 + len(self.logged))))  # a virtual phone has no Bluetooth: its service dies over and over
+        phone = Noisy()
+        res = run_graph("open the game", phone, Worker(*([{"type": "tap", "element": 0}] * 5 + [{"type": "done", "answer": "ok"}])), settle=0)
+        self.assertEqual(res.status, "done")
+
     def test_a_real_phone_is_not_blamed_on_emulation(self):
         res = run_graph("open it", CrashyPhone(emulator=False), Worker(*([{"type": "tap", "element": 0}] * 6)), settle=0)
         self.assertNotIn("emulated", res.answer)
@@ -430,6 +442,41 @@ class AppCrashes(unittest.TestCase):
         self.assertEqual(app.state.orch._retries[bot], 1)  # no automatic retry is left
         self.assertIn("do NOT start a retry", spark.calls[-1][1][-1]["content"])
         self.assertTrue(any("crashed 3 times" in m for m in app.state.orch.db.memory_search(bot, "crashed")))  # remembered for later chats
+
+
+class ProseReplies(unittest.TestCase):
+    def test_a_plain_text_answer_from_the_model_is_shown_as_it_is(self):
+        c, _, bot, app = setup(Spark("Your phone runs Android 14."))
+        say(c, bot, "what android version is it?")
+        until(lambda: "Your phone runs Android 14." in texts(c, bot, "assistant"))
+
+    def test_broken_json_is_asked_again_for_the_same_request(self):
+        spark = Spark('{"action": {"type": "reply", "text": "oops"', act(type="reply", text="fixed"))
+        c, _, bot, app = setup(spark)
+        say(c, bot, "hi")
+        until(lambda: "fixed" in texts(c, bot, "assistant"))
+        self.assertIn("same request", spark.calls[1][1][-1]["content"])
+
+
+class BatteryCheck(unittest.TestCase):
+    DUMPSYS = b"Current Battery Service state:\n  AC powered: false\n  USB powered: true\n  Wireless powered: false\n  status: 2\n  level: 87\n  scale: 100\n"
+
+    def test_the_level_and_charging_state_are_read_from_dumpsys(self):
+        from agent.device import Device
+        d = Device.__new__(Device)
+        d._run = lambda *a: self.DUMPSYS
+        self.assertEqual(d.battery(), (87, True))
+        d._run = lambda *a: b"nothing useful"
+        self.assertEqual(d.battery(), (None, False))
+
+    def test_the_battery_check_answers_with_the_percentage_or_says_it_cannot(self):
+        class Dev:
+            def battery(self):
+                return 55, False
+        self.assertEqual(run_check(Dev(), {"kind": "battery"}), (True, "battery is at 55%"))
+        ok, detail = run_check(object(), {"kind": "battery"})
+        self.assertFalse(ok)
+        self.assertIn("worker", detail)
 
 
 if __name__ == "__main__":

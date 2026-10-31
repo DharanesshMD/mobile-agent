@@ -613,6 +613,7 @@ def create_default_app() -> FastAPI:
     virtuals = {}
     if os.environ.get("GAMES_PHONE", "on") != "off" and LimaRedroidBackend.available():  # the games phone exists on this computer; nothing is started yet
         games = Device(GAMES_SERIAL)
+        games.has_play = False  # Redroid ships without Google Play: apps come as APK files
         glc = Lifecycle(LimaRedroidBackend(), on_ready=lambda cold: games.reconnect())  # a new boot or a long freeze: forget cached connections
         glc.last_boot_s = 15  # a cold start (the VM, then the container) takes about 15 s: the progress bar should not promise a minute
         virtuals[GAMES] = (games, glc)

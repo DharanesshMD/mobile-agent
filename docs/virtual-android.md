@@ -56,6 +56,18 @@ Tested: Shattered Pixel Dungeon (libGDX) and Mindustry. A game that refuses to r
 - [x] Research (this file), reference study of the desktop agent
 - [x] Spike: Redroid in Lima, boot time, RAM, adb speed, pause/resume, a free game (scripts/virtual-android/, docs/virtual-android-spike.md)
 - [x] `LimaRedroidBackend`, a "Games phone" bot with its own phone and live view, one job lane per phone so lanes run in parallel
-- [ ] Tune the worker for games if the live test shows a need (see the live verification notes in docs/virtual-android-spike.md)
+- [x] Tune the worker for games (see docs/virtual-android-spike.md)
+- [x] Hybrid routing (31 Oct): phone directory in every bot's context, `phone_check` with `on`, Master reroutes a failed handover (max 2, no repeats), a phone without Play refuses Play links and is never offered a Play install
+- [x] `move_app` (Master): copy an installed app emulator <-> games phone without a store (APK files only, never data or sign-in); per-phone Google account fact; Google sign-in is a task on that phone's bot with the vault, never copied
 - [ ] If the games phone is not good enough for a game: tune the official emulator or use the real-phone app for it
 - [ ] Demo: show the Mobile panel with the games phone running a free game, state limits honestly
+
+
+## Hybrid routing and sharing between phones (31 Oct 2026)
+- `agent/phones.py`: the directory (capability, state, Google account fact, known-not-to-run apps from crash-stopped jobs) shown to every bot; Master also gets the routing rules.
+- Master's `phone_check` takes `on` (emulator, games, a real phone's bot name), wakes a sleeping phone, and says honestly if one is offline.
+- When a task Master handed over fails, Master gets a turn to move it to a phone that can do it (2 reroutes at most per request, never the same goal to a phone that already tried it), then explains.
+- `move_app` (Master only): `pm path` -> `adb pull` each APK -> `adb install-multiple -r` on the other phone -> verified with the app_installed check -> temp files deleted. Only the app moves.
+  Not for the owner's own phone (it installs from its own Play Store).
+- Google sign-in: never copied between phones. A phone that can have an account (the emulator, the owner's phone) gets a sign-in task on its own bot (type_secret from the vault, owner approves, handoff for 2-step).
+  The games phone has no Google services and can never sign in.

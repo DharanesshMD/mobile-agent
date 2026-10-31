@@ -6,10 +6,12 @@ import threading
 import time
 from pathlib import Path
 
-from agent.checks import KINDS, run_check
+from agent import phones
+from agent.checks import KINDS, find_packages, run_check
 from agent.config import MAX_ACTIVE_PER_BOT, ORCHESTRATOR_MODEL
 from agent.db import Database
 from agent.graph import CRASH_PREFIX
+from agent.moveapp import move_app
 from agent.remote import RemoteDevice
 from agent.hub import Hub
 
@@ -19,6 +21,7 @@ MAX_SEARCHES_PER_TURN = 3
 MAX_BOT_CHAIN = 3  # the asking bot plus at most two more
 MAX_PLAN_STEPS = 4
 MAX_AUTO_RETRIES = 1
+MAX_REROUTES = 2  # a task Master handed over that fails may be sent to another phone twice; after that Master only explains
 
 
 def same_goal(a: str, b: str) -> bool:
@@ -48,6 +51,10 @@ class Orchestrator:
         self._origin: dict[str, str] = {}  # bot id -> the routine whose turn is running, so the tasks it starts are tagged with it
         self._finishing: set[str] = set()  # bots whose current turn was started by a finished task, not by the owner
         self._answered: dict[str, int] = {}  # bot id -> newest owner message a turn has already taken into account
+        self._reroutes: dict[str, int] = {}  # master bot id -> automatic reroutes started for the owner's current request
+        self._attempts: dict[str, list[tuple[str, str]]] = {}  # master bot id -> (bot id, goal) already tried for the current request
+        self._explain_only: set[str] = set()  # master bots that used up their reroutes: they may only explain now
+        self._summarize: set[str] = set()  # master bots that moved an app or rerouted a task: when the handed-over task finishes, Master gives the owner the final answer
         self._system = (PROMPTS / "orchestrator.md").read_text()
         self._worker_system = (PROMPTS / "worker_request.md").read_text()
 
@@ -121,7 +128,8 @@ class Orchestrator:
             _, lc = self.jobs.pair(self.jobs.lane_of(bot_id))
             parts.append("You are the bot of the GAMES PHONE: a light virtual Android (Android 13 in a container) for games and heavy apps. Every phone task you queue runs on it, "
                          "in the background, and never on the shared emulator; no other bot can use it. There is no Google Play on it: apps are installed from APK files by the owner, "
-                         "so find_app tells you what is installed (do not try to install from the Play Store). Games draw one picture and have no UI tree: the worker plays from "
+                         "so find_app tells you what is installed. NEVER offer, ask about or promise a Play Store install (this phone has none): if an app is not installed, say it needs an APK "
+                         "from the owner or another phone (name which one from the phone directory). Games draw one picture and have no UI tree: the worker plays from "
                          "screenshots and coordinates, so keep tasks short and concrete (one level, a few moves) and expect several tries. Some games refuse to run on virtual "
                          "devices: if one crashes or closes at start, say so plainly and suggest the owner's own phone (the Mobile Agent app) instead of retrying. "
                          f"The games phone is {(lc.info() if lc else {'power': 'unavailable'})['power']} right now (a sleeping or stopped one wakes by itself, which takes a few seconds).")
@@ -141,6 +149,7 @@ class Orchestrator:
                 parts.append("The owner's own phone has its own bot: " + ", ".join(b["name"] for b in mine_phones) + ". You cannot run tasks on it; for something "
                              "on their own phone (games and apps that refuse to run on the emulator, their real accounts) tell them to ask that bot." +
                              (" Master can hand such a task to it." if bot["kind"] != "master" else " You can hand such a task to it with delegate."))
+        parts.append(phones.render(phones.describe(self.db, self.jobs), phones.phone_key(bot), master=bot["kind"] == "master"))
         lane = self.jobs.lane_of(bot_id)
         busy_with = [j for j in self.db.active_jobs() if j["bot_id"] != bot_id and self.jobs.lane_of(j["bot_id"]) == lane]
         if busy_with:
@@ -154,8 +163,10 @@ class Orchestrator:
             try:
                 return parse_decision(raw)
             except (ValueError, json.JSONDecodeError):
+                if "{" not in raw and raw.strip():  # plain prose, no JSON at all: it is the answer, so show it instead of asking again (a second ask can come back as "understood")
+                    return {"type": "reply", "text": raw.strip()}
                 msgs = msgs + [{"role": "assistant", "content": raw},
-                               {"role": "user", "content": "That was not valid JSON. Reply with only the JSON object."}]
+                               {"role": "user", "content": "That was not valid JSON. Reply with only the JSON object, for the same request as before, and do not mention this correction."}]
         return None
 
     # --- turns ---------------------------------------------------------------------------------------------------
@@ -171,6 +182,10 @@ class Orchestrator:
                 return  # a turn that was already running took this message into account (steering), so it was answered
             if note is None:
                 self._retries[bot_id] = 0  # the owner is talking again: a new request gets its own retry
+                self._reroutes[bot_id] = 0
+                self._attempts.pop(bot_id, None)
+                self._explain_only.discard(bot_id)
+                self._summarize.discard(bot_id)
             try:
                 self._turn(bot_id, note)
             except Exception as e:  # keep the chat usable if the model or network fails
@@ -207,8 +222,16 @@ class Orchestrator:
             if kind == "reply":
                 self.post(bot_id, str(act.get("text", "")).strip() or "Done.")
                 return
+            if kind in ("delegate_task", "mobile_task", "mobile_plan"):
+                err = self._reroute_guard(bot_id, act, kind)
+                if err:  # a reroute turn may not repeat what was tried or go past its limit: the model hears why and explains instead
+                    msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})}, {"role": "user", "content": f"[tool result for {kind}] {err}"}]
+                    continue
             if kind == "delegate_task" and (self.db.get_bot(bot_id) or {}).get("kind") == "master":
                 self._delegate(bot_id, act)
+                return
+            if kind == "move_app" and (self.db.get_bot(bot_id) or {}).get("kind") == "master":
+                self._move_app(bot_id, act)
                 return
             if kind in ("mobile_task", "mobile_plan"):
                 self._queue_tasks(bot_id, act, kind)
@@ -277,25 +300,55 @@ class Orchestrator:
             return {"kind": v["kind"], "query": str(v.get("query", ""))[:80]}
         return None
 
-    def _phone_check(self, bot_id: str, act: dict) -> str:
-        """Read a fact straight from the phone (app installed, Google account signed in, app in front) so a task's result can be checked, not trusted."""
-        dev, lc = self.jobs.device, self.jobs.lifecycle
+    def _phone_key(self, bot_id: str, on: str) -> str:
+        """Which phone `on` names: emulator, games, or phone:<id> of a real phone's bot ("" means the bot's own phone). 'error: ...' if unknown."""
+        on = (on or "").strip().lower()
         own = self.db.get_bot(bot_id) or {}
-        if own.get("kind") == "virtual":  # a fact from the games phone
-            dev, lc = self.jobs.pair(self.jobs.lane_of(bot_id))
-            if dev is None:
-                return "error: the games phone is not set up"
-        elif own.get("kind") == "phone":  # a fact from the owner's own phone
-            pid = self.jobs.phones.pick(own.get("phone_id")) if self.jobs.phones else None
+        real = [b for b in self.db.list_bots() if b["kind"] == "phone"]
+        if not on:
+            return phones.phone_key(own)
+        if on in ("emulator", "shared", "shared emulator", "main", "default"):
+            return "emulator"
+        if on in ("games", "game", "games phone", "virtual"):
+            return "games"
+        hit = next((b for b in real if b["name"].lower() == on or b["phone_id"].lower() == on), None) or next((b for b in real if b["name"].lower().startswith(on)), None)
+        if not hit:
+            return "error: unknown phone '" + on + "'; use emulator, games" + "".join(f", {b['name']}" for b in real)
+        return phones.phone_key(hit)
+
+    def _resolve_phone(self, bot_id: str, on: str) -> tuple | str:
+        """(device, lifecycle, label) of the phone a check should read: the bot's own, or the one named in `on`. An error string if unknown or offline."""
+        key = self._phone_key(bot_id, on)
+        if key.startswith("error"):
+            return key
+        if key == "emulator":
+            return self.jobs.device, self.jobs.lifecycle, "the shared emulator"
+        if key.startswith("phone:"):
+            b = next((x for x in self.db.list_bots() if x["kind"] == "phone" and x["phone_id"] == key.split(":", 1)[1]), {"name": "your phone"})
+            pid = self.jobs.phones.pick(key.split(":", 1)[1]) if self.jobs.phones else None
             if not pid:
-                return "error: the owner's phone is not connected"
-            dev, lc = RemoteDevice(self.jobs.phones, pid), None
+                return f"error: {b['name']} is offline (the Mobile Agent app is not connected), so I cannot look at it"
+            return RemoteDevice(self.jobs.phones, pid), None, b["name"]
+        dev, lc = self.jobs.virtuals.get(key, (None, None))
+        if dev is None:
+            return "error: the games phone is not set up on this computer"
+        return dev, lc, "the games phone"
+
+    def _phone_check(self, bot_id: str, act: dict) -> str:
+        """Read a fact straight from a phone (app installed, Google account signed in, app in front) so a task's result can be checked, not trusted.
+        `on` picks the phone (default: the bot's own), so a bot can see where an app is installed before it decides where to send a task."""
+        target = self._resolve_phone(bot_id, str(act.get("on", "")))
+        if isinstance(target, str):
+            return target
+        dev, lc, label = target
+        if label == "the games phone" and act.get("kind") == "account":
+            return "no (on the games phone): it has no Google services, so no Google account can be signed in there"
         if not hasattr(dev, "packages"):
             return "error: phone checks are not available"
         if lc is not None and not lc.ensure_healthy(90):
-            return "error: the phone is not available right now (it is starting). Start the task instead; it waits for the phone."
+            return f"error: {label} is not available right now (it is starting). Start the task instead; it waits for the phone."
         ok, detail = run_check(dev, act)
-        return f"{'yes' if ok else 'no'}: {detail}"
+        return f"{'yes' if ok else 'no'}{' (on ' + label + ')' if act.get('on') else ''}: {detail}"
 
     def _queue_tasks(self, bot_id: str, act: dict, kind: str) -> None:
         """mobile_task / mobile_plan: queue one phone task, or several in order. Repeats are ignored, a step that needs an earlier one waits for it."""
@@ -346,6 +399,7 @@ class Orchestrator:
         ids: list[str] = []
         for goal, verify, dep in new:
             ids.append(self.jobs.submit(bot_id, goal, ids[dep] if isinstance(dep, int) else dep, verify, self._origin.get(bot_id))["id"])
+            self._attempts.setdefault(bot_id, []).append((bot_id, goal))
 
     def _resume_handoff(self, bot_id: str, act: dict) -> None:
         """The owner says, in chat, that they finished the part they took over on the phone: answer the handoff card for them so the task goes on.
@@ -475,6 +529,100 @@ class Orchestrator:
             msgs += [{"role": "assistant", "content": json.dumps({"action": act})}, {"role": "user", "content": f"[tool result for {kind}] {result}"}]
         return "I could not settle on an answer."
 
+    def _move_app(self, bot_id: str, act: dict) -> None:
+        """Master: copy an installed app between the adb phones (shared emulator <-> games phone) without any store. It runs in the background with a progress
+        message, then Master gets a follow-up turn to carry on (verify, open it on the other phone) or to explain."""
+        name = str(act.get("app") or act.get("package") or "").strip()
+        if not name:
+            self.post(bot_id, "Which app should I move?")
+            return
+        src_on, dst_on = str(act.get("from") or "emulator"), str(act.get("to") or "games")
+        keys = [self._phone_key(bot_id, src_on), self._phone_key(bot_id, dst_on)]
+        bad = next((k for k in keys if k.startswith("error")), None)
+        if bad:
+            self.post(bot_id, bad.replace("error: ", "I can't move it: "))
+            return
+        if any(k.startswith("phone:") for k in keys):  # a real phone installs from its own Play Store; copying APKs over a remote link is not offered
+            self.post(bot_id, "I can't move apps to or from your own phone: it installs from its own Play Store, so ask its bot to install it there as a normal task.")
+            return
+        if keys[0] == keys[1]:
+            self.post(bot_id, "That is the same phone twice: pick two different phones to move an app between.")
+            return
+        src, dst = self._resolve_phone(bot_id, src_on), self._resolve_phone(bot_id, dst_on)
+        if isinstance(src, str) or isinstance(dst, str):
+            self.post(bot_id, (src if isinstance(src, str) else dst).replace("error: ", "I can't move it: "))
+            return
+        if not all(hasattr(d, "apk_paths") for d in (src[0], dst[0])):
+            self.post(bot_id, "I can't move apps between those phones: they do not expose their app files.")
+            return
+        self.post(bot_id, str(act.get("say", "")).strip() or f"Moving {name} from {src[2]} to {dst[2]}…")
+        threading.Thread(target=self._do_move, args=(bot_id, name, str(act.get("package") or ""), src, dst), daemon=True, name="move-app").start()
+
+    def _do_move(self, bot_id: str, name: str, package: str, src: tuple, dst: tuple) -> None:
+        (sdev, slc, slabel), (ddev, dlc, dlabel) = src, dst
+        try:
+            for lc, label in ((slc, slabel), (dlc, dlabel)):
+                if lc is not None and not lc.ensure_healthy(90):
+                    raise ValueError(f"{label} is not available right now (it is still starting)")
+            pkg = package
+            if not pkg:
+                hits = find_packages(sdev.packages(), name)
+                if not hits:
+                    raise ValueError(f"no installed app matches '{name}' on {slabel}")
+                if len(hits) > 1:
+                    raise ValueError(f"'{name}' matches several apps on {slabel} ({', '.join(hits[:4])}): give the exact package")
+                pkg = hits[0]
+            detail = move_app(sdev, ddev, pkg)
+            ok, _ = run_check(ddev, {"kind": "app_installed", "query": pkg})
+            if not ok:
+                raise ValueError(f"{pkg} is not listed on {dlabel} after the move")
+            self._summarize.add(bot_id)
+            text = f"Moved {name} from {slabel} to {dlabel} ({detail}). Only the app was copied, not its data or its sign-in."
+            note = (f"move_app finished: {text} Next, if the owner wanted it used there, hand a short task to {dlabel}'s bot with delegate_task (open the app and report what you see; "
+                    "do not play unless they asked), or run it yourself if that phone is the emulator. Otherwise tell the owner in one sentence.")
+        except Exception as e:
+            reason = str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {str(e)[:150]}"
+            text = f"I could not move {name} from {slabel} to {dlabel}: {reason}."
+            note = (f"move_app failed: {text} Tell the owner plainly what stopped it and offer only options that really exist (for example installing from the Play Store on the "
+                    "emulator first, or an APK for the games phone). Do not promise to retry.")
+        self.post(bot_id, text)
+        self._turn_with(bot_id, note, "The move is finished; tell me what to do next.")
+
+    def _reroute_guard(self, bot_id: str, act: dict, kind: str) -> str | None:
+        """While Master reacts to a task that did not complete, it may not start the same goal on a phone that already tried it, nor go past MAX_REROUTES."""
+        if bot_id not in self._finishing or (self.db.get_bot(bot_id) or {}).get("kind") != "master":
+            return None
+        if bot_id in self._explain_only:
+            return "error: you already rerouted this request twice. Start nothing else: tell the owner what was tried where, why it cannot work, and what would unblock it."
+        goals = [str(st.get("goal", "")) for st in (act.get("steps") or [])] if kind == "mobile_plan" else [str(act.get("goal", ""))]
+        if kind == "delegate_task":
+            target = self._find_bot(str(act.get("bot", "")), (bot_id,))
+            tid = target["id"] if isinstance(target, dict) else None
+        else:
+            tid = bot_id  # Master's own tasks run on the shared emulator
+        tried = self._attempts.get(bot_id, [])
+        if tid and any(t == tid and same_goal(g, goal) for t, g in tried for goal in goals if goal):
+            name = (self.db.get_bot(tid) or {}).get("name", "that phone")
+            return f"error: {name} already tried this. Choose a different phone from the directory, or explain to the owner."
+        return None
+
+    def _reroute_note(self, master_id: str, bot_name: str, job: dict) -> str:
+        """What Master is told when a task did not complete: find another phone that can really do it (at most MAX_REROUTES times), then report honestly."""
+        n = self._reroutes.get(master_id, 0)
+        self._reroutes[master_id] = n + 1
+        self._summarize.add(master_id)
+        head = (f"The task for {bot_name} did not complete ({job['status']}). Goal: {job['goal']}. Worker report: {job['result'] or '(none)'}.\n")
+        if n >= MAX_REROUTES:
+            self._explain_only.add(master_id)
+            return head + ("You already rerouted this request twice, so do NOT start anything else (it would be refused). Reply to the owner in one or two short sentences: "
+                           "what was tried on which phone, why it cannot work, and the one thing that would unblock it. Be honest.")
+        return head + ("Read the phone directory. If a different phone could really do this (the app is installed there, per phone_check with \"on\", or it is a Play Store install and "
+                       "the emulator can do it; never a phone already tried for this goal or listed as Known NOT to run it), start it there: delegate_task to that phone's bot, or "
+                       "mobile_task for the emulator, and tell the owner in one sentence that you moved it and why. An app that is installed on the emulator but crashed there may be tried once on "
+                       "the games phone with move_app (say it is an attempt). If no phone can, reply in one or two short sentences: what was tried "
+                       "on which phone, why it cannot work, and the one thing that would unblock it (an APK on the games phone, the Mobile Agent app connected on their own phone). "
+                       "Be honest and do not promise anything you are not doing right now.")
+
     def _delegate(self, master_id: str, act: dict) -> None:
         """The master hands a phone task to the bot that fits it. The task runs, and is reported, in that bot's chat; the master hears back too."""
         goal, say = str(act.get("goal", "")).strip(), str(act.get("say", "")).strip()
@@ -497,6 +645,7 @@ class Orchestrator:
         self.post(target["id"], f"Master asked you to do this on the phone: {goal}", "bot_note", {"with": master_id})
         job = self.jobs.submit(target["id"], goal)
         self.delegated[job["id"]] = master_id
+        self._attempts.setdefault(master_id, []).append((target["id"], goal))
 
     def job_finished(self, bot_id: str, job: dict) -> None:
         master_id = self.delegated.pop(job["id"], None)
@@ -505,6 +654,16 @@ class Orchestrator:
             text = {"done": f"{bot['name']} finished: {job['goal']}\n{job['result']}", "cancelled": f"{bot['name']}'s task was stopped: {job['goal']}"}.get(
                 job["status"], f"{bot['name']}'s task did not complete ({job['status']}): {job['goal']}\n{job['result']}")
             self.post(master_id, text, "bot_note", {"with": bot_id})
+            if job["status"] == "done" and self.db.get_bot(master_id):  # the owner asked Master, so Master gives the answer in its own chat (not only a raw note from the other bot)
+                self._summarize.discard(master_id)
+                bot_name = (self.db.get_bot(bot_id) or {"name": "a bot"})["name"]
+                note = (f"The task you handed to {bot_name} finished. Goal: {job['goal']}. Worker report: {job['result']}\nTell the owner the final result in one or two short sentences: "
+                        "what ran on which phone and what the screen showed. Start nothing else unless the owner asked for it. Be honest and do not claim more than the report shows.")
+                threading.Thread(target=self._turn_with, args=(master_id, note, f"{bot_name} finished: {job['result'][:200]}"), daemon=True, name="summary").start()
+            if job["status"] in ("failed", "max_steps") and self.db.get_bot(master_id):  # Master looks for another way, without blocking this phone's lane
+                bot_name = (self.db.get_bot(bot_id) or {"name": "a bot"})["name"]
+                threading.Thread(target=self._turn_with, args=(master_id, self._reroute_note(master_id, bot_name, job), f"{bot_name}'s task did not complete: {job['result'] or job['goal']}"),
+                                 daemon=True, name="reroute").start()
         status, result = job["status"], job["result"]
         if job.get("routine") and self.db.get_routine(job["routine"]):  # the routine list shows how its last run went
             self.db.routine_update(job["routine"], last_status=status)
@@ -537,6 +696,12 @@ class Orchestrator:
         if status == "max_steps":
             note += (" The worker ran out of its step or time budget, so the task is probably only partly done (a long download or install may still be running on the phone). "
                      "Check the real state with phone_check, and if the goal is not met start ONE retry that continues from where the phone is now, saying that you are continuing.")
+        own = self.db.get_bot(bot_id) or {}
+        if status in ("failed", "max_steps") and own.get("kind") == "master" and not master_id:  # Master's own task on the emulator: look for another phone too
+            note += " " + self._reroute_note(bot_id, "yourself (the shared emulator)", job)
+        elif status in ("failed", "max_steps"):
+            note += (" If your phone could not do this but another phone in the directory could, say which one and tell the owner to ask Master (it can hand a task to any phone). "
+                     "Never offer or promise an install or action your own phone cannot do, and do not start anything you are not doing right now.")
         if status != "done" and waiting:
             note += f" {len(waiting)} queued task(s) depended on this one and will be skipped; say so."
         elif queued:
