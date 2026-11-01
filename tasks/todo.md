@@ -58,5 +58,9 @@ P2:
 - [x] Virtual Android for games: Redroid in a Lima VM on the Mac as the "Games phone" (own bot, own lane, live view): see [docs/virtual-android.md](../docs/virtual-android.md)
 - [ ] Cloud device: Redroid on a separate arm64 Linux host (Graviton), later
 
+## Pictures in chat (1 Nov 2026)
+- [x] Attach, paste (keyboard and button) and drop pictures; server checks, shrinks and strips them; the model sees them; tasks can use them on adb phones (docs/image-input.md)
+- [ ] Real-phone app: `push_file` op so a shared picture can reach the owner's own phone
+
 ## Demo-first plan
 Moved to [docs/demo-plan.md](../docs/demo-plan.md) (29 Oct 2026, pending owner approval).

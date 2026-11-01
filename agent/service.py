@@ -25,7 +25,7 @@ from agent.device import is_blank
 from agent.remote import PhoneHub
 from agent.jobs import JobManager
 from agent.orchestrator import Orchestrator
-from agent.master import Watcher, ensure_games_bot, ensure_master, ensure_phone_bot
+from agent.master import Watcher, ensure_adb_bot, ensure_games_bot, ensure_master, ensure_phone_bot
 from agent.routines import Scheduler
 from agent.store import Store
 
@@ -135,7 +135,7 @@ class Swipe(BaseModel):
 
 def create_app(device, model_factory, token: str | None = None, settle: float = 0.4, store: Store | None = None,
                db: Database | None = None, data_dir: str = "data", vault_key: bytes | None = None,
-               start_scheduler: bool = False, master: bool = False, lifecycle=None, virtuals: dict | None = None) -> FastAPI:
+               start_scheduler: bool = False, master: bool = False, lifecycle=None, virtuals: dict | None = None, adb_phones=None) -> FastAPI:
     """`virtuals` maps a name ("games") to the (Device, Lifecycle) of a virtual phone, each with its own bot, lane and live view."""
     app = FastAPI(title="Mobile Agent")
     store = store or Store(None)
@@ -166,21 +166,37 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
             raise HTTPException(404, "unknown run")
         return runs[run_id]
 
-    def phone_on() -> None:
+    def phone_on(lc=None) -> None:
         """Owner actions and live frames need an awake phone; a sleeping one would hang adb."""
-        if lifecycle:
-            if lifecycle.power != "on":
-                raise HTTPException(409, f"The phone is {'asleep' if lifecycle.power == 'sleeping' else 'off' if lifecycle.power == 'off' else 'waking up'}. Wake it first.")
-            lifecycle.touch()
+        lc = lc or lifecycle
+        if lc:
+            if lc.power != "on":
+                raise HTTPException(409, f"The phone is {'asleep' if lc.power == 'sleeping' else 'off' if lc.power == 'off' else 'waking up'}. Wake it first.")
+            lc.touch()
 
-    def takeover_allowed() -> None:
-        phone_on()
-        r = active()
-        if r and r.status != "waiting":
-            raise HTTPException(409, "the agent is acting on the phone; wait for it to pause or cancel the run")
-        cur = jobs.current
-        if cur and not jobs.held and (jobs.db.get_job(cur.job_id) or {}).get("status") != "waiting":
+    def target(phone: str | None = None) -> tuple:
+        """(device, lifecycle, lane) of the phone an owner action is for: the shared emulator, or `?phone=games` (an extra adb phone by its name)."""
+        if not phone:
+            return device, lifecycle, ""
+        dev, lc = jobs.pair(f"virtual:{phone}")
+        if dev is None:
+            raise HTTPException(404, "unknown phone")
+        return dev, lc, f"virtual:{phone}"
+
+    def takeover_allowed(lane: str = "", lc=None) -> None:
+        phone_on(lc if lane else None)
+        if lane:
+            adb = jobs.adb_phones
+            if lc is None and adb is not None and lane.split(":", 1)[1] in adb.config and not adb.online(lane.split(":", 1)[1]):
+                raise HTTPException(409, "adb cannot reach this phone")
+        else:
+            r = active()
+            if r and r.status != "waiting":
+                raise HTTPException(409, "the agent is acting on the phone; wait for it to pause or cancel the run")
+        cur = jobs._running.get(lane)
+        if cur and not jobs.is_held(lane) and (jobs.db.get_job(cur.job_id) or {}).get("status") != "waiting":
             raise HTTPException(409, "the agent is acting on the phone; take control first or wait for it to pause")
+        jobs.owner_input(lane)
 
     def google_accounts() -> list[str]:
         fn = getattr(device, "accounts", None)
@@ -404,6 +420,8 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
             raise HTTPException(404, "unknown phone")
         if lc and lc.power != "on":
             raise HTTPException(409, "The phone is not on")  # no touch(): watching never keeps it awake
+        if phone and lc is None and jobs.adb_phones is not None and phone in jobs.adb_phones.config and not jobs.adb_phones.online(phone):
+            raise HTTPException(409, "The phone is not on")  # an extra adb phone that adb cannot reach
         cache, lock = frames.setdefault(lane, {"at": 0.0, "jpeg": b""}), frame_locks.setdefault(lane, threading.Lock())
         # One capture at a time and a short cache, so live viewers never compete with the agent for ADB.
         with lock:
@@ -418,22 +436,28 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
             jpeg = cache["jpeg"]
         return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
-    def stale() -> None:
-        frame["at"] = 0.0  # the next viewer request captures the result of the action
+    def stale(lane: str = "") -> None:
+        frames.setdefault(lane, {"at": 0.0, "jpeg": b""})["at"] = 0.0  # the next viewer request captures the result of the action
 
     @app.post("/api/device/rotate", dependencies=[Depends(auth)])
-    def rotate(body: Rotate):
-        takeover_allowed()
-        device.rotate(body.orientation)
-        stale()
-        return {"ok": True, "orientation": device.orientation()}
+    def rotate(body: Rotate, phone: str | None = Query(default=None)):
+        dev, lc, lane = target(phone)
+        takeover_allowed(lane, lc)
+        dev.rotate(body.orientation)
+        stale(lane)
+        return {"ok": True, "orientation": dev.orientation()}
 
     @app.websocket("/api/device/touch")
     async def touch_socket(ws: WebSocket):
         """Live touch stream for follow-the-finger dragging: {"t": "down|move|up", "fx", "fy"}. Consecutive moves are collapsed so the
-        phone always gets the newest position instead of falling behind."""
+        phone always gets the newest position instead of falling behind. `?phone=games` drives that phone instead of the shared emulator."""
         given = ws.query_params.get("token", "")
         if token and not ((given and hmac.compare_digest(given.encode(), token.encode())) or (given and store.find_device(given))):
+            await ws.close(code=1008)
+            return
+        try:
+            dev, lc, lane = target(ws.query_params.get("phone") or None)
+        except HTTPException:
             await ws.close(code=1008)
             return
         await ws.accept()
@@ -460,56 +484,61 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
                     if kind not in ("down", "move", "up") or not (0 <= fx <= 1 and 0 <= fy <= 1) or (kind != "down" and down is None):
                         continue
                     if kind == "down":
-                        takeover_allowed()
-                    w, h = await loop.run_in_executor(None, device.size) if down is None else down["size"]
+                        takeover_allowed(lane, lc)
+                    jobs.owner_input(lane)
+                    w, h = await loop.run_in_executor(None, dev.size) if down is None else down["size"]
                     x, y = round(fx * w), round(fy * h)
-                    await loop.run_in_executor(None, device.touch, kind, x, y)
+                    await loop.run_in_executor(None, dev.touch, kind, x, y)
                     down = {"size": (w, h), "at": (x, y)} if kind != "up" else None
                     if kind == "up":
-                        stale()
+                        stale(lane)
                 except Exception:  # a bad event or a failed injection must not end the stream
                     continue
         finally:
             task.cancel()
             if down is not None:  # the browser went away mid-drag: lift the finger
-                device.touch("up", *down["at"])  # synchronous on purpose: a cancelled task must still lift the finger
+                dev.touch("up", *down["at"])  # synchronous on purpose: a cancelled task must still lift the finger
 
     @app.post("/api/device/tap", dependencies=[Depends(auth)])
-    def tap(body: Tap):
-        takeover_allowed()
-        w, h = device.size()
-        device.tap(round(body.fx * w), round(body.fy * h))
-        stale()
+    def tap(body: Tap, phone: str | None = Query(default=None)):
+        dev, lc, lane = target(phone)
+        takeover_allowed(lane, lc)
+        w, h = dev.size()
+        dev.tap(round(body.fx * w), round(body.fy * h))
+        stale(lane)
         return {"ok": True}
 
     @app.post("/api/device/type", dependencies=[Depends(auth)])
-    def type_text(body: Text):
-        takeover_allowed()
-        device.type_text(body.text)
-        stale()
+    def type_text(body: Text, phone: str | None = Query(default=None)):
+        dev, lc, lane = target(phone)
+        takeover_allowed(lane, lc)
+        dev.type_text(body.text)
+        stale(lane)
         return {"ok": True}
 
     @app.post("/api/device/key", dependencies=[Depends(auth)])
-    def key(body: Key):
-        takeover_allowed()
-        device.key(KEYCODES[body.key])
-        stale()
+    def key(body: Key, phone: str | None = Query(default=None)):
+        dev, lc, lane = target(phone)
+        takeover_allowed(lane, lc)
+        dev.key(KEYCODES[body.key])
+        stale(lane)
         return {"ok": True}
 
     @app.post("/api/device/swipe", dependencies=[Depends(auth)])
-    def swipe(body: Swipe):
-        takeover_allowed()
-        w, h = device.size()
+    def swipe(body: Swipe, phone: str | None = Query(default=None)):
+        dev, lc, lane = target(phone)
+        takeover_allowed(lane, lc)
+        w, h = dev.size()
         if body.fx1 is not None and None not in (body.fy1, body.fx2, body.fy2):
-            device.swipe(round(body.fx1 * w), round(body.fy1 * h), round(body.fx2 * w), round(body.fy2 * h), body.ms)
+            dev.swipe(round(body.fx1 * w), round(body.fy1 * h), round(body.fx2 * w), round(body.fy2 * h), body.ms)
         elif body.direction:
             cx, cy, dx, dy = w // 2, h // 2, w // 3, h // 3
             d = {"up": (cx, cy + dy, cx, cy - dy), "down": (cx, cy - dy, cx, cy + dy),
                  "left": (cx + dx, cy, cx - dx, cy), "right": (cx - dx, cy, cx + dx, cy)}[body.direction]
-            device.swipe(*d)
+            dev.swipe(*d)
         else:
             raise HTTPException(422, "give a direction or fx1, fy1, fx2, fy2")
-        stale()
+        stale(lane)
         return {"ok": True}
 
     phones = PhoneHub()
@@ -538,9 +567,24 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     jobs.phones = phones
     for name, (vdev, vlc) in (virtuals or {}).items():
         jobs.virtuals[name] = (vdev, vlc)
-        vlc.busy = lambda lane=f"virtual:{name}": jobs.busy(lane)  # a running game task keeps its phone awake
+        if vlc is not None:
+            vlc.busy = lambda lane=f"virtual:{name}": jobs.busy(lane) or jobs.is_held(lane)  # a running game task or the owner at the controls keeps its phone awake
         if name == "games":
             ensure_games_bot(db, hub, name)
+    jobs.adb_phones = adb_phones
+    if adb_phones is not None and adb_phones.device_factory is None:
+        from agent.device import Device
+        adb_phones.device_factory = Device
+
+    def sync_adb_phones() -> None:
+        """Each extra adb phone that adb reaches gets its device, lane and bot (once); one that went offline stays known and shows as offline."""
+        for name in (adb_phones.names() if adb_phones is not None else []):
+            if adb_phones.online(name):
+                if name not in jobs.virtuals:
+                    jobs.virtuals[name] = (adb_phones.device(name), None)  # no power management: it is always on while adb reaches it
+                ensure_adb_bot(db, hub, name, adb_phones.serial(name), adb_phones.has_play(name))
+    app.state.sync_adb = sync_adb_phones
+    sync_adb_phones()
     phones.on_change = lambda: [hub.publish(b["id"], {"type": "refresh", "what": "phone"}) for b in db.list_bots()]
     phones.on_connect = lambda pid, info: ensure_phone_bot(db, hub, pid, info)
     app.state.phones = phones
@@ -565,7 +609,8 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         if lifecycle:
             lifecycle.start()
         for _, vlc in (virtuals or {}).values():
-            vlc.start()
+            if vlc is not None:
+                vlc.start()
     return app
 
 
@@ -610,6 +655,11 @@ def create_default_app() -> FastAPI:
                 prepare_with_retries(device)
         except Exception as e:  # a phone that is still settling must not stop the server from starting
             print(f"Could not apply the light profile yet ({type(e).__name__}); continuing.", flush=True)
+    from agent.adbphones import AdbPhones, load_adb_phones
+    extra, problems = load_adb_phones()
+    for p in problems:
+        print(f"ADB_PHONES: {p}", flush=True)
+    adb_phones = AdbPhones(extra) if extra else None
     virtuals = {}
     if os.environ.get("GAMES_PHONE", "on") != "off" and LimaRedroidBackend.available():  # the games phone exists on this computer; nothing is started yet
         games = Device(GAMES_SERIAL)
@@ -620,7 +670,8 @@ def create_default_app() -> FastAPI:
     app = create_app(device, lambda m: MetaClient(m),
                      token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
                      db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True,
-                     lifecycle=lifecycle, virtuals=virtuals)
+                     lifecycle=lifecycle, virtuals=virtuals, adb_phones=adb_phones)
+    app.state.orch.web_in_chain = True  # when no phone can run an app, the last step is a web search for other ways (a card; nothing runs until the owner picks)
     print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)
     return app
 

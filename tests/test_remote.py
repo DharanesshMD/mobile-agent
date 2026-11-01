@@ -142,6 +142,7 @@ class PhoneBot(unittest.TestCase):
         ws, phone = connect(c, app)
         try:
             pb = app.state.db.phone_bot("local")["id"]
+            phone.answers["foreground"] = lambda a: "com.android.settings"  # an ordinary app in front: the game guard is about Supercell and friends
             app.state.jobs.submit(pb, "open the game")
             until(lambda: jobs_of(c, pb)[0]["status"] == "done", timeout=30)
             self.assertIn(("tap", {"x": 540, "y": 1200}), phone.log)

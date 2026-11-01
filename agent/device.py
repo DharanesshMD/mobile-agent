@@ -325,6 +325,19 @@ class Device:
     def pull(self, remote: str, local: str) -> None:
         self._run("pull", remote, str(local), timeout=300)
 
+    def push(self, local: str, remote: str) -> None:
+        """Copy a file to the phone (a picture the owner shared). The folder is created first."""
+        self._run("shell", "mkdir", "-p", shlex.quote(remote.rsplit("/", 1)[0]))
+        self._run("push", str(local), remote, timeout=120)
+
+    def media_scan(self, remote: str) -> None:
+        """Tell Android a new picture exists so the gallery and the photo pickers of other apps list it."""
+        self._run("shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", shlex.quote("file://" + remote))
+
+    def remove_file(self, remote: str) -> None:
+        self._run("shell", "rm", "-f", shlex.quote(remote))
+        self.media_scan(remote)  # the gallery drops it too
+
     def install_apks(self, paths: list[str]) -> None:
         """Install an app from its APK files (a base APK plus splits go in together), replacing an older copy. Only the app, never anyone's data."""
         out = self._run("install-multiple", "-r", *map(str, paths), timeout=300).decode(errors="replace")

@@ -16,6 +16,8 @@ EMULATOR = ("The shared emulator: Google Play and Google sign-in work here, and 
 GAMES = ("The games phone: a light virtual Android for free games and heavy apps. Apps reach it only as APK files that the owner installs, or moved from the emulator with "
          "move_app (the app is copied, never its data or sign-in): NO Google Play, NO Google apps or Google sign-in, so it can never have a Google account. Games draw one "
          "picture (no UI tree), software graphics, and some games still refuse to run on a virtual device.")
+ADB = ("An extra adb phone the owner manages ({serial}; a real phone over USB debugging, BlueStacks with adb, or a cloud phone). It is always on while adb reaches it and has no power "
+       "management, so if it goes offline a task fails honestly. {play} It can receive an app moved from the emulator or the games phone (move_app).")
 REAL = ("The owner's own phone: genuine hardware with their own apps and accounts, driven in the background through the Mobile Agent app. It works only while the app is "
         "connected. It installs from its own Play Store: apps cannot be moved to or from it, so route a normal task to its bot.")
 
@@ -28,6 +30,10 @@ def crash_facts(db) -> list[dict]:
     """Apps that crashed on their own on a phone during a task, from the jobs table: [{"phone": "emulator|games|phone:<id>", "package", "goal"}], newest first, one per (phone, package)."""
     rows = db._q("select target, goal, result from jobs where status='failed' and result like ? order by ended desc limit 100", (CRASH_PREFIX + "%",))
     seen, out = set(), []
+    for f in db.launch_facts():  # a launch the agent checked itself (agent/escalate.py): it crashed or would not stay up
+        if not f["ok"] and (f["phone"], f["package"]) not in seen:
+            seen.add((f["phone"], f["package"]))
+            out.append({"phone": f["phone"], "package": f["package"], "goal": (f["note"] or "")[:80]})
     for r in rows:
         m = CRASH_RE.match(r["result"])
         if not m:
@@ -117,17 +123,33 @@ def describe(db, jobs) -> list[dict]:
     out.append({"key": "emulator", "label": "Shared emulator", "bot": "any normal bot, or Master", "status": POWER_TEXT.get(power, power), "can": EMULATOR,
                 "account": google_account_fact(jobs, "emulator", jobs.device, lc), "known_bad": bad.get("emulator", []),
                 "apps": installed_apps_fact(jobs, "emulator", jobs.device, lc)})
+    adb = getattr(jobs, "adb_phones", None)
     for name, (vdev, vlc) in sorted(jobs.virtuals.items()):
         bot = next((b for b in db.list_bots() if b["kind"] == "virtual" and b["phone_id"] == name), None)
-        vp = (vlc.info() if vlc else {"power": "unavailable"}).get("power", "unavailable")
-        out.append({"key": name, "label": (bot or {}).get("name") or f"{name} phone", "bot": (bot or {}).get("name"), "status": POWER_TEXT.get(vp, vp), "can": GAMES,
-                    "account": google_account_fact(jobs, name, vdev, vlc), "known_bad": bad.get(name, []),
-                    "apps": installed_apps_fact(jobs, name, vdev, vlc)})
+        extra = vlc is None and adb is not None and name in adb.config
+        if extra:
+            up = adb.online(name)
+            status, can = ("ready" if up else "OFFLINE (adb cannot reach it)"), ADB.format(serial=adb.serial(name), play=("Google Play is installed." if adb.has_play(name) else "There is no Google Play on it: apps come as APK files."))
+            vlc_for_facts = None
+            acct = google_account_fact(jobs, name, vdev, vlc_for_facts) if up else "unknown (the phone is offline)"
+            apps = installed_apps_fact(jobs, name, vdev, vlc_for_facts) if up else ""
+        else:
+            vp = (vlc.info() if vlc else {"power": "unavailable"}).get("power", "unavailable")
+            status, can = POWER_TEXT.get(vp, vp), GAMES
+            acct, apps = google_account_fact(jobs, name, vdev, vlc), installed_apps_fact(jobs, name, vdev, vlc)
+        out.append({"key": name, "label": (bot or {}).get("name") or f"{name} phone", "bot": (bot or {}).get("name"), "status": status, "can": can,
+                    "account": acct, "known_bad": bad.get(name, []), "apps": apps})
     online = {p["id"] for p in (jobs.phones.listing() if jobs.phones else [])}
     for b in db.list_bots():
         if b["kind"] == "phone":
             out.append({"key": f"phone:{b['phone_id']}", "label": b["name"], "bot": b["name"], "status": "connected" if b["phone_id"] in online else "OFFLINE (the app is not connected)",
                         "can": REAL, "account": "unknown (ask with phone_check kind account)", "known_bad": bad.get(f"phone:{b['phone_id']}", [])})
+    good: dict[str, list[str]] = {}
+    for f in db.launch_facts():  # apps the agent opened on a phone and saw stay up: the next "open it" goes straight there
+        if f["ok"]:
+            good.setdefault(f["phone"], []).append(f["package"])
+    for e in out:
+        e["runs"] = good.get(e["key"], [])
     return out
 
 
@@ -137,24 +159,43 @@ def render(entries: list[dict], viewer_key: str | None = None, master: bool = Fa
     for e in entries:
         mark = " <- this is YOUR phone" if viewer_key == e["key"] else ""
         bad = f" Known NOT to run here (crashed during a task): {', '.join(e['known_bad'])}." if e["known_bad"] else ""
+        bad += f" Known to run here (opened and stayed up): {', '.join(e['runs'])}." if e.get("runs") else ""
         acct = f" Google account: {e['account']}." if e.get("account") else ""
         apps = f" Installed apps: {e['apps']}." if e.get("apps") else ""
         lines.append(f"- {e['label']} [{e['status']}]{mark}: {e['can']}{acct}{apps}{bad}" + (f" Its bot: {e['bot']}." if e["bot"] and e["key"] != "emulator" else ""))
+    lines.append("Game accounts: no phone plays Supercell games (Clash of Clans, Clash Royale, Brawl Stars, Hay Day, Boom Beach, Squad Busters), Pokemon GO or any game in the owner's policy list: "
+                 "their publishers ban accounts that use bots, so the phone refuses every tap, scroll and key in them. The agent may only open them, check they are installed, move them between phones "
+                 "and say what the screen shows; the owner plays them with Take control on the games phone (or any extra adb phone).")
     if master:
         lines.append(
             "How to route a phone task: (1) list the candidate phones, and use phone_check with \"on\" (emulator, games, or a real phone's bot name) to see where the app is installed; "
             "(2) prefer the phone that already has the app (see its Installed apps) and is not listed as Known NOT to run it; (3) installs from the Play Store only on the emulator (queue it with mobile_task); "
             "(4) hand the task to a phone's bot with delegate_task (the games phone and a real phone have their own bot); run it yourself on the emulator with mobile_task; "
-            "(5) an app that is installed on the emulator but is wanted on the games phone is moved with move_app (emulator -> games), never re-downloaded; an app that crashed on the "
-            "emulator (Known NOT to run there) is worth ONE honest try on the games phone the same way, because it is a different kind of device (say it is an attempt, not a promise); "
+            "(5) an app that is installed on the emulator but is wanted on the games phone is moved with move_app (emulator -> games), never re-downloaded. When an app crashes on a phone, "
+            "THE SYSTEM ITSELF tries the owner's other phones in order (emulator, games phone, extra adb phones, the owner's own phone), copying the app where needed and checking that it "
+            "really stays up, with no question to the owner, and it posts the result in the chat where they asked: never ask 'want me to try the games phone?' for these steps and do not "
+            "start that chain yourself; "
             "(6) when no phone can do it, say so plainly: what was tried where, why it cannot work, and the ONE thing that would unblock it (an APK on the games phone, "
             "the Mobile Agent app connected on the owner's phone). Do not invent options.\n"
             "Google sign-in is never copied between phones. When a phone that CAN have a Google account (the emulator, the owner's phone) needs it, queue a sign-in task on THAT phone's bot "
             "(Settings > Accounts > Add account > Google; the password goes in only with type_secret from the vault, the owner approving each use; 2-step verification is a handoff to the owner). "
             "The games phone has no Google services and can never sign in: say so, do not offer it.")
     else:
-        lines.append("If your phone cannot do the task but another one could, name that phone and tell the owner to ask Master (it can hand tasks to any phone). Do not promise to do it yourself.")
+        lines.append("If an app crashes on your phone, or is listed above as Known NOT to run on it, the system itself tries the owner's other phones and tells them where it ran, in this chat: "
+                     "still queue the owner's task with mobile_task as usual, and never tell them to ask Master or to try another phone for that. "
+                     "If your phone cannot do some other task but another one could, name that phone and tell the owner to ask Master (it can hand tasks to any phone). Do not promise to do it yourself.")
     return "\n".join(lines)
+
+
+def runs_on(db, package: str) -> list[str]:
+    """Phones where this app was opened and stayed up (newest first): the agent goes there first."""
+    return [f["phone"] for f in db.launch_facts(package) if f["ok"]]
+
+
+def job_phone_key(job: dict) -> str:
+    """The phone a job ran on, as the directory names it: emulator, games (or another virtual name), or phone:<id>."""
+    t = job.get("target") or ""
+    return "emulator" if not t else t.split(":", 1)[1] if t.startswith("virtual:") else t
 
 
 def known_bad(db, key: str, package: str) -> bool:

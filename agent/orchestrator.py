@@ -10,10 +10,13 @@ from agent import phones
 from agent.checks import KINDS, find_packages, run_check
 from agent.config import MAX_ACTIVE_PER_BOT, ORCHESTRATOR_MODEL
 from agent.db import Database
+from agent.escalate import SIMPLE_OPEN, Escalator, app_name
+from agent import gamepolicy, images, options, websearch
 from agent.graph import CRASH_PREFIX
 from agent.moveapp import move_app
 from agent.remote import RemoteDevice
 from agent.hub import Hub
+from agent.model import ModelError
 
 PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
 MAX_TOOL_LOOPS = 4
@@ -21,6 +24,7 @@ MAX_SEARCHES_PER_TURN = 3
 MAX_BOT_CHAIN = 3  # the asking bot plus at most two more
 MAX_PLAN_STEPS = 4
 MAX_AUTO_RETRIES = 1
+
 MAX_REROUTES = 2  # a task Master handed over that fails may be sent to another phone twice; after that Master only explains
 
 
@@ -55,8 +59,11 @@ class Orchestrator:
         self._attempts: dict[str, list[tuple[str, str]]] = {}  # master bot id -> (bot id, goal) already tried for the current request
         self._explain_only: set[str] = set()  # master bots that used up their reroutes: they may only explain now
         self._summarize: set[str] = set()  # master bots that moved an app or rerouted a task: when the handed-over task finishes, Master gives the owner the final answer
+        self.escalator = Escalator(self)  # an app that cannot run on a phone is tried on the others, in code (agent/escalate.py)
         self._system = (PROMPTS / "orchestrator.md").read_text()
         self._worker_system = (PROMPTS / "worker_request.md").read_text()
+        self.web_provider, self.web_fetch = None, None  # the search provider and page reader (None: the real ones); tests give fakes
+        self.web_in_chain = False  # the escalation chain ends in a web_options card (switched on by the real app, never in tests)
 
     # --- helpers -------------------------------------------------------------------------------------------------
     def post(self, bot_id: str, text: str, kind: str = "text", meta: dict | None = None) -> dict:
@@ -69,10 +76,13 @@ class Orchestrator:
     def make_item(self, bot_id: str, job_id: str | None, spec: dict) -> dict:
         """Create an action item and its chat card. spec: kind, question, options?, field?"""
         kind = spec.get("kind") if spec.get("kind") in ("choice", "confirm", "text", "handoff", "otp", "secret") else "text"
-        options = [str(o)[:80] for o in (spec.get("options") or [])][:4]
+        web = spec.get("web") if isinstance(spec.get("web"), dict) else None  # a card from web_options: its picks are handled in code (web_pick), never by the model
+        options = [str(o)[:80] for o in (spec.get("options") or [])][:6 if web else 4]
         if kind == "choice" and len(options) < 2:
             kind = "text"
-        payload = {"kind": kind, "question": str(spec.get("question", ""))[:500], "options": options, "field": spec.get("field")}
+        payload = {"kind": kind, "question": str(spec.get("question", ""))[:3000 if web else 500], "options": options, "field": spec.get("field")}
+        if web:
+            payload["web"] = web
         if kind == "secret":
             sk = str(spec.get("secret_kind") or "password")
             payload.update(label=str(spec.get("label") or "")[:60], secret_kind=sk if sk in ("password", "card", "id", "note") else "note")
@@ -81,10 +91,45 @@ class Orchestrator:
         self.db.set_item_message(item["id"], msg["id"])
         return self.db.get_item(item["id"])
 
+    MODEL_PICTURE_MESSAGES = 3  # the newest message with pictures and up to two before it keep their pictures; older ones become a note
+
+    def _shown_pictures(self, rows: list[dict]) -> dict[int, list[dict]]:
+        """Which pictures go to the model: from the newest message back, at most MODEL_PICTURE_MESSAGES messages and 4 pictures in all."""
+        budget, windows, shown = images.MAX_PER_MESSAGE, self.MODEL_PICTURE_MESSAGES, {}
+        for m in reversed(rows):
+            if m["role"] != "user" or not (m["meta"] or {}).get("attachments"):
+                continue
+            if windows == 0 or budget == 0:
+                break
+            have = [a for a in (self.db.get_attachment(x["id"]) for x in m["meta"]["attachments"]) if a]
+            shown[m["id"]] = have[:budget]
+            budget -= len(shown[m["id"]])
+            windows -= 1
+        return shown
+
+    def _user_content(self, m: dict, pictures: list[dict]):
+        """A user message as the model gets it: plain text, or text plus image_url blocks (images only ever go in user messages)."""
+        text = "(the owner sent only a picture)" if m["content"] == images.IMAGE_ONLY else m["content"]
+        blocks, missing = [], len(m["meta"]["attachments"])
+        for a in pictures:
+            try:
+                blocks.append({"type": "image_url", "image_url": {"url": images.for_model(Path(a["path"]).read_bytes(), a["mime"])}})
+                missing -= 1
+            except Exception:
+                pass  # the file is gone: it counts as one that was not shown
+        text += " [an image was shared here]" * missing  # the pictures that are not sent (older than the window, or no longer on disk) leave a trace in the text
+        text += f"\n[attached pictures, ids: {', '.join(x['id'] for x in m['meta']['attachments'])}]"  # so a task can ask for one by id (mobile_task files)
+        return [{"type": "text", "text": text}, *blocks] if blocks else text
+
     def _history(self, bot_id: str) -> list[dict]:
         out: list[dict] = []
-        for m in self.db.messages(bot_id, 30):
+        rows = self.db.messages(bot_id, 30)
+        shown = self._shown_pictures(rows)
+        for m in rows:
             if m["kind"] in ("text", "result"):
+                if m["role"] == "user" and (m["meta"] or {}).get("attachments"):
+                    out.append({"role": "user", "content": self._user_content(m, shown.get(m["id"], []))})
+                    continue
                 out.append({"role": "user" if m["role"] == "user" else "assistant", "content": m["content"]})
             elif m["kind"] == "action_item" and m["meta"].get("status") == "answered":
                 out.append({"role": "assistant", "content": f"(asked: {m['content']})"})
@@ -159,7 +204,12 @@ class Orchestrator:
 
     def _decide(self, model, system: str, msgs: list[dict]) -> dict | None:
         for attempt in range(2):
-            raw = model.chat(system, msgs)
+            try:
+                raw = model.chat(system, msgs)
+            except ModelError as e:
+                if "HTTP 400" in str(e) and any(isinstance(m.get("content"), list) for m in msgs):  # the provider refused a picture (corrupt, unsupported, too large for the request)
+                    return {"type": "reply", "text": "I couldn't read that picture, so I can't tell what it shows. Try sending it again, a different screenshot, or describe it in words."}
+                raise
             try:
                 return parse_decision(raw)
             except (ValueError, json.JSONDecodeError):
@@ -186,12 +236,28 @@ class Orchestrator:
                 self._attempts.pop(bot_id, None)
                 self._explain_only.discard(bot_id)
                 self._summarize.discard(bot_id)
+            if note is None and self._open_shortcut(bot_id):  # "open <an app known not to run on this phone>": no model needed, the chain goes straight to the phone that works
+                return
             try:
                 self._turn(bot_id, note)
             except Exception as e:  # keep the chat usable if the model or network fails
                 self.post(bot_id, f"Sorry, I hit a problem and could not answer ({type(e).__name__}). Please try again.")
             finally:
                 self._origin.pop(bot_id, None)
+
+    def _open_shortcut(self, bot_id: str) -> bool:
+        """A plain "open <app>" message for an app that is known not to run on this bot's phone is answered by the escalation chain at once (no question, no model turn)."""
+        last = next((m for m in reversed(self.db.messages(bot_id, 4)) if m["kind"] in ("text", "result", "status", "action_item") or m["role"] == "user"), None)
+        if not last or last["role"] != "user" or not SIMPLE_OPEN.match(last["content"]):
+            return False
+        key = phones.phone_key(self.db.get_bot(bot_id) or {})
+        pkg = self.escalator.known_bad_package(key, last["content"])
+        if not pkg:
+            return False
+        self._answered[bot_id] = self._latest_owner(bot_id)
+        app = app_name(last["content"], pkg)
+        self.escalator.start(bot_id, pkg, last["content"], key, f"{app} doesn't run on {self.escalator._label(key)} (it crashed there before), so I'm using another phone.")
+        return True
 
     def _latest_owner(self, bot_id: str) -> int:
         rows = self.db._q("select max(id) m from messages where bot_id=? and role='user'", (bot_id,))
@@ -248,6 +314,9 @@ class Orchestrator:
                 return
             if kind == "ask_user":
                 self.make_item(bot_id, None, act)
+                return
+            if kind == "web_options":
+                self.web_options(bot_id, str(act.get("query", "")), str(act.get("goal", "")))
                 return
             if kind == "web_search":
                 searches += 1
@@ -357,6 +426,13 @@ class Orchestrator:
         if not steps:
             self.post(bot_id, "What should I do on the phone?")
             return
+        if kind == "mobile_task" and len(steps) == 1 and bot_id not in self._finishing:  # an app known not to run on this phone goes straight to the phone that works
+            key = phones.phone_key(self.db.get_bot(bot_id) or {})
+            pkg = self.escalator.known_bad_package(key, str(steps[0]["goal"]))
+            if pkg:
+                app = app_name(str(steps[0]["goal"]), pkg)
+                self.escalator.start(bot_id, pkg, str(steps[0]["goal"]), key, f"{app} doesn't run on {self.escalator._label(key)} (it crashed there before), so I'm using another phone.")
+                return
         if bot_id in self._finishing:  # this turn follows a finished task: starting another is a retry, and a retry happens once
             if self._retries.get(bot_id, 0) >= MAX_AUTO_RETRIES:
                 self.post(bot_id, "I already retried this once and it still did not finish, so I'm stopping here instead of looping. "
@@ -378,13 +454,23 @@ class Orchestrator:
             return  # chain: what the next new step waits for (an existing job id, or the index of an earlier new step)
         for st in steps:
             goal = str(st["goal"]).strip()
+            cloud_game = gamepolicy.cloud_play_request(goal)
+            if cloud_game:  # playing it through a cloud-gaming site is the same bot risk: no phone, no browser, no task
+                self.post(bot_id, f"I won't play {cloud_game} through a browser or a cloud-gaming site either: its publisher bans accounts that use bots, however the game is run. "
+                                  "I can open the site and tell you what it shows, or you can play it yourself (Take control on the games phone).")
+                return
             dup = next((j for j in known if same_goal(j["goal"], goal)), None)
             if dup:
                 chain = dup["id"] if dup["id"] else chain  # a later step still waits for the task that already exists
                 continue
             if len(known) >= MAX_ACTIVE_PER_BOT:
                 break
-            new.append((goal, self._clean_verify(st.get("verify")), chain))
+            files = self._owned_files(bot_id, st.get("files") if kind == "mobile_plan" else act.get("files"))
+            if files and own.get("kind") == "phone":  # the app on a real phone has no file hand-off yet: say so, do not run the task without the picture
+                self.post(bot_id, "Sending a picture to your own phone is not supported yet (the Mobile Agent app cannot receive files). "
+                                  "I can do it on the shared emulator, or you can do the picture step on your phone yourself.")
+                return
+            new.append((goal, self._clean_verify(st.get("verify")), chain, files))
             known.append({"id": None, "goal": goal})
             chain = len(new) - 1
         if not new:
@@ -397,9 +483,18 @@ class Orchestrator:
             say += " The phone is busy, so it's queued and starts as soon as it's free."
         self.post(bot_id, say)
         ids: list[str] = []
-        for goal, verify, dep in new:
-            ids.append(self.jobs.submit(bot_id, goal, ids[dep] if isinstance(dep, int) else dep, verify, self._origin.get(bot_id))["id"])
+        for goal, verify, dep, files in new:
+            ids.append(self.jobs.submit(bot_id, goal, ids[dep] if isinstance(dep, int) else dep, verify, self._origin.get(bot_id), files=files)["id"])
             self._attempts.setdefault(bot_id, []).append((bot_id, goal))
+
+    def _owned_files(self, bot_id: str, ids) -> list[str]:
+        """The pictures a task asks for, kept only if they were really sent in this bot's chat (a model cannot reach another bot's pictures)."""
+        out = []
+        for fid in (ids if isinstance(ids, list) else [])[:images.MAX_PER_MESSAGE]:
+            row = self.db.get_attachment(str(fid))
+            if row and row["bot_id"] == bot_id and row["message_id"] is not None and str(fid) not in out:
+                out.append(str(fid))
+        return out
 
     def _resume_handoff(self, bot_id: str, act: dict) -> None:
         """The owner says, in chat, that they finished the part they took over on the phone: answer the handoff card for them so the task goes on.
@@ -457,6 +552,87 @@ class Orchestrator:
             return f"deleted '{hit['name']}'"
         except ValueError as e:
             return f"error: {e}"
+
+    # --- other ways: research, then a card the owner answers ------------------------------------------------------------------------------------
+    def web_options(self, bot_id: str, query: str, goal: str = "", intro: str = "") -> bool:
+        """Search the web for other ways to do something, read what the sites say about themselves, and post a card with the options and their honest risks.
+        Nothing is opened or done until the owner picks (web_pick). The search never carries the owner's data (websearch.clean_query)."""
+        if not websearch.plan_queries(query, goal) or not self.db.get_bot(bot_id):
+            self.post(bot_id, "Tell me a little more about what you want to do, so I know what to look for.")
+            return False
+        subject = websearch.clean_query(goal or query)
+        game = (gamepolicy.mentions_blocked(f"{query} {goal}") or [""])[0]
+        self.post(bot_id, f"Looking for other ways: {websearch.clean_query(query or goal)}", "bot_note", {"search": query})
+        notes: list[str] = []
+        try:
+            found = options.research(query, goal, self.model_factory(ORCHESTRATOR_MODEL), self.web_provider, self.web_fetch, game, notes=notes)
+        except Exception as e:
+            self.post(bot_id, f"I could not search the web just now ({type(e).__name__}), so I have no options to show. Try again in a minute.")
+            return False
+        if not found:
+            self.post(bot_id, "I looked and did not find a way that I can describe honestly. Nothing was opened or changed.")
+            return False
+        labels: dict[str, dict] = {}
+        for o in found:
+            label = o["name"][:70]
+            while label in labels:
+                label += "*"
+            labels[label] = {k: o[k] for k in ("name", "url", "official", "what")}
+        self.make_item(bot_id, None, {"kind": "choice", "question": options.card_text(found, intro or f"Other ways to do this, with what I could read about each ({subject[:60]}):", notes),
+                                      "options": [*list(labels)[:options.MAX_SHOWN], options.NONE_LABEL], "web": {"stage": "option", "options": labels, "game": game}})
+        return True
+
+    def web_pick(self, item: dict, choice: str) -> None:
+        """The owner answered a web_options card. The only things that can happen: nothing, the link shown, or the link opened on a phone with a handoff to them."""
+        bot_id, web = item["bot_id"], item["payload"].get("web") or {}
+        if choice == options.NONE_LABEL or choice == "Cancel":
+            self.post(bot_id, "Okay. Nothing was opened or changed. Ask me again whenever you decide.")
+            return
+        if web.get("stage") == "option":
+            o = web["options"].get(choice)
+            if not o:
+                return
+            phones_ = ["Open it on the emulator"] + (["Open it on the games phone"] if "games" in self.jobs.virtuals else []) + \
+                      [f"Open it on {b['name']}" for b in self.db.list_bots() if b["kind"] == "phone" and self.jobs.phones and self.jobs.phones.online(b["phone_id"])]
+            self.make_item(bot_id, None, {"kind": "choice", "question": f"{o['name']}{'' if options.domain(o['url']) in o['name'].lower() else ' (' + options.domain(o['url']) + ')'}: what should I do? Nothing runs until you pick.",
+                                          "options": ["Show me the link", *phones_[:3], "Cancel"], "web": {"stage": "action", "option": o, "game": web.get("game", "")}})
+            return
+        o = web.get("option") or {}
+        url = str(o.get("url", ""))
+        if choice == "Show me the link":
+            self.post(bot_id, f"{o.get('name')}: {url}\n{'Official.' if o.get('official') else 'Unofficial third party: read its terms yourself before you sign in or pay.'}")
+            return
+        if not choice.startswith("Open it on ") or not url.startswith("https://"):
+            return
+        target = choice.removeprefix("Open it on ")
+        try:
+            self._open_for_owner(bot_id, target, url)
+        except Exception as e:
+            self.post(bot_id, f"I could not open it on {target}: {type(e).__name__}: {str(e)[:120]}. Here is the link instead: {url}")
+            return
+        if not o.get("official"):
+            gamepolicy.mark_third_party(options.domain(url))  # from now on nothing is typed on that site for the owner
+        game = web.get("game", "")
+        self.post(bot_id, f"Opened {o.get('name')} on {target}. I won't type, sign in or play on it" + (f": {game} is a game whose publisher bans bot accounts, and my guard stops me from playing it there" if game else "") +
+                  ". Sign in yourself" + (" (use Take control in its Mobile panel)" if target in ("the emulator", "the games phone") else "") + ".")
+        self.make_item(bot_id, None, {"kind": "handoff", "question": f"Sign in yourself on {target}, then tell me when you're done."})
+
+    def _open_for_owner(self, bot_id: str, target: str, url: str) -> None:
+        """Open a link in the browser of one of the owner's phones (the only thing a web_options pick can do)."""
+        if target == "the emulator":
+            dev, lc = self.jobs.device, self.jobs.lifecycle
+        elif target == "the games phone":
+            dev, lc = self.jobs.virtuals.get("games", (None, None))
+        else:
+            bot = next((b for b in self.db.list_bots() if b["kind"] == "phone" and b["name"] == target), None)
+            if not bot or not self.jobs.phones or not self.jobs.phones.online(bot["phone_id"]):
+                raise ConnectionError("that phone is not connected")
+            dev, lc = RemoteDevice(self.jobs.phones, self.jobs.phones.pick(bot["phone_id"])), None
+        if dev is None:
+            raise ValueError("that phone is not set up")
+        if lc is not None and not lc.ensure_healthy(90):
+            raise TimeoutError("the phone did not wake up in time")
+        dev.open_url(url)
 
     def _web_search(self, model, bot_id: str, query: str, count: int) -> str:
         """Meta's web search grounding through the Responses API. Returns the grounded answer plus source URLs for the model to cite."""
@@ -618,8 +794,8 @@ class Orchestrator:
                            "what was tried on which phone, why it cannot work, and the one thing that would unblock it. Be honest.")
         return head + ("Read the phone directory. If a different phone could really do this (the app is installed there, per phone_check with \"on\", or it is a Play Store install and "
                        "the emulator can do it; never a phone already tried for this goal or listed as Known NOT to run it), start it there: delegate_task to that phone's bot, or "
-                       "mobile_task for the emulator, and tell the owner in one sentence that you moved it and why. An app that is installed on the emulator but crashed there may be tried once on "
-                       "the games phone with move_app (say it is an attempt). If no phone can, reply in one or two short sentences: what was tried "
+                       "mobile_task for the emulator, and tell the owner in one sentence that you moved it and why. An app that crashed on a phone is NOT yours to move: the system already tries the "
+                       "owner's other phones in order and posts the result itself. If no phone can, reply in one or two short sentences: what was tried "
                        "on which phone, why it cannot work, and the one thing that would unblock it (an APK on the games phone, the Mobile Agent app connected on their own phone). "
                        "Be honest and do not promise anything you are not doing right now.")
 
@@ -629,9 +805,20 @@ class Orchestrator:
         if not goal:
             self.post(master_id, "What should I get done on the phone?")
             return
+        cloud_game = gamepolicy.cloud_play_request(goal)
+        if cloud_game:
+            self.post(master_id, f"I won't play {cloud_game} through a browser or a cloud-gaming site either: its publisher bans accounts that use bots, however the game is run. "
+                                 "I can open the site and tell you what it shows, or you can play it yourself (Take control on the games phone).")
+            return
         target = self._find_bot(str(act.get("bot", "")), (master_id,))
         if isinstance(target, str):
             self.post(master_id, target.replace("that you can ask now", "to hand this to") + ". I can run it myself instead if you like.")
+            return
+        tkey = phones.phone_key(target)
+        pkg = self.escalator.known_bad_package(tkey, goal)
+        if pkg:  # it is known not to run on that bot's phone: do not send it there, try the others
+            app = app_name(goal, pkg)
+            self.escalator.start(master_id, pkg, goal, tkey, f"{app} doesn't run on {self.escalator._label(tkey)} (it crashed there before), so I'm using another phone.")
             return
         active = self.db.active_jobs(target["id"])
         if any(same_goal(j["goal"], goal) for j in active):
@@ -647,8 +834,20 @@ class Orchestrator:
         self.delegated[job["id"]] = master_id
         self._attempts.setdefault(master_id, []).append((target["id"], goal))
 
+    @staticmethod
+    def _policy_note(job: dict) -> str:
+        return (f"The phone job was stopped by the game-account guard. Goal: {job['goal'][:200]}. Report: {job['result']}\n"
+                "Tell the owner in two short sentences: you did not play it because the game's publisher bans accounts that use bots; what you CAN do (open it, check it is installed, "
+                "move it between phones, tell what the screen shows) and that they can play it themselves with Take control on the phone it is on. Do not retry, do not try another phone, "
+                "do not offer to play it another way.")
+
     def job_finished(self, bot_id: str, job: dict) -> None:
+        if self.escalator.owns(job["id"]):  # a task the escalation chain started on the owner's own phone: the chain decides what comes next
+            self.escalator.job_done(job)
+            return
         master_id = self.delegated.pop(job["id"], None)
+        crashed = job["status"] == "failed" and job["result"].startswith(CRASH_PREFIX)
+        policy = job["status"] == "denied" and job["result"].startswith(gamepolicy.POLICY_PREFIXES)  # the game guard refused to play (or to type on a third-party site)
         if master_id:
             bot = self.db.get_bot(bot_id) or {"name": "A bot"}
             text = {"done": f"{bot['name']} finished: {job['goal']}\n{job['result']}", "cancelled": f"{bot['name']}'s task was stopped: {job['goal']}"}.get(
@@ -660,7 +859,10 @@ class Orchestrator:
                 note = (f"The task you handed to {bot_name} finished. Goal: {job['goal']}. Worker report: {job['result']}\nTell the owner the final result in one or two short sentences: "
                         "what ran on which phone and what the screen showed. Start nothing else unless the owner asked for it. Be honest and do not claim more than the report shows.")
                 threading.Thread(target=self._turn_with, args=(master_id, note, f"{bot_name} finished: {job['result'][:200]}"), daemon=True, name="summary").start()
-            if job["status"] in ("failed", "max_steps") and self.db.get_bot(master_id):  # Master looks for another way, without blocking this phone's lane
+            if policy and self.db.get_bot(master_id):
+                bot_name = (self.db.get_bot(bot_id) or {"name": "a bot"})["name"]
+                threading.Thread(target=self._turn_with, args=(master_id, self._policy_note(job), f"{job['result']}"), daemon=True, name="policy").start()
+            if job["status"] in ("failed", "max_steps") and not crashed and self.db.get_bot(master_id):  # Master looks for another way, without blocking this phone's lane
                 bot_name = (self.db.get_bot(bot_id) or {"name": "a bot"})["name"]
                 threading.Thread(target=self._turn_with, args=(master_id, self._reroute_note(master_id, bot_name, job), f"{bot_name}'s task did not complete: {job['result'] or job['goal']}"),
                                  daemon=True, name="reroute").start()
@@ -677,10 +879,22 @@ class Orchestrator:
             self.db.memory_add(bot_id, f"Task done: {job['goal']} -> {result}")
         waiting = [j for j in self.db.active_jobs(bot_id) if j["after"] == job["id"]]
         queued = self.db.active_jobs(bot_id)
-        crashed = status == "failed" and result.startswith(CRASH_PREFIX)
-        if crashed:  # retrying a crashing app only repeats the crash: say so, remember it, and let the owner decide
+        if policy:  # the game guard stopped it: no retry, no other phone, just an honest answer with what is still possible
+            self._retries[bot_id] = MAX_AUTO_RETRIES
+            self.db.memory_add(bot_id, f"Not played (game account protection): {job['goal'][:120]}")
+            if not master_id:
+                self._turn_with(bot_id, self._policy_note(job), job["result"], job.get("routine"))
+            return
+        if crashed:  # retrying a crashing app only repeats the crash: remember it and try the owner's other phones in order, without asking
             self._retries[bot_id] = MAX_AUTO_RETRIES
             self.db.memory_add(bot_id, f"Task failed: {job['goal']} -> {result}")
+            m = phones.CRASH_RE.match(result)
+            if m:
+                asker, failed = master_id or bot_id, phones.job_phone_key(job)
+                if self.db.get_bot(asker):
+                    app = app_name(job["goal"], m.group(1))
+                    self.escalator.start(asker, m.group(1), job["goal"], failed, f"{app} crashed on {self.escalator._label(failed)}, so I'm trying your other phones.")
+                    return
         if status == "skipped":
             self._turn_with(bot_id, f"A queued phone task was skipped, because the task before it did not finish. Goal: {job['goal']}. {result}. "
                                     "Tell the owner in one sentence that it did not run and why, and offer to retry the earlier task first.", result)

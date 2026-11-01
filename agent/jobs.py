@@ -34,6 +34,7 @@ def is_phone_error(e: Exception) -> bool:
 class JobRun:
     def __init__(self, job: dict, status_msg_id: int):
         self.job_id, self.bot_id, self.goal, self.after, self.verify = job["id"], job["bot_id"], job["goal"], job.get("after"), job.get("verify")
+        self.files = list(job.get("files") or [])  # ids of pictures the owner shared that this task needs on the phone
         self.target = job.get("target") or ""  # "" is the shared emulator, "virtual:games" the games phone, "phone:<id>" the owner's real phone
         self.lane = self.target  # one running job per lane
         self.timed_out = False
@@ -55,6 +56,7 @@ class JobManager:
         self.external_busy = external_busy or (lambda: False)
         self.vault = vault
         self.lifecycle = None  # phone power (sleep and wake), attached by the app
+        self.adb_phones = None  # extra adb phones (agent/adbphones.py), attached by the app
         self.phones = None  # real phones connected through the app (agent/remote.py), attached by the app
         self.app_cache: dict = self._load_app_cache()  # phone key -> (when, user-installed packages)
         self.virtuals: dict[str, tuple] = {}  # name -> (Device, Lifecycle) of each virtual phone (agent/virtual.py), attached by the app
@@ -64,7 +66,8 @@ class JobManager:
         self._running: dict[str, JobRun] = {}  # lane -> its running job
         self._pending: list[JobRun] = []  # queued jobs in the order they were asked, all lanes
         self._cv = threading.Condition()
-        self.held = False  # the owner has control of the shared emulator (the only phone with owner control)
+        self.held_lanes: set[str] = set()  # lanes whose phone the owner is driving ("" is the shared emulator, "virtual:games" the games phone, ...)
+        self._hold_at: dict[str, float] = {}  # lane -> when the owner last did something there (the idle release)
         self._threads: dict[str, threading.Thread] = {}
         self._started = False
 
@@ -106,6 +109,18 @@ class JobManager:
 
     def running(self) -> list["JobRun"]:
         return list(self._running.values())
+
+    @property
+    def held(self) -> bool:
+        """The owner has control of the shared emulator."""
+        return "" in self.held_lanes
+
+    @held.setter
+    def held(self, value: bool) -> None:
+        (self.held_lanes.add if value else self.held_lanes.discard)("")
+
+    def is_held(self, lane: str = "") -> bool:
+        return lane in self.held_lanes
 
     def lane_of(self, bot_id: str) -> str:
         """Which phone a bot's jobs run on: the games phone's bot and a real phone's bot have their own, every other bot uses the shared emulator."""
@@ -172,7 +187,7 @@ class JobManager:
             cur = self._running.get(lane)
             queue = [r for r in self._pending if r.lane == lane]
         job = self.db.get_job(cur.job_id) if cur else None
-        held = self.held and lane == ""
+        held = lane in self.held_lanes
         if held:
             state = "control"
         elif job:
@@ -181,6 +196,8 @@ class JobManager:
             state = "ready"
         device, lifecycle = self.pair(lane)
         power = lifecycle.info() if lifecycle else {"power": "on"}
+        if lifecycle is None and self.adb_phones is not None and lane.startswith("virtual:") and not self.adb_phones.online(lane.split(":", 1)[1]):
+            power = {"power": "off", "detail": "adb cannot reach this phone"}  # an extra adb phone has no power to manage: it is simply there, or not
         try:  # never ask a sleeping phone anything: its adb connection would hang
             orientation = device.orientation() if device is not None and power["power"] == "on" and hasattr(device, "orientation") else "portrait"
         except Exception:
@@ -191,11 +208,11 @@ class JobManager:
                 "lanes": lanes}
 
     # --- submit and cancel ---------------------------------------------------------------------------------------
-    def submit(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None) -> dict:
+    def submit(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None, files: list[str] | None = None) -> dict:
         """Queue a phone job. With `after` (a job id) it waits for that job to finish successfully and is skipped if it does not.
         With `verify` (a phone check) the worker's "done" only counts if the phone really shows it."""
         target = self.lane_of(bot_id)  # a phone's bot only ever works on that phone, and no other bot ever uses it
-        job = self.db.create_job(bot_id, goal, after, verify, routine, target)
+        job = self.db.create_job(bot_id, goal, after, verify, routine, target, files)
         msg = self.db.add_message(bot_id, "assistant", "status", "Waiting for the phone…" if self.busy(target) or after else "Starting…", {"job_id": job["id"]})
         self.hub.publish(bot_id, {"type": "message", "message": msg})
         jr = JobRun(job, msg["id"])
@@ -242,31 +259,42 @@ class JobManager:
         return True
 
     # --- owner control of the phone ------------------------------------------------------------------------------
-    def take_control(self) -> None:
-        if self.lifecycle:
-            self.lifecycle.wake()
+    def take_control(self, lane: str = "") -> None:
+        """The owner drives a phone: its lane pauses at the agent's next step (the other phones carry on)."""
+        lifecycle = self.pair(lane)[1]
+        if lifecycle:
+            lifecycle.wake()
         with self._cv:
-            self.held = True
+            self.held_lanes.add(lane)
+            self._hold_at[lane] = time.time()
 
-    def release_control(self) -> None:
+    def release_control(self, lane: str = "") -> None:
         with self._cv:
-            self.held = False
+            self.held_lanes.discard(lane)
             self._cv.notify_all()
 
-    def _expire_hold(self) -> None:
+    def owner_input(self, lane: str = "") -> None:
+        """The owner just did something on this phone: control is not forgotten."""
+        self._hold_at[lane] = time.time()
+
+    def _expire_hold(self, lane: str = "") -> None:
         """Owner control that is forgotten (no input for HOLD_IDLE_MIN) ends by itself, or every queued task would wait for ever."""
-        lc = self.lifecycle
-        if self.held and lc is not None and lc.clock() - lc.last_activity > self.hold_idle_s:
-            self.release_control()
+        if lane not in self.held_lanes:
+            return
+        lc = self.pair(lane)[1]
+        idle = lc.clock() - lc.last_activity if lc is not None else time.time() - self._hold_at.get(lane, 0)
+        if idle > self.hold_idle_s:
+            self.release_control(lane)
 
     def _pause(self, jr: JobRun) -> None:
-        if not self.held or jr.target:  # owner control is about the emulator
+        lane = jr.lane
+        if lane not in self.held_lanes or lane.startswith("phone:"):  # the owner drives the emulator and the adb phones; a real phone has no owner control
             return
         self._set_status(jr, "Paused: you have control of the phone")
         with self._cv:
-            while self.held and not jr.cancel.is_set():
+            while lane in self.held_lanes and not jr.cancel.is_set():
                 self._cv.wait(0.5)
-                self._expire_hold()
+                self._expire_hold(lane)
         self._set_status(jr, "Working…")
 
     # --- answers from chat ---------------------------------------------------------------------------------------
@@ -312,7 +340,7 @@ class JobManager:
                     self._running[lane] = pick  # claimed under the lock, so busy() never reads "idle" between the queue and the phone
                 elif not skipped:
                     self._cv.wait(1.0)  # woken by a new job, a finished job or a cancel; the timeout covers external changes
-            self._expire_hold()
+            self._expire_hold(lane)
             for jr in skipped:
                 self._skip(jr)
             if pick:
@@ -382,6 +410,9 @@ class JobManager:
             device, lifecycle = self.pair(jr.target)
             if device is None:
                 return self._fail(jr, "The games phone is not set up on this computer (see docs/virtual-android.md).")
+            name = jr.target.split(":", 1)[1]
+            if lifecycle is None and self.adb_phones is not None and name in self.adb_phones.config and not self.adb_phones.online(name, fresh=True):
+                return self._fail(jr, f"The {name} phone is offline: adb cannot reach it ({self.adb_phones.serial(name)}). Connect it, then ask again.")
         elif jr.target.startswith("phone:"):  # the owner's own phone: no emulator to wake, but the app on it has to be connected
             pid = self.phones.pick(jr.target.split(":", 1)[1]) if self.phones else None
             if not pid:
@@ -393,6 +424,12 @@ class JobManager:
             if not lifecycle.ensure_healthy(480):
                 return self._fail(jr, "The phone did not wake up in time")
             self._set_status(jr, "Starting…")
+        pushed: list[str] = []
+        if jr.files:  # pictures the task needs go to the phone's Pictures/MobileAgent folder first, and are removed when it ends
+            try:
+                pushed = self._push_files(jr, device)
+            except Exception as e:
+                return self._fail(jr, f"I could not copy the picture to the phone: {str(e)[:150]}")
         trace = self.data_dir / "runs" / jr.job_id
         status, result, attempt = "failed", "", 0
         while True:
@@ -413,6 +450,7 @@ class JobManager:
                         continue
                 result = f"{type(e).__name__}: {str(e)[:200]}"
                 break
+        self._remove_files(device, pushed)
         if status == "done" and jr.verify:
             ok, detail = run_check(device, jr.verify)
             if not ok:  # the worker said it was done but the phone disagrees: the job counts as failed, so tasks that depend on it do not run
@@ -431,6 +469,41 @@ class JobManager:
         self._close_items(jr)
         self._save_artifact(jr, trace, status)
         self.orch.job_finished(jr.bot_id, job)
+
+    PICTURE_DIR = "/sdcard/Pictures/MobileAgent"
+
+    def _push_files(self, jr: JobRun, device) -> list[str]:
+        """Copy the task's pictures to the phone and tell the worker where they are. Not on the owner's real phone yet (its app has no file hand-off)."""
+        if not hasattr(device, "push"):
+            raise ValueError("sending a picture to your own phone is not supported yet")
+        remotes = []
+        try:
+            for fid in jr.files:
+                row = self.db.get_attachment(fid)
+                if not row or not Path(row["path"]).exists():
+                    continue
+                remote = f"{self.PICTURE_DIR}/{Path(row['path']).name}"
+                device.push(row["path"], remote)
+                remotes.append(remote)
+                device.media_scan(remote)
+        except Exception:
+            self._remove_files(device, remotes)  # nothing half-copied is left behind
+            raise
+        if not remotes:
+            raise ValueError("the picture is no longer available")
+        names = ", ".join(r.rsplit("/", 1)[1] for r in remotes)
+        jr.goal += (f"\nThe owner's picture(s) are already on this phone in Pictures/MobileAgent ({names}); they show in the gallery and in the photo picker of other apps. "
+                    "Pick them from there; do not search the web for the picture.")
+        self.db.update_job(jr.job_id, goal=jr.goal)
+        return remotes
+
+    @staticmethod
+    def _remove_files(device, remotes: list[str]) -> None:
+        for remote in remotes:
+            try:
+                device.remove_file(remote)
+            except Exception:
+                pass  # the phone may be gone; the copy is only a few hundred KB in a folder of its own
 
     @staticmethod
     def _take_notes(jr: JobRun) -> list[str]:

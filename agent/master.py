@@ -81,6 +81,21 @@ def ensure_games_bot(db: Database, hub: Hub | None, phone_id: str = "games") -> 
     return bot
 
 
+def ensure_adb_bot(db: Database, hub: Hub | None, name: str, serial: str, has_play: bool) -> dict:
+    """The persistent bot of an extra adb phone (ADB_PHONES), created once adb reaches it. Its tasks run only on that phone."""
+    bot = db.phone_bot(name, "virtual")
+    if bot:
+        return bot
+    play = "Google Play is installed here, so apps can be installed from the Play Store." if has_play else "There is no Google Play here, so apps come as APK files."
+    bot = db.create_bot(f"{name.title()} phone", f"The bot of the extra adb phone '{name}' ({serial}). It runs only on that phone, in the background, and never uses the shared emulator.",
+                        kind="virtual", phone_id=name)
+    msg = db.add_message(bot["id"], "assistant", "text", f"This is the extra phone '{name}', reached over adb ({serial}). {play} It is always on while adb can reach it; "
+                         "if it goes offline, my tasks fail and I say so instead of using another phone.")
+    if hub:
+        hub.publish(bot["id"], {"type": "message", "message": msg})
+    return bot
+
+
 def _describe(r: dict) -> str:
     s = r["schedule"]
     return f"{r['name']} ({'daily at ' + s['daily_at'] if 'daily_at' in s else 'every ' + str(s['every_minutes']) + ' min'}{'' if r['enabled'] else ', paused'})"

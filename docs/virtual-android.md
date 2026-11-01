@@ -71,3 +71,23 @@ Tested: Shattered Pixel Dungeon (libGDX) and Mindustry. A game that refuses to r
   Not for the owner's own phone (it installs from its own Play Store).
 - Google sign-in: never copied between phones. A phone that can have an account (the emulator, the owner's phone) gets a sign-in task on its own bot (type_secret from the vault, owner approves, handoff for 2-step).
   The games phone has no Google services and can never sign in.
+
+## Apps that refuse to run: the automatic chain (1 Nov 2026)
+When an app crashes (or will not stay up) on a phone, the agent tries the owner's other phones in order, in code (`agent/escalate.py`), with no question at each step:
+the phones where it already stayed up first, then the shared emulator, the games phone, the extra adb phones, and last the owner's own phone (only while its app is connected; it installs
+from its own Play Store through its bot). An app that is missing on an adb phone is copied from a phone that has it (`move_app`: only the app, never data or sign-in).
+- At most `CHAIN_MAX` (4) phones, never the same phone twice, never a phone where the app is known not to run (`launch_facts` and crashes seen in tasks).
+- After opening it the chain checks that the app is in front and has not crashed for 20 s, and describes the screen from a screenshot before saying it runs. It never taps, signs in or plays.
+- What it learns is stored (`launch_facts`): the directory shows "Known to run here" / "Known NOT to run here", and the next "open it" goes straight to the phone that works.
+- It works from any bot: the answer lands in the chat where the owner asked (for a task Master handed over, in Master's chat). It ends in one honest message when no phone can run it.
+- Still asks the owner for: untrusted installs, signing in, secrets, deleting, buying.
+
+## Extra adb phones (`ADB_PHONES`)
+Any adb endpoint the owner manages: `ADB_PHONES="pixel=R5CN1234,cloud=10.0.0.5:5555"` (or `data/phones.json`: `{"pixel": "R5CN1234"}`). Each one that answers `adb -s <serial> get-state`
+gets its own bot ("Pixel phone", kind `virtual`), lane, live view (watch only) and directory entry (status, installed apps, Google Play detected with `pm list packages com.android.vending`).
+No power management: it is always on while adb reaches it, and a task on one that went offline fails honestly. The bot list re-checks them when it is polled. Serials that clash with the shared
+emulator (`emulator-*`) or the games phone (`localhost:5565`) and reserved names (`games`, `emulator`, ...) are refused. BlueStacks with adb enabled, a USB phone or a cloud phone all fit.
+
+
+## Game account safety
+The agent never plays games whose publishers ban bot accounts (Supercell, Niantic), on any phone; the games phone and extra adb phones can be driven by the owner (Take control). See [game-safety.md](game-safety.md).

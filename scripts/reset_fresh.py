@@ -33,7 +33,7 @@ def main() -> None:
         if b["kind"] not in keep:
             db.delete_bot(b["id"])
     with db.lock:
-        for table in ("messages", "jobs", "items", "library", "memory", "routines", "alerts", "vault_audit"):
+        for table in ("messages", "jobs", "items", "library", "memory", "routines", "alerts", "vault_audit", "attachments"):
             db.conn.execute(f"delete from {table}")
         db.conn.commit()
     for b in db.list_bots():
@@ -41,7 +41,7 @@ def main() -> None:
         db.add_message(b["id"], "assistant", "text", text)
     if not [b for b in db.list_bots() if b["kind"] == "bot"]:
         db.create_bot("Assistant", "")
-    for d in ("library", "runs"):
+    for d in ("library", "runs", "uploads"):  # uploads: the pictures shared in chat
         p = ROOT / "data" / d
         if p.exists():
             shutil.rmtree(p)

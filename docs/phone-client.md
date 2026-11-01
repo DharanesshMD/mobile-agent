@@ -59,6 +59,7 @@ Server → phone: `{"id":7,"op":"tap","args":{"x":540,"y":1200}}`. Phone → ser
 | `packages` | none | all installed package names |
 | `foreground` | none | package of the app in front |
 | `crashes` | none | `[]` for now |
+| `push_file` (follow-up, not built) | `name`, `mime`, `data` (base64) | saves a picture the owner shared to Pictures/MobileAgent through MediaStore; needed for tasks that use a shared picture on a real phone |
 
 ## Reaching the server from a real phone
 

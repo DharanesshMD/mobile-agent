@@ -12,13 +12,15 @@ COLORS = ["#4c9aff", "#3ecf8e", "#f5b84b", "#ff7a90", "#a78bfa", "#2dd4bf"]
 SCHEMA = """
 create table if not exists bots(id text primary key, name text not null, persona text not null default '', color text, created real, kind text not null default 'bot', phone_id text);
 create table if not exists alerts(key text primary key, at real);
+create table if not exists launch_facts(phone text not null, package text not null, ok integer not null, at real, note text, primary key(phone, package));
 create table if not exists messages(id integer primary key autoincrement, bot_id text not null, role text not null, kind text not null,
   content text not null default '', meta text not null default '{}', created real, updated real);
 create index if not exists messages_bot on messages(bot_id, id);
 create table if not exists jobs(id text primary key, bot_id text not null, goal text not null, status text not null, started real, ended real,
-  result text not null default '', trace_dir text, after text, verify text, routine text, target text);
+  result text not null default '', trace_dir text, after text, verify text, routine text, target text, files text);
 create table if not exists items(id text primary key, bot_id text not null, job_id text, message_id integer, kind text not null,
   payload text not null default '{}', status text not null default 'open', answer text, created real, answered real);
+create table if not exists attachments(id text primary key, bot_id text not null, message_id integer, mime text not null, path text not null, w integer, h integer, bytes integer, created real);
 create table if not exists library(id text primary key, bot_id text not null, job_id text, title text not null, path text not null, created real);
 create table if not exists vault(id text primary key, owner text not null, label text not null, kind text not null, nonce blob not null,
   ciphertext blob not null, created real);
@@ -33,7 +35,7 @@ def _row(r: sqlite3.Row | None) -> dict | None:
     if r is None:
         return None
     d = dict(r)
-    for k in ("meta", "payload", "schedule", "verify"):
+    for k in ("meta", "payload", "schedule", "verify", "files"):
         if k in d and isinstance(d[k], str):
             d[k] = json.loads(d[k] or "{}")
     return d
@@ -58,7 +60,7 @@ class Database:
             if "kind" not in [r["name"] for r in self.conn.execute("pragma table_info(bots)")]:  # databases created before the master bot
                 self.conn.execute("alter table bots add column kind text not null default 'bot'")
                 self.conn.commit()
-            for table, cols in (("jobs", ("after", "verify", "routine", "target")), ("routines", ("last_status",)), ("bots", ("phone_id",))):  # databases created before these columns
+            for table, cols in (("jobs", ("after", "verify", "routine", "target", "files")), ("routines", ("last_status",)), ("bots", ("phone_id",))):  # databases created before these columns
                 have = [r["name"] for r in self.conn.execute(f"pragma table_info({table})")]
                 for col in cols:
                     if col not in have:
@@ -90,6 +92,15 @@ class Database:
     def phone_bot(self, phone_id: str, kind: str = "phone") -> dict | None:
         """The bot of one phone (kind 'phone' for a real phone, 'virtual' for a virtual one such as the games phone): the only bot whose tasks run on it."""
         return self._one("select * from bots where kind=? and phone_id=? limit 1", (kind, phone_id))
+
+    # what happened when an app was opened on a phone (ok=1 it ran, ok=0 it crashed or would not stay up): the agent uses it to go straight to the phone that works
+    def set_launch_fact(self, phone: str, package: str, ok: bool, note: str = "") -> None:
+        self._x("insert or replace into launch_facts(phone,package,ok,at,note) values(?,?,?,?,?)", (phone, package, 1 if ok else 0, time.time(), note[:200]))
+
+    def launch_facts(self, package: str | None = None) -> list[dict]:
+        if package:
+            return self._q("select * from launch_facts where package=? order by at desc", (package,))
+        return self._q("select * from launch_facts order by at desc")
 
     def master_bot(self) -> dict | None:
         return self._one("select * from bots where kind='master' limit 1")
@@ -125,11 +136,43 @@ class Database:
         """Remove a bot and everything it owns. Returns the library file paths so the caller can delete them."""
         with self.lock:
             paths = [r["path"] for r in self.conn.execute("select path from library where bot_id=?", (bot_id,)).fetchall()]
-            for table in ("messages", "jobs", "items", "library", "memory", "routines"):
+            paths += [r["path"] for r in self.conn.execute("select path from attachments where bot_id=?", (bot_id,)).fetchall()]
+            for table in ("messages", "jobs", "items", "library", "memory", "routines", "attachments"):
                 self.conn.execute(f"delete from {table} where bot_id=?", (bot_id,))
             self.conn.execute("delete from bots where id=?", (bot_id,))
             self.conn.commit()
         return paths
+
+    # attachments: pictures the owner shared in chat (agent/images.py). An upload belongs to a bot and has no message until the message is sent.
+    def add_attachment(self, bot_id: str, mime: str, path: str, w: int, h: int, size: int, aid: str | None = None) -> dict:
+        aid = aid or uuid.uuid4().hex[:12]
+        self._x("insert into attachments(id,bot_id,message_id,mime,path,w,h,bytes,created) values(?,?,?,?,?,?,?,?,?)", (aid, bot_id, None, mime, path, w, h, size, time.time()))
+        return self.get_attachment(aid)
+
+    def get_attachment(self, aid: str) -> dict | None:
+        return self._one("select * from attachments where id=?", (aid,))
+
+    def unattached(self, bot_id: str, ids: list[str]) -> list[dict]:
+        """The uploads among `ids` that belong to this bot and are not on a message yet, in the order asked (an id of another bot, or one already sent, is left out)."""
+        rows = {r["id"]: r for r in self._q("select * from attachments where bot_id=? and message_id is null", (bot_id,))}
+        return [rows[i] for i in ids if i in rows]
+
+    def unattached_count(self, bot_id: str) -> int:
+        return self._one("select count(*) n from attachments where bot_id=? and message_id is null", (bot_id,))["n"]
+
+    def attach(self, ids: list[str], message_id: int) -> None:
+        for i in ids:
+            self._x("update attachments set message_id=? where id=?", (message_id, i))
+
+    def delete_attachment(self, aid: str) -> None:
+        self._x("delete from attachments where id=?", (aid,))
+
+    def stale_attachments(self, max_age_s: float) -> list[dict]:
+        """Uploads that were never sent with a message and are older than max_age_s."""
+        return self._q("select * from attachments where message_id is null and created<?", (time.time() - max_age_s,))
+
+    def attachment_notice_sent(self, bot_id: str) -> bool:
+        return bool(self._q("select 1 from messages where bot_id=? and kind='bot_note' and meta like '%image-privacy%' limit 1", (bot_id,)))
 
     def list_bots(self) -> list[dict]:
         bots = self._q("select * from bots order by created")
@@ -165,11 +208,12 @@ class Database:
         return list(reversed(rows))
 
     # jobs
-    def create_job(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None, target: str = "") -> dict:
+    def create_job(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None, target: str = "",
+                   files: list[str] | None = None) -> dict:
         """`after` is the id of a job that must finish successfully before this one runs; `verify` is a phone check (agent/checks.py) that must pass for it to count as done."""
         jid = uuid.uuid4().hex[:10]
-        self._x("insert into jobs(id,bot_id,goal,status,started,after,verify,routine,target) values(?,?,?,?,?,?,?,?,?)",
-                (jid, bot_id, goal, "queued", time.time(), after, json.dumps(verify) if verify else None, routine, target or None))
+        self._x("insert into jobs(id,bot_id,goal,status,started,after,verify,routine,target,files) values(?,?,?,?,?,?,?,?,?,?)",
+                (jid, bot_id, goal, "queued", time.time(), after, json.dumps(verify) if verify else None, routine, target or None, json.dumps(files) if files else None))
         return self.get_job(jid)
 
     def get_job(self, jid: str) -> dict | None:

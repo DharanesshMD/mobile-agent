@@ -5,13 +5,15 @@ import re
 import shutil
 import threading
 import time
+import uuid
+from collections import deque
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent import sensitive
+from agent import images, sensitive
 from agent.config import TRANSCRIBE_MODEL
 
 
@@ -30,7 +32,8 @@ class BotPatch(BaseModel):
 
 
 class NewMessage(BaseModel):
-    text: str = Field(min_length=1, max_length=4000)
+    text: str = Field(default="", max_length=4000)
+    attachments: list[str] = Field(default_factory=list, max_length=images.MAX_PER_MESSAGE)  # ids of pictures uploaded to this bot (POST /attachments), not sent yet
 
 
 class Answer(BaseModel):
@@ -60,6 +63,9 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
 
     @app.get("/api/bots", dependencies=[Depends(auth)])
     def list_bots():
+        sync = getattr(app.state, "sync_adb", None)
+        if sync and getattr(jobs, "adb_phones", None) is not None:  # extra adb phones: look again, in the background, so the list never waits for adb
+            threading.Thread(target=sync, daemon=True, name="adb-sync").start()
         bots = db.list_bots()
         for b in bots:
             a = jobs.active_for(b["id"])
@@ -127,11 +133,88 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         return {"bot": b, "messages": db.messages(bot_id, 200), "last_seq": hub.last_seq(bot_id),
                 "jobs": db.jobs(bot_id, 10), "mobile": jobs.state(own_lane(bot_id))}
 
+    uploads = Path(jobs.data_dir) / "uploads"
+    upload_times: dict[str, deque] = {}
+
+    def drop_attachment(row: dict) -> None:
+        Path(row["path"]).unlink(missing_ok=True)
+        db.delete_attachment(row["id"])
+
+    @app.post("/api/bots/{bot_id}/attachments", dependencies=[Depends(auth)])
+    async def upload_attachment(bot_id: str, request: Request):
+        """One picture per request (the body is the picture itself, any image content type; the file name is never trusted). It is checked by decoding it,
+        shrunk to 1568 px, stripped of all metadata (EXIF, GPS, camera) and stored; the answer gives its id, to send with the next message."""
+        bot_or_404(bot_id)
+        now = time.time()
+        recent = upload_times.setdefault(bot_id, deque())
+        while recent and now - recent[0] > 60:
+            recent.popleft()
+        if len(recent) >= 20:
+            raise HTTPException(429, "Too many pictures in a minute. Wait a moment and try again.")
+        recent.append(now)
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            declared = 0
+        if declared > images.MAX_UPLOAD_BYTES + 4096:
+            raise HTTPException(413, f"That picture is too big. The limit is {images.MAX_UPLOAD_BYTES // 1024 // 1024} MB.")
+        data = bytearray()
+        async for chunk in request.stream():
+            data += chunk
+            if len(data) > images.MAX_UPLOAD_BYTES:
+                raise HTTPException(413, f"That picture is too big. The limit is {images.MAX_UPLOAD_BYTES // 1024 // 1024} MB.")
+        for row in db.stale_attachments(3600):  # pictures that were picked but never sent
+            drop_attachment(row)
+        if db.unattached_count(bot_id) >= 2 * images.MAX_PER_MESSAGE:
+            raise HTTPException(409, "Too many pictures are waiting to be sent. Send them or remove some first.")
+        try:
+            out, mime, w, h = await asyncio.get_running_loop().run_in_executor(None, images.normalize, bytes(data))
+        except images.ImageError as e:
+            raise HTTPException(400, str(e)) from e
+        aid = uuid.uuid4().hex[:12]
+        uploads.mkdir(parents=True, exist_ok=True)
+        path = uploads / f"{aid}.{images.EXT[mime]}"
+        path.write_bytes(out)
+        row = db.add_attachment(bot_id, mime, str(path), w, h, len(out), aid)
+        return {"id": row["id"], "w": w, "h": h, "mime": mime, "bytes": len(out)}
+
+    @app.get("/api/attachments/{attachment_id}/file", dependencies=[Depends(auth)])
+    def attachment_file(attachment_id: str):
+        row = db.get_attachment(attachment_id)
+        if not row or not Path(row["path"]).exists():
+            raise HTTPException(404, "unknown picture")
+        return FileResponse(row["path"], media_type=row["mime"], headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.delete("/api/attachments/{attachment_id}", dependencies=[Depends(auth)])
+    def delete_attachment(attachment_id: str):
+        """Take back a picture that was picked but not sent."""
+        row = db.get_attachment(attachment_id)
+        if not row:
+            raise HTTPException(404, "unknown picture")
+        if row["message_id"] is not None:
+            raise HTTPException(409, "That picture was already sent")
+        drop_attachment(row)
+        return {"ok": True}
+
     @app.post("/api/bots/{bot_id}/messages", dependencies=[Depends(auth)])
     def post_message(bot_id: str, body: NewMessage):
         bot_or_404(bot_id)
+        ids = list(dict.fromkeys(body.attachments))
+        if not body.text.strip() and not ids:
+            raise HTTPException(422, "Write a message or attach a picture")
+        pics = db.unattached(bot_id, ids)
+        if len(pics) != len(ids):  # another bot's upload, one already sent, or one that no longer exists
+            raise HTTPException(422, "One of the pictures is not available. Attach it again.")
         text, kinds = sensitive.redact(body.text.strip())  # secrets never reach the log or a model
-        msg = db.add_message(bot_id, "user", "text", text, {"sensitive": kinds} if kinds else None)
+        meta = {"sensitive": kinds} if kinds else {}
+        if pics:
+            meta["attachments"] = [{"id": a["id"], "w": a["w"], "h": a["h"]} for a in pics]
+        first_picture = bool(pics) and not db.attachment_notice_sent(bot_id)
+        if first_picture:  # said once per chat, before the picture goes anywhere
+            orch.post(bot_id, "Pictures you attach are sent to the model provider, the same as your messages. Avoid photos of cards, IDs or other private documents.",
+                      "bot_note", {"notice": "image-privacy"})
+        msg = db.add_message(bot_id, "user", "text", text or images.IMAGE_ONLY, meta or None)
+        db.attach([a["id"] for a in pics], msg["id"])
         hub.publish(bot_id, {"type": "message", "message": msg})
         if kinds:  # offer a secure input for what was hidden, so the owner never has to paste it in chat again
             sk = {"card number": "card", "ID number": "id", "password": "password"}.get(kinds[0], "note")
@@ -224,7 +307,10 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         if not item["job_id"] and user_text:
             msg = db.add_message(item["bot_id"], "user", "text", user_text)
             hub.publish(item["bot_id"], {"type": "message", "message": msg})
-            threading.Thread(target=orch.turn, args=(item["bot_id"],), daemon=True).start()
+            if payload.get("web"):  # a "other ways" card: the pick is carried out in code (open a link, show it, or nothing), never decided by a model turn
+                threading.Thread(target=orch.web_pick, args=(item, user_text), daemon=True).start()
+            else:
+                threading.Thread(target=orch.turn, args=(item["bot_id"],), daemon=True).start()
         return {"ok": True}
 
     @app.get("/api/bots/{bot_id}/jobs", dependencies=[Depends(auth)])
@@ -282,9 +368,10 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         return jobs.state(lane)
 
     @app.post("/api/mobile/control", dependencies=[Depends(auth)])
-    def mobile_control(body: Control):
-        jobs.take_control() if body.action == "take" else jobs.release_control()
-        return jobs.state()
+    def mobile_control(body: Control, phone: str | None = Query(default=None)):
+        lane = phone_lane(phone)  # the shared emulator, or an owned virtual or adb phone by name
+        jobs.take_control(lane) if body.action == "take" else jobs.release_control(lane)
+        return jobs.state(lane)
 
     @app.get("/api/vault", dependencies=[Depends(auth)])
     def vault_list():

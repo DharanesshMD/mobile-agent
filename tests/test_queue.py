@@ -433,14 +433,14 @@ class AppCrashes(unittest.TestCase):
         res = run_graph("open it", CrashyPhone(emulator=False), Worker(*([{"type": "tap", "element": 0}] * 6)), settle=0)
         self.assertNotIn("emulated", res.answer)
 
-    def test_a_crashed_task_is_not_retried_and_the_owner_hears_why(self):
-        spark = Spark(act(type="mobile_task", goal="open clash of clans", say="ok"),
-                      act(type="reply", text="Clash of Clans crashes on this phone, so I can't open it. The website is an option."))
+    def test_a_crashed_task_is_not_retried_and_the_owner_hears_the_honest_outcome(self):
+        spark = Spark(act(type="mobile_task", goal="open clash of clans", say="ok"))
         c, _, bot, app = setup(spark, Worker(act(type="fail", reason=CRASH_PREFIX + "com.supercell.clashofclans crashed 3 times")))
         say(c, bot, "open clash of clans")
-        until(lambda: any("crashes on this phone" in t for t in texts(c, bot, "assistant")))
+        # no other phone exists here, so the automatic chain (agent/escalate.py) stops at once and says what would unblock it
+        until(lambda: any("couldn't get Clash of Clans to run on any of your phones" in t for t in texts(c, bot, "assistant")))
         self.assertEqual(app.state.orch._retries[bot], 1)  # no automatic retry is left
-        self.assertIn("do NOT start a retry", spark.calls[-1][1][-1]["content"])
+        self.assertEqual(len(c.get(f"/api/bots/{bot}/jobs").json()), 1)  # and nothing was started again
         self.assertTrue(any("crashed 3 times" in m for m in app.state.orch.db.memory_search(bot, "crashed")))  # remembered for later chats
 
 

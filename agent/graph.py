@@ -19,6 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
+from agent import gamepolicy
 from agent.device import Element
 from agent.config import IMAGE_MODE, IMAGE_WIDTH
 from agent.config import CRASH_LIMIT, MAX_JOB_MINUTES, MAX_WAIT_S
@@ -26,6 +27,7 @@ from agent.loop import ANIMATED_AFTER, ANIMATED_SAME, GATES, build_prompt, coars
 from agent.loop import settle as settle_screen
 
 
+MAX_BLOCKS = 3  # input refused by the game guard this many times in one task: the task ends instead of looping
 CRASH_PREFIX = "App keeps crashing: "  # the orchestrator recognises a failed task by this start and does not retry it
 
 
@@ -51,6 +53,11 @@ class State(TypedDict, total=False):
     waits: int  # steps spent only waiting (a download, a loading screen): they do not use the step budget
     crash_seen: list[str]  # "package:pid" of crashes already counted, so each is counted once
     crashes: dict  # package -> crashes during this task
+    fg: str  # package of the app in front when the screen was last read (the game guard looks at it)
+    guard: str  # why input is refused on the current screen ("" when it is allowed): a blocked game, or a browser on a cloud-gaming page
+    guard_name: str  # the game the guard is protecting
+    site: str  # a third-party site the browser is on: nothing is typed there
+    blocked: int  # inputs the game guard refused in this task
     launchers: list  # packages with a launcher icon: only these are apps whose crash can stop a task (system services crash in the background on their own)
 
 
@@ -103,14 +110,19 @@ def observe(state: State, config: RunnableConfig) -> dict:
         return {"status": "max_steps", "answer": f"time budget exhausted ({round(c['max_minutes'])} min); the phone may still be working on it"}
     dev = c["device"]
     t0 = time.time()
-    with ThreadPoolExecutor(3) as ex:  # the screenshot, the UI tree and the crash log are independent ADB calls
+    with ThreadPoolExecutor(4) as ex:  # the screenshot, the UI tree, the crash log and the app in front are independent ADB calls
         f_shot, f_tree = ex.submit(_timed, dev.screenshot), ex.submit(_timed, dev.elements)
+        f_fg = ex.submit(dev.foreground) if hasattr(dev, "foreground") else None
         f_crash = ex.submit(dev.crashes) if hasattr(dev, "crashes") else None
         (png, shot_ms), (elements, tree_ms) = f_shot.result(), f_tree.result()
         try:
             logged = f_crash.result() if f_crash else []
         except Exception:  # the crash log is a help, never a reason to stop
             logged = []
+        try:
+            fg = (f_fg.result() if f_fg else "") or state.get("fg", "")
+        except Exception:  # unknown now: keep what was last seen, so a game that was in front stays guarded
+            fg = state.get("fg", "")
     seen, crashes, launchers = list(state.get("crash_seen", [])), dict(state.get("crashes", {})), state.get("launchers")
     fresh = [(pkg, pid) for pkg, pid in logged if f"{pkg}:{pid}" not in seen]
     if fresh and launchers is None:  # find out once which packages are real apps (a virtual phone's Bluetooth service crashes all the time and is not the task's app)
@@ -139,12 +151,26 @@ def observe(state: State, config: RunnableConfig) -> dict:
     send = need_image(c["image_mode"], step, elements, unchanged, state.get("acts", []), state.get("history", []))
     prompt = build_prompt(goal, state.get("history", []), elements, scale, unchanged, state.get("acts", []),
                           getattr(dev, "keyboard_open", False), c["secrets"].labels() if c.get("secrets") else None, landscape=w0 > h0)
+    guard, guard_name = gamepolicy.blocked(fg), gamepolicy.app_name(fg) if gamepolicy.blocked(fg) else ""
+    if not guard:  # a browser streaming a blocked game from a cloud-gaming site is the same account at risk
+        web = gamepolicy.browser_page(fg, elements, (w0, h0), state.get("guard_name", "") if state.get("guard") and state.get("fg") == fg else "")
+        if web:
+            guard_name = web
+            guard = gamepolicy.REASON.format(name=f"{web} (in a browser, through a cloud-gaming site)", publisher="its publisher")
+    site = gamepolicy.browser_site(fg, elements, (w0, h0), state.get("site", "") if state.get("fg") == fg else "")
+    if site and not guard:
+        prompt += (f"\n\nPOLICY: this is {site}, a third-party site. Do NOT type anything on it (no login, no code, no search box) and do not use type_secret: "
+                   "if a sign-in is needed, use handoff so the owner does it. Tapping and scrolling to read are fine.")
+    if guard:
+        prompt += (f"\n\nPOLICY: {guard_name} is open here. Its publisher bans accounts that use bots, so you must NOT tap, scroll or type in it"
+                   + (" (that includes cloud-gaming pages in a browser)" if guard_name and not gamepolicy.blocked(fg) else "")
+                   + ". Describe what the screen shows (launch, age or login screen, menus, the page) and finish with done. Back, home, opening another page or app and reading are allowed.")
     if crashes:
         prompt += ("\n\nANDROID REPORTS APP CRASHES during this task: " + ", ".join(f"{p} crashed {n}x" for p, n in crashes.items())
                    + ". A loading screen is NOT loading if the app keeps crashing. If a 'keeps stopping' dialog is showing, tap Close app. "
                      f"Open the app again at most once more; after {CRASH_LIMIT} crashes the task is stopped.")
     ms = {"shot": shot_ms, "tree": tree_ms, "observe": round((time.time() - t0) * 1000), "image": send}
-    return {**crash_state, "goal": goal, "step": step, "last_hash": digest, "last_sig": sig, "unchanged": unchanged,
+    return {**crash_state, "fg": fg, "guard": guard, "guard_name": guard_name, "site": site, "goal": goal, "step": step, "last_hash": digest, "last_sig": sig, "unchanged": unchanged,
             "obs": {"png": small, "send_image": send, "scale": scale, "size": (w0, h0), "elements": [asdict(e) for e in elements],
                     "prompt": prompt, "ms": ms}}
 
@@ -201,6 +227,9 @@ def gate(state: State, config: RunnableConfig) -> dict:
     kind = act["type"]
     text = str(act.get("question") or act.get("reason") or act.get("app") or "")
     payload = {"kind": kind, "text": text}
+    refused = _game_guard(state, c, n) if kind == "type_secret" else None
+    if refused:
+        return refused
     if kind == "need_info":
         payload = {"kind": kind, "field": str(act.get("field", "")), "text": str(act.get("why", ""))}
     if kind == "need_secret":
@@ -250,9 +279,36 @@ def gate(state: State, config: RunnableConfig) -> dict:
     return {"history": history}
 
 
+def _game_guard(state: State, c: dict, n: int) -> dict | None:
+    """Refuse input into a game whose publisher bans bots. The model is told once, with the way out; after MAX_BLOCKS tries the task ends."""
+    reason = state.get("guard")
+    if not reason and state.get("site") and state["action"].get("type") in ("type", "type_secret"):  # a third-party site: the owner types logins, never the agent
+        count = state.get("blocked", 0) + 1
+        line = f"{n}. {json.dumps({k: v for k, v in state['action'].items() if k != 'text'})} -> error: {gamepolicy.CREDS_REASON.format(host=state['site'])} Use handoff or finish with done."
+        out = {"history": state.get("history", []) + [line], "blocked": count}
+        if count >= MAX_BLOCKS:
+            out.update(status="denied", answer=gamepolicy.CREDS_PREFIX + f"nothing was typed on {state['site']}. Sign in yourself; I can hand the phone to you.")
+        return out
+    if not reason:
+        return None
+    if gamepolicy.browser_click_ok(state["action"], [Element(e["id"], e["label"], tuple(e["center"]), e["clickable"], e.get("state", "")) for e in state["obs"]["elements"]]):
+        return None  # closing the tab or opening a new one on a cloud-gaming page: leaving is never gameplay
+    count = state.get("blocked", 0) + 1
+    line = f"{n}. {json.dumps(state['action'])} -> error: {reason} Do not try again: finish with done and describe what the screen shows."
+    out: dict = {"history": state.get("history", []) + [line], "blocked": count}
+    if count >= MAX_BLOCKS:
+        out.update(status="denied", answer=gamepolicy.POLICY_PREFIX + f"{state.get('guard_name') or gamepolicy.app_name(state['fg'])} was opened but not played: its publisher bans accounts that use bots. "
+                                           "To play it yourself use Take control on this phone.")
+    return out
+
+
 def act(state: State, config: RunnableConfig) -> dict:
     c, obs, a, n = _c(config), state["obs"], state["action"], state["step"]
     elements = [Element(e["id"], e["label"], tuple(e["center"]), e["clickable"], e.get("state", "")) for e in obs["elements"]]
+    refused = _game_guard(state, c, n) if gamepolicy.is_input(a) else None  # a game, a cloud-gaming page, or typing on a third-party site
+    if refused:
+        _emit(config, {"type": "result", "n": n, "outcome": refused["history"][-1].split("-> ", 1)[-1]})
+        return refused
     t0 = time.time()
     try:
         if a["type"] == "wait" and a.get("seconds") is not None:
