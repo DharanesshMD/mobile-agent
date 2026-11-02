@@ -4,6 +4,7 @@ import json
 import re
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from agent import phones
@@ -11,7 +12,8 @@ from agent.checks import KINDS, find_packages, run_check
 from agent.config import MAX_ACTIVE_PER_BOT, ORCHESTRATOR_MODEL
 from agent.db import Database
 from agent.escalate import SIMPLE_OPEN, Escalator, app_name
-from agent import gamepolicy, images, options, websearch
+from agent import apkcheck, cloudtools, gamepolicy, images, museimage, options, reportsave, websearch
+from agent.artifacts import Artifacts
 from agent.graph import CRASH_PREFIX
 from agent.moveapp import move_app
 from agent.remote import RemoteDevice
@@ -24,6 +26,8 @@ MAX_SEARCHES_PER_TURN = 3
 MAX_BOT_CHAIN = 3  # the asking bot plus at most two more
 MAX_PLAN_STEPS = 4
 MAX_AUTO_RETRIES = 1
+DUPLICATE_WINDOW_S = 8   # an assistant line that repeats the one just before it (within this time and this similarity) is dropped
+DUPLICATE_RATIO = 0.85
 
 MAX_REROUTES = 2  # a task Master handed over that fails may be sent to another phone twice; after that Master only explains
 
@@ -69,6 +73,11 @@ class Orchestrator:
     def post(self, bot_id: str, text: str, kind: str = "text", meta: dict | None = None) -> dict:
         if not self.db.get_bot(bot_id):  # the bot was deleted while a turn or job was finishing
             return {"id": 0, "role": "assistant", "kind": kind, "content": text, "meta": meta or {}}
+        if kind == "text":  # a stop or a failure often produces two near-identical lines a moment apart: say it once
+            last = (self.db.messages(bot_id, 1) or [None])[-1]
+            if last and last["role"] == "assistant" and last["kind"] == "text" and time.time() - last["created"] < DUPLICATE_WINDOW_S \
+                    and difflib.SequenceMatcher(None, last["content"].lower(), text.lower()).ratio() >= DUPLICATE_RATIO:
+                return last
         msg = self.db.add_message(bot_id, "assistant", kind, text, meta)
         self.hub.publish(bot_id, {"type": "message", "message": msg})
         return msg
@@ -101,7 +110,7 @@ class Orchestrator:
                 continue
             if windows == 0 or budget == 0:
                 break
-            have = [a for a in (self.db.get_attachment(x["id"]) for x in m["meta"]["attachments"]) if a]
+            have = [a for a in (self.db.get_attachment(x["id"]) for x in m["meta"]["attachments"] if x.get("kind") != "apk") if a]
             shown[m["id"]] = have[:budget]
             budget -= len(shown[m["id"]])
             windows -= 1
@@ -110,7 +119,9 @@ class Orchestrator:
     def _user_content(self, m: dict, pictures: list[dict]):
         """A user message as the model gets it: plain text, or text plus image_url blocks (images only ever go in user messages)."""
         text = "(the owner sent only a picture)" if m["content"] == images.IMAGE_ONLY else m["content"]
-        blocks, missing = [], len(m["meta"]["attachments"])
+        atts = m["meta"]["attachments"]
+        apks = [x for x in atts if x.get("kind") == "apk"]
+        blocks, missing = [], len(atts) - len(apks)
         for a in pictures:
             try:
                 blocks.append({"type": "image_url", "image_url": {"url": images.for_model(Path(a["path"]).read_bytes(), a["mime"])}})
@@ -118,7 +129,13 @@ class Orchestrator:
             except Exception:
                 pass  # the file is gone: it counts as one that was not shown
         text += " [an image was shared here]" * missing  # the pictures that are not sent (older than the window, or no longer on disk) leave a trace in the text
-        text += f"\n[attached pictures, ids: {', '.join(x['id'] for x in m['meta']['attachments'])}]"  # so a task can ask for one by id (mobile_task files)
+        if atts != apks:
+            text += f"\n[attached pictures, ids: {', '.join(x['id'] for x in atts if x.get('kind') != 'apk')}]"  # so a task can ask for one by id (mobile_task files)
+        for x in apks:  # an APK is never opened by the model: it is checked with check_apk (static read, then a throwaway cloud phone)
+            if self.db.get_attachment(x["id"]):
+                text += f"\n[attached APK file, id {x['id']}, name {x.get('name', 'app.apk')}, {round(x.get('bytes', 0) / 1e6, 1)} MB: not installed anywhere; use check_apk to review it]"
+            else:
+                text += f"\n[the APK {x.get('name', 'app.apk')} was checked and then deleted]"
         return [{"type": "text", "text": text}, *blocks] if blocks else text
 
     def _history(self, bot_id: str) -> list[dict]:
@@ -133,11 +150,14 @@ class Orchestrator:
                 out.append({"role": "user" if m["role"] == "user" else "assistant", "content": m["content"]})
             elif m["kind"] == "action_item" and m["meta"].get("status") == "answered":
                 out.append({"role": "assistant", "content": f"(asked: {m['content']})"})
+            elif m["kind"] == "image":
+                meta = m["meta"] or {}
+                out.append({"role": "assistant", "content": f"(I made an AI-generated picture, id {meta.get('attachment_id', '')}: {str(meta.get('prompt', ''))[:200]})"})
         return out or [{"role": "user", "content": "(no messages yet)"}]
 
     def _context(self, bot_id: str) -> str:
         bot = self.db.get_bot(bot_id)
-        parts = [self._system, f"Today is {time.strftime('%A %d %B %Y')} (server local time)."]
+        parts = [self._system, f"It is {datetime.now().astimezone().strftime('%A %d %B %Y, %H:%M %Z (UTC%z)')}, the owner's local time. Always give times in this local time, never UTC, unless asked."]
         if bot["persona"]:
             parts.append("Persona and instructions for this bot:\n" + bot["persona"])
         labels = self.vault.labels() if self.vault else []
@@ -171,13 +191,13 @@ class Orchestrator:
                          "Approvals, choices, codes and secrets can only be answered on their card; tell the owner to use it.")
         if bot["kind"] == "virtual":
             _, lc = self.jobs.pair(self.jobs.lane_of(bot_id))
-            parts.append("You are the bot of the GAMES PHONE: a light virtual Android (Android 13 in a container) for games and heavy apps. Every phone task you queue runs on it, "
-                         "in the background, and never on the shared emulator; no other bot can use it. There is no Google Play on it: apps are installed from APK files by the owner, "
+            parts.append("You are the bot of CLOUD PHONE 2: a second light Android (Android 13 in a container) for heavy apps and anything the shared Cloud phone cannot run. Every phone task you queue runs on it, "
+                         "in the background, and never on the shared Cloud phone; no other bot can use it. There is no Google Play on it: apps are installed from APK files by the owner, "
                          "so find_app tells you what is installed. NEVER offer, ask about or promise a Play Store install (this phone has none): if an app is not installed, say it needs an APK "
-                         "from the owner or another phone (name which one from the phone directory). Games draw one picture and have no UI tree: the worker plays from "
+                         "from the owner or another phone (name which one from the phone directory). Apps that draw one picture (games) have no UI tree: the worker works from "
                          "screenshots and coordinates, so keep tasks short and concrete (one level, a few moves) and expect several tries. Some games refuse to run on virtual "
                          "devices: if one crashes or closes at start, say so plainly and suggest the owner's own phone (the Mobile Agent app) instead of retrying. "
-                         f"The games phone is {(lc.info() if lc else {'power': 'unavailable'})['power']} right now (a sleeping or stopped one wakes by itself, which takes a few seconds).")
+                         f"Cloud phone 2 is {(lc.info() if lc else {'power': 'unavailable'})['power']} right now (a sleeping or stopped one wakes by itself, which takes a few seconds).")
         elif bot["kind"] == "phone":
             up = bool(self.jobs.phones and self.jobs.phones.online(bot["phone_id"]))
             parts.append(f"You are the bot of the owner's OWN phone ({bot['name']}). Every phone task you queue runs on that phone, in the background, through the Mobile Agent app; "
@@ -186,13 +206,13 @@ class Orchestrator:
         else:
             games = [b for b in self.db.list_bots() if b["kind"] == "virtual"]
             if games:
-                parts.append("The games phone (a light virtual Android for games and heavy apps, apps installed from APK, no Google Play) has its own bot: " +
+                parts.append("Cloud phone 2 (a second light Android for heavy apps and anything the shared Cloud phone cannot run, apps installed from APK, no Google Play) has its own bot: " +
                              ", ".join(b["name"] for b in games) + ". You cannot run tasks on it; tell the owner to ask that bot" +
                              (" (Master can hand a task to it)." if bot["kind"] != "master" else ", or hand the task to it with delegate."))
             mine_phones = [b for b in self.db.list_bots() if b["kind"] == "phone"]
             if mine_phones:
                 parts.append("The owner's own phone has its own bot: " + ", ".join(b["name"] for b in mine_phones) + ". You cannot run tasks on it; for something "
-                             "on their own phone (games and apps that refuse to run on the emulator, their real accounts) tell them to ask that bot." +
+                             "on their own phone (apps that refuse to run on a virtual phone, their real accounts) tell them to ask that bot." +
                              (" Master can hand such a task to it." if bot["kind"] != "master" else " You can hand such a task to it with delegate."))
         parts.append(phones.render(phones.describe(self.db, self.jobs), phones.phone_key(bot), master=bot["kind"] == "master"))
         lane = self.jobs.lane_of(bot_id)
@@ -295,12 +315,33 @@ class Orchestrator:
                     continue
             if kind == "delegate_task" and (self.db.get_bot(bot_id) or {}).get("kind") == "master":
                 self._delegate(bot_id, act)
+                if self._more_parts(act):
+                    msgs = self._with_next_part(msgs, act)
+                    continue
+                return
+            if kind == "check_apk":
+                self._check_apk(bot_id, act)
+                if self._more_parts(act):
+                    msgs = self._with_next_part(msgs, act)
+                    continue
+                return
+            if kind == "make_image":
+                self._make_image(bot_id, act)
+                if self._more_parts(act):
+                    msgs = self._with_next_part(msgs, act)
+                    continue
                 return
             if kind == "move_app" and (self.db.get_bot(bot_id) or {}).get("kind") == "master":
                 self._move_app(bot_id, act)
+                if self._more_parts(act):
+                    msgs = self._with_next_part(msgs, act)
+                    continue
                 return
             if kind in ("mobile_task", "mobile_plan"):
                 self._queue_tasks(bot_id, act, kind)
+                if self._more_parts(act):
+                    msgs = self._with_next_part(msgs, act)
+                    continue
                 return
             if kind == "phone_check":
                 msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
@@ -364,6 +405,17 @@ class Orchestrator:
         self.post(bot_id, "I got stuck deciding what to do. Could you tell me more?")
 
     @staticmethod
+    def _more_parts(act: dict) -> bool:
+        """The owner asked for several things in one message: the model marks every action but the last with "more": true, and gets another go for the rest."""
+        return str(act.get("more", "")).lower() in ("true", "1", "yes")
+
+    @staticmethod
+    def _with_next_part(msgs: list[dict], act: dict) -> list[dict]:
+        return msgs + [{"role": "assistant", "content": json.dumps({"action": act})},
+                       {"role": "user", "content": "[that part of the request is started. Now do the REMAINING part(s) of the owner's message with the next action. Do not repeat the part that is already started. "
+                                                   "Add \"more\": true again if still more parts remain; the last action's \"say\" should sum up everything that was started.]"}]
+
+    @staticmethod
     def _clean_verify(v) -> dict | None:
         if isinstance(v, dict) and v.get("kind") in KINDS:
             return {"kind": v["kind"], "query": str(v.get("query", ""))[:80]}
@@ -376,13 +428,13 @@ class Orchestrator:
         real = [b for b in self.db.list_bots() if b["kind"] == "phone"]
         if not on:
             return phones.phone_key(own)
-        if on in ("emulator", "shared", "shared emulator", "main", "default"):
+        if on in ("emulator", "shared", "shared emulator", "main", "default", "cloud phone"):
             return "emulator"
-        if on in ("games", "game", "games phone", "virtual"):
+        if on in ("games", "game", "cloud phone 2", "second cloud phone", "virtual"):
             return "games"
         hit = next((b for b in real if b["name"].lower() == on or b["phone_id"].lower() == on), None) or next((b for b in real if b["name"].lower().startswith(on)), None)
         if not hit:
-            return "error: unknown phone '" + on + "'; use emulator, games" + "".join(f", {b['name']}" for b in real)
+            return "error: unknown phone '" + on + "'; use cloud phone, cloud phone 2" + "".join(f", {b['name']}" for b in real)
         return phones.phone_key(hit)
 
     def _resolve_phone(self, bot_id: str, on: str) -> tuple | str:
@@ -391,7 +443,7 @@ class Orchestrator:
         if key.startswith("error"):
             return key
         if key == "emulator":
-            return self.jobs.device, self.jobs.lifecycle, "the shared emulator"
+            return self.jobs.device, self.jobs.lifecycle, "Cloud phone"
         if key.startswith("phone:"):
             b = next((x for x in self.db.list_bots() if x["kind"] == "phone" and x["phone_id"] == key.split(":", 1)[1]), {"name": "your phone"})
             pid = self.jobs.phones.pick(key.split(":", 1)[1]) if self.jobs.phones else None
@@ -400,8 +452,8 @@ class Orchestrator:
             return RemoteDevice(self.jobs.phones, pid), None, b["name"]
         dev, lc = self.jobs.virtuals.get(key, (None, None))
         if dev is None:
-            return "error: the games phone is not set up on this computer"
-        return dev, lc, "the games phone"
+            return "error: Cloud phone 2 is not set up on this computer"
+        return dev, lc, "Cloud phone 2"
 
     def _phone_check(self, bot_id: str, act: dict) -> str:
         """Read a fact straight from a phone (app installed, Google account signed in, app in front) so a task's result can be checked, not trusted.
@@ -410,8 +462,8 @@ class Orchestrator:
         if isinstance(target, str):
             return target
         dev, lc, label = target
-        if label == "the games phone" and act.get("kind") == "account":
-            return "no (on the games phone): it has no Google services, so no Google account can be signed in there"
+        if label == "Cloud phone 2" and act.get("kind") == "account":
+            return "no (on Cloud phone 2): it has no Google services, so no Google account can be signed in there"
         if not hasattr(dev, "packages"):
             return "error: phone checks are not available"
         if lc is not None and not lc.ensure_healthy(90):
@@ -457,7 +509,7 @@ class Orchestrator:
             cloud_game = gamepolicy.cloud_play_request(goal)
             if cloud_game:  # playing it through a cloud-gaming site is the same bot risk: no phone, no browser, no task
                 self.post(bot_id, f"I won't play {cloud_game} through a browser or a cloud-gaming site either: its publisher bans accounts that use bots, however the game is run. "
-                                  "I can open the site and tell you what it shows, or you can play it yourself (Take control on the games phone).")
+                                  "I can open the site and tell you what it shows, or you can play it yourself (Take control on Cloud phone 2).")
                 return
             dup = next((j for j in known if same_goal(j["goal"], goal)), None)
             if dup:
@@ -470,7 +522,12 @@ class Orchestrator:
                 self.post(bot_id, "Sending a picture to your own phone is not supported yet (the Mobile Agent app cannot receive files). "
                                   "I can do it on the shared emulator, or you can do the picture step on your phone yourself.")
                 return
-            new.append((goal, self._clean_verify(st.get("verify")), chain, files))
+            report = str((st if kind == "mobile_plan" else act).get("report") or "").strip().lower()
+            report = report if report in ("link", "matrix", "guide", "plain") else ""
+            if report in ("link", "matrix") and own.get("kind") == "phone":  # these change or open untrusted things: only ever on the agent's own cloud phones
+                self.post(bot_id, "I never run link checks or screen-setting checks on your own phone. Ask the Assistant (it uses the cloud phone), and I'll keep your phone out of it.")
+                return
+            new.append((goal, self._clean_verify(st.get("verify")), chain, files, report))
             known.append({"id": None, "goal": goal})
             chain = len(new) - 1
         if not new:
@@ -483,8 +540,8 @@ class Orchestrator:
             say += " The phone is busy, so it's queued and starts as soon as it's free."
         self.post(bot_id, say)
         ids: list[str] = []
-        for goal, verify, dep, files in new:
-            ids.append(self.jobs.submit(bot_id, goal, ids[dep] if isinstance(dep, int) else dep, verify, self._origin.get(bot_id), files=files)["id"])
+        for goal, verify, dep, files, report in new:
+            ids.append(self.jobs.submit(bot_id, goal, ids[dep] if isinstance(dep, int) else dep, verify, self._origin.get(bot_id), files=files, report=report or None)["id"])
             self._attempts.setdefault(bot_id, []).append((bot_id, goal))
 
     def _owned_files(self, bot_id: str, ids) -> list[str]:
@@ -492,7 +549,7 @@ class Orchestrator:
         out = []
         for fid in (ids if isinstance(ids, list) else [])[:images.MAX_PER_MESSAGE]:
             row = self.db.get_attachment(str(fid))
-            if row and row["bot_id"] == bot_id and row["message_id"] is not None and str(fid) not in out:
+            if row and row["bot_id"] == bot_id and row["message_id"] is not None and row["mime"] != apkcheck.APK_MIME and str(fid) not in out:
                 out.append(str(fid))
         return out
 
@@ -592,7 +649,7 @@ class Orchestrator:
             o = web["options"].get(choice)
             if not o:
                 return
-            phones_ = ["Open it on the emulator"] + (["Open it on the games phone"] if "games" in self.jobs.virtuals else []) + \
+            phones_ = ["Open it on Cloud phone"] + (["Open it on Cloud phone 2"] if "games" in self.jobs.virtuals else []) + \
                       [f"Open it on {b['name']}" for b in self.db.list_bots() if b["kind"] == "phone" and self.jobs.phones and self.jobs.phones.online(b["phone_id"])]
             self.make_item(bot_id, None, {"kind": "choice", "question": f"{o['name']}{'' if options.domain(o['url']) in o['name'].lower() else ' (' + options.domain(o['url']) + ')'}: what should I do? Nothing runs until you pick.",
                                           "options": ["Show me the link", *phones_[:3], "Cancel"], "web": {"stage": "action", "option": o, "game": web.get("game", "")}})
@@ -614,14 +671,14 @@ class Orchestrator:
             gamepolicy.mark_third_party(options.domain(url))  # from now on nothing is typed on that site for the owner
         game = web.get("game", "")
         self.post(bot_id, f"Opened {o.get('name')} on {target}. I won't type, sign in or play on it" + (f": {game} is a game whose publisher bans bot accounts, and my guard stops me from playing it there" if game else "") +
-                  ". Sign in yourself" + (" (use Take control in its Mobile panel)" if target in ("the emulator", "the games phone") else "") + ".")
+                  ". Sign in yourself" + (" (use Take control in its Mobile panel)" if target in ("Cloud phone", "Cloud phone 2") else "") + ".")
         self.make_item(bot_id, None, {"kind": "handoff", "question": f"Sign in yourself on {target}, then tell me when you're done."})
 
     def _open_for_owner(self, bot_id: str, target: str, url: str) -> None:
         """Open a link in the browser of one of the owner's phones (the only thing a web_options pick can do)."""
-        if target == "the emulator":
+        if target == "Cloud phone":
             dev, lc = self.jobs.device, self.jobs.lifecycle
-        elif target == "the games phone":
+        elif target == "Cloud phone 2":
             dev, lc = self.jobs.virtuals.get("games", (None, None))
         else:
             bot = next((b for b in self.db.list_bots() if b["kind"] == "phone" and b["name"] == target), None)
@@ -706,7 +763,7 @@ class Orchestrator:
         return "I could not settle on an answer."
 
     def _move_app(self, bot_id: str, act: dict) -> None:
-        """Master: copy an installed app between the adb phones (shared emulator <-> games phone) without any store. It runs in the background with a progress
+        """Master: copy an installed app between the adb phones (shared emulator <-> Cloud phone 2) without any store. It runs in the background with a progress
         message, then Master gets a follow-up turn to carry on (verify, open it on the other phone) or to explain."""
         name = str(act.get("app") or act.get("package") or "").strip()
         if not name:
@@ -760,9 +817,148 @@ class Orchestrator:
             reason = str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {str(e)[:150]}"
             text = f"I could not move {name} from {slabel} to {dlabel}: {reason}."
             note = (f"move_app failed: {text} Tell the owner plainly what stopped it and offer only options that really exist (for example installing from the Play Store on the "
-                    "emulator first, or an APK for the games phone). Do not promise to retry.")
+                    "emulator first, or an APK for Cloud phone 2). Do not promise to retry.")
         self.post(bot_id, text)
         self._turn_with(bot_id, note, "The move is finished; tell me what to do next.")
+
+    # ---- "show me": a picture that explains (Muse Image 1.0) ----
+    IMAGE_SOURCES = ("screen",)
+
+    def _make_image(self, bot_id: str, act: dict) -> None:
+        """make_image: draw an illustration for the owner, or edit one of their pictures or the phone's screen (annotate, arrows). Runs in the background: a picture takes about 15 s."""
+        prompt = str(act.get("prompt", "")).strip()
+        if not prompt:
+            self.post(bot_id, "What should the picture show?")
+            return
+        problem = museimage.policy_problem(prompt)
+        if problem:
+            self.post(bot_id, problem)
+            return
+        cap, used = museimage.daily_cap(), self.db.images_today()
+        if used >= cap:
+            self.post(bot_id, f"I've made {used} pictures today, which is my daily limit ({cap}). I can explain it in words, or make pictures again tomorrow.")
+            return
+        src = str(act.get("edit_of") or "").strip()
+        self.post(bot_id, str(act.get("say", "")).strip() or ("Annotating that for you…" if src else "Drawing that for you…"))
+        threading.Thread(target=self._do_make_image, args=(bot_id, prompt, src, str(act.get("size", "")), str(act.get("caption", "")).strip()), daemon=True, name="muse-image").start()
+
+    def _image_source(self, bot_id: str, src: str) -> tuple[bytes, str, str]:
+        """(bytes, mime, label) of the picture to edit: the bot's phone screen, one of the bot's own pictures, or one of its Library pictures. ValueError says why not."""
+        if src == "screen":
+            target = self._resolve_phone(bot_id, "")
+            if isinstance(target, str):
+                raise ValueError(target.replace("error: ", ""))
+            dev, lc, label = target
+            if lc is not None and lc.power != "on":
+                raise ValueError(f"{label} is asleep, so there is no screen to annotate. Ask me to wake it and try again.")
+            state = {"obs": {"elements": [{"label": e.label} for e in dev.elements()]}}
+            if cloudtools.shows_account(state):
+                raise ValueError("The screen shows an account address, so I won't copy it into a picture. Go to another screen and ask again.")
+            return dev.screenshot(), "image/png", label
+        att = self.db.get_attachment(src)
+        if att and att["bot_id"] == bot_id and att["mime"] in ("image/png", "image/jpeg") and Path(att["path"]).exists():
+            return Path(att["path"]).read_bytes(), att["mime"], "your picture"
+        lib = self.db.get_library(src)
+        if lib and lib["bot_id"] == bot_id and (lib.get("kind") or "screenshot") in ("screenshot", "image") and Path(lib["path"]).exists():
+            return Path(lib["path"]).read_bytes(), "image/png" if str(lib["path"]).endswith(".png") else "image/jpeg", "that picture"
+        raise ValueError("I can't find that picture. Attach it again and ask me to edit it.")
+
+    def _do_make_image(self, bot_id: str, prompt: str, src: str, size: str, caption: str) -> None:
+        try:
+            client = getattr(self, "image_client", None) or museimage.MuseImage()
+            label = ""
+            if src:
+                raw, mime, label = self._image_source(bot_id, src)
+                out = client.edit(images.normalize(raw)[0], prompt, "image/png" if mime == "image/png" else "image/jpeg")
+            else:
+                out = client.generate(prompt, size)
+            data, mime, w, h = images.normalize(out)
+        except ValueError as e:  # a source that is missing, a sleeping phone, an address on screen: the reason is for the owner
+            self.post(bot_id, str(e))
+            return
+        except museimage.ImageRefused as e:
+            self.post(bot_id, f"{e} Tell me what you want to understand and I'll try a different picture, or explain it in words.")
+            return
+        except Exception as e:  # network, server, a picture that can't be decoded: never a crash
+            self.post(bot_id, f"I couldn't make the picture ({str(e)[:120]}). Try again in a moment, or I can explain it in words.")
+            return
+        data_dir = Path(self.jobs.data_dir)
+        aid = __import__("uuid").uuid4().hex[:12]
+        up, lib_dir = data_dir / "uploads", data_dir / "library"
+        up.mkdir(parents=True, exist_ok=True)
+        lib_dir.mkdir(parents=True, exist_ok=True)
+        ext = images.EXT[mime]
+        path, lib_path = up / f"{aid}.{ext}", lib_dir / f"ai-{aid}.{ext}"
+        path.write_bytes(data)
+        lib_path.write_bytes(data)
+        row = self.db.add_attachment(bot_id, mime, str(path), w, h, len(data), aid, "ai-generated." + ext)
+        edited = bool(src)
+        meta = {"attachment_id": row["id"], "w": w, "h": h, "label": "AI-edited" if edited else "AI-generated", "prompt": prompt[:400], "edit": edited, "source": label}
+        text = caption or ("An annotated illustration, made by AI from the real screen. It redraws the picture, so small details such as a switch's state can differ." if src == "screen" else "An AI-generated illustration.")
+        msg = self.db.add_message(bot_id, "assistant", "image", text, meta)
+        self.db.attach([row["id"]], msg["id"])
+        self.hub.publish(bot_id, {"type": "message", "message": msg})
+        self.db.add_library(bot_id, None, prompt[:100], str(lib_path), kind="image")
+        self.hub.publish(bot_id, {"type": "refresh", "what": "library"})
+        today = self.db.images_today()
+        print(f"[muse-image] {'edit' if edited else 'generate'} ok, about ${museimage.PRICE_PER_IMAGE:.2f}, today {today}/{museimage.daily_cap()}", flush=True)
+
+    def _check_apk(self, bot_id: str, act: dict) -> None:
+        """An APK the owner attached: read it without running it, try it on a throwaway cloud phone, and answer with a verdict and a report. Never on the owner's own phone."""
+        att = self.db.get_attachment(str(act.get("attachment") or ""))
+        if not att or att["bot_id"] != bot_id or att["mime"] != apkcheck.APK_MIME or not Path(att["path"]).exists():
+            self.post(bot_id, "I can't find that file. Attach the APK again and ask me to check it.")
+            return
+        if (self.db.get_bot(bot_id) or {}).get("kind") == "phone":
+            self.post(bot_id, "I never put a file you are unsure about on your own phone. Ask the Assistant to check it: it uses a throwaway cloud phone.")
+            return
+        want = str(act.get("on") or "").lower()
+        choice = want if want in ("games", "emulator") else ("games" if "games" in self.jobs.virtuals else "emulator")
+        target = self._resolve_phone(bot_id, choice)
+        if isinstance(target, str):
+            self.post(bot_id, target.replace("error: ", "I can't check it: "))
+            return
+        self.post(bot_id, str(act.get("say", "")).strip() or f"Checking {att['name'] or 'the APK'}: reading it first (nothing is run), then trying it on {target[2]}, which is thrown away afterwards…")
+        other = "emulator" if choice == "games" else ("games" if "games" in self.jobs.virtuals else "")
+        spare = self._resolve_phone(bot_id, other) if other else None  # used only when the first phone already has this app (an app that was there is never touched)
+        threading.Thread(target=self._do_apk_check, args=(bot_id, att, [target] + ([spare] if isinstance(spare, tuple) else [])), daemon=True, name="apk-check").start()
+
+    def _do_apk_check(self, bot_id: str, att: dict, targets: list) -> None:
+        art, name = Artifacts(), att["name"] or "the APK"
+        try:
+            info = apkcheck.analyze(att["path"])
+            level, reasons = apkcheck.judge(info)
+            art.facts += apkcheck.facts_lines(info)
+            dev = lc = label = None
+            for cand in targets:  # the first cloud phone that does not already have this app
+                cdev, clc, clabel = cand
+                lane = "virtual:games" if clabel == "Cloud phone 2" else ""
+                end = time.time() + 300
+                while self.jobs.busy(lane) and time.time() < end:  # the phone is mid-task: wait for it, never run over someone else's work
+                    time.sleep(2)
+                if clc is not None and not clc.ensure_healthy(240):
+                    continue
+                if info["package"] in cdev.packages():
+                    continue
+                dev, lc, label = cdev, clc, clabel
+                break
+            if dev is None:
+                raise ValueError(f"{info['package']} is already installed on the cloud phones I can use, and I never touch an app that was there before. Remove it from one of them first.")
+            notes = apkcheck.sandbox_run(dev, art, att["path"], info)
+            checked = ["The manifest: package, version, permissions and what they allow", "The signing certificate", f"Installing it on {label} and launching it for {apkcheck.WATCH_S} seconds, watching for crashes"]
+            not_checked = ["Network traffic and what the app sends out", "What it does after the first seconds or after signing in", "Its code (this is not a malware scanner)"]
+            art.set_verdict(level, reasons or ["No powerful permissions found, a signing certificate is present, and nothing unusual showed in the manifest."] + notes[:1], checked, not_checked)
+            art.facts += notes
+            reportsave.save(self.db, self.hub, self.jobs.data_dir, bot_id, None, "apk", f"App check: {info['package']} {info['version']}".strip(), f"Check {name}", "done", " ".join(notes), art, label)
+        except (apkcheck.ApkError, ValueError) as e:
+            self.post(bot_id, f"I could not check {name}: {e}")
+        except Exception as e:
+            self.post(bot_id, f"I could not check {name}: {type(e).__name__}: {str(e)[:150]}")
+        finally:
+            for row in (self.db.get_attachment(att["id"]),):  # the file is not kept: it was only for this check
+                if row:
+                    Path(row["path"]).unlink(missing_ok=True)
+                    self.db.delete_attachment(row["id"])
 
     def _reroute_guard(self, bot_id: str, act: dict, kind: str) -> str | None:
         """While Master reacts to a task that did not complete, it may not start the same goal on a phone that already tried it, nor go past MAX_REROUTES."""
@@ -796,7 +992,7 @@ class Orchestrator:
                        "the emulator can do it; never a phone already tried for this goal or listed as Known NOT to run it), start it there: delegate_task to that phone's bot, or "
                        "mobile_task for the emulator, and tell the owner in one sentence that you moved it and why. An app that crashed on a phone is NOT yours to move: the system already tries the "
                        "owner's other phones in order and posts the result itself. If no phone can, reply in one or two short sentences: what was tried "
-                       "on which phone, why it cannot work, and the one thing that would unblock it (an APK on the games phone, the Mobile Agent app connected on their own phone). "
+                       "on which phone, why it cannot work, and the one thing that would unblock it (an APK on Cloud phone 2, the Mobile Agent app connected on their own phone). "
                        "Be honest and do not promise anything you are not doing right now.")
 
     def _delegate(self, master_id: str, act: dict) -> None:
@@ -808,7 +1004,7 @@ class Orchestrator:
         cloud_game = gamepolicy.cloud_play_request(goal)
         if cloud_game:
             self.post(master_id, f"I won't play {cloud_game} through a browser or a cloud-gaming site either: its publisher bans accounts that use bots, however the game is run. "
-                                 "I can open the site and tell you what it shows, or you can play it yourself (Take control on the games phone).")
+                                 "I can open the site and tell you what it shows, or you can play it yourself (Take control on Cloud phone 2).")
             return
         target = self._find_bot(str(act.get("bot", "")), (master_id,))
         if isinstance(target, str):

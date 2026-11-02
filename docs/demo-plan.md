@@ -1,50 +1,110 @@
-# Demo-first plan (29 Oct 2026), pending owner approval
-Goal: a 3-minute video that shows the idea working end to end on the Mac emulator, a public repo, and a public replay link that works without a live phone.
-Deadline Wed 4 Nov 9 PM ET = Thu 5 Nov 6:30 AM IST. Submit by Wed 4 Nov evening IST, so there is a night of buffer. Feature freeze Mon 2 Nov noon.
+# Demo and submission plan v2 (2 Nov 2026, 02:30 IST), pending owner approval
 
-Story for the judges (Impact 30): an always-on assistant that does things on a phone while you are away, asks before it sends or pays, never sees your passwords,
-and messages you first. Meta tooling (25): Muse Spark (chat, tools, web search), Muse Wonder (phone), Muse Voice Transcribe (mic), open-weight Spark on Baseten if time allows.
+Replaces the 29 Oct plan. The product grew a lot since then (several phones, automatic routing, game-account safety, image input, real-phone app), so the story, the
+hero scenarios and the work list are re-cut around what is built and verified (434 tests, QA run 10/12, docs/qa-run-2026-10-31.md).
 
-## Owner tasks (only the owner can do these)
-- [ ] Today: Google sign-in once on the emulator, on a phone hotspot or with ProtonVPN on. Use a throwaway Google account, not a personal one (it appears in the video). Then check `/api/cloud-account`
-- [ ] Pick the two hero scenarios (proposals below)
-- [ ] Rotate the exposed API key before the repo goes public; make the repo public on submission day
+## 0. Facts and what is NOT verified
+Recorded earlier (docs/plan.md, tasks/todo.md; **the owner must re-check them against the official rules page, I could not read it from here**):
+- Meta Global AI Developer Hackathon, Indie Developer track. Judging rubric: **Impact 30, Use of Meta tooling 25, Demo 25, Technical depth 20**. 3-minute demo video.
+- Must use Meta's models; everything is new work from the event; public repo at submission; avoid the listed anti-projects (medical/health advice, political content, basic RAG, simple image analysers).
+- Bonuses: **Best Build on Meta Open Weight Models** ($10K, open weights served on partner inference such as Baseten or Modal), **Best Agentic Use-Case** ($5K). Indie 1st place $150K.
+- Checked on the official Cerebral Valley page and participant guide (3 Nov): deadline **Thu 5 Nov 07:30 IST (= Wed 4 Nov 9 PM EST; US daylight time ended 1 Nov, so IST is +10.5 h, not +9.5 h)**, judging 5-9 Nov, finalists and winners 10 Nov. Judges therefore look at the video, the repo and any link
+  **after** the deadline, on their own machines, without our phone: a replay link and a clear README matter as much as the live product.
+- Not found in any source I could reach: exact submission form fields, video length/size/format limits, brand rules for using Meta's names. Check the official page and fill section 7.
 
-## Thu 29 Oct: unblock and baseline
-- [ ] Sign-in done (owner), account shows in `/api/cloud-account`, Play Store installs one free app through the agent
-- [ ] Run `scripts/scenarios.py` on all scenarios; fix anything that fails; record pass/fail and time in docs/quality-log.md
-- [ ] Commit the steering and restart-recovery changes
+Time left: about 76 hours from now to the deadline. Recommended submission: **Wed 4 Nov by 18:00 IST** (13.5 h of buffer).
 
-## Fri 30 Oct: two hero scenarios, rehearsed
-Proposed (safe topics only):
-- Hero A, voice to action: speak "text Mom I'll be late and set an alarm for 6" into the mic. Shows Voice Transcribe, Wonder on the phone, the confirm card before the text is sent, and steering ("make it 6:30") while it runs.
-- Hero B, proactive and safe: a 7:30 routine messages first with a web-search brief (Spark web search); the bot signs in to an app with a vault secret (approval card, the agent never sees the value); the master bot answers "what needs me?".
-- [ ] Rehearse each 5 times; log steps, time and failures; fix the top failure each round
-- [ ] Polish only the screens the video shows (empty states, copy, the phone power card, landscape if a game is used)
-- [ ] A stable demo bot setup script (`scripts/demo_reset.py`): fresh data, known bots, routine, vault entry, phone in a known state
+## 0b. Official facts, read from the Cerebral Valley page and participant guide on 3 Nov
+- **Submit on the CV platform ("Submit Project") by Wed 4 Nov 9:00 PM EST = Thu 5 Nov 07:30 IST.** Late submissions are not considered. One submission per team; list everyone who worked on it; the repo must be public and the video link must work logged out.
+- Three-minute demo video, shown to judges together with the code and the live product. The demo must show only what was built during the hackathon, and judges must be able to see what that is (a README line stating it; the git history starts 27 Oct). Unclear original work means disqualification.
+- Rubric confirmed: Impact 30, Meta AI tooling 25, Technical depth and execution 20, Demo 25. Stage 1 is pass/fail (fits a theme, really uses Meta Model API or open weights); Stage 3 top 5 per track are judged live. Judging 5-8 Nov, closing ceremony Mon 9 Nov 12:00 PM ET.
+- Themes: "Build for Your World" (our fit) and "Push the Frontier". Indie prizes: 1st $150K, 2nd $100K, 3rd $75K, 4th $50K, 5th $25K.
+- Bonus prizes we can aim at: **Best Creative Build $5K (built with Muse Image or Muse Wonder: we use both)**, **Best Agentic Use-Case $5K**, **Best Build on Open Weights $10K** (Muse Spark Open or Muse Glimmer, model `meta-models/muse-spark-open-1026` on Baseten), **Most Viral $20K (post the demo on X and submit the post link on the platform; engagement counted until 8 Nov EOD)**, Community Vote $10K (public gallery, one vote per verified account).
+- Credits: claim the $150 Meta API credits **by Wed 4 Nov 9:00 PM ET** (each participant claims their own; a card is required). Baseten $100 and Modal $100 credits are requested separately and reviewed.
 
-## Sat 31 Oct: replay mode and the public link
-- [ ] Recorder: each finished job already keeps `data/runs/<job>/step*.png` and timing; export a session (chat messages, steps with thoughts, screenshots as small JPEGs) to one folder of static files
-- [ ] Replay page: the same chat and phone panel UI, driven by the exported session (play, pause, speed); read-only, no model calls, no keys; `?replay=<name>` on the existing web/index.html or a small `web/replay.html`
-- [ ] Host as a static site (GitHub Pages from the repo, no risk to the production server); include the two hero sessions and one failure-and-recovery session
-- [ ] Open-weight spike (about 2 h, drop if it fails): Muse Spark Open on Baseten for the orchestrator behind a config switch
+## 1. The story (one sentence, then three proofs)
+"Mobile Agent is an always-on assistant with its own phones: it picks the phone that can do the job, finds another way when one fails, and protects you from itself
+(approvals, a vault it never reads, and a rule that it never plays games that ban bots)."
 
-## Sun 1 Nov: how judges meet it
-- [ ] README rewrite: what it is, the demo video, the replay link, architecture picture, how to run, safety design, which Meta models do what, honest limits (local emulator today, cloud phone is the deployment target)
-- [ ] Phone-friendly web chat (installable PWA with the mic) as the mobile client for the demo; the native Android client with SMS/OTP relay is out of scope, listed as next step
-- [ ] Security sweep: secrets scan of the repo and git history, `.env`, `data/`, `vault.key` ignored, LICENSE, remove the spike output; `uv run python -m unittest discover -s tests` green
-- [ ] Video script and shot list (3 minutes: 20 s problem, 2 hero scenarios, 20 s safety, 15 s models and architecture, 10 s close)
+| Rubric | What the judge must see | Evidence we have |
+|---|---|---|
+| Impact (30) | A real daily problem solved: phone tasks done while you are away, from voice, text or a picture; safe by design; works on apps that refuse virtual phones | Hero A and C in the video, QA run, game-safety doc, the honest-failure behaviour |
+| Meta tooling (25) | Each Meta model doing a distinct job, visibly | Spark 1.3: chat, memory, routing, web search, **image understanding**; Wonder 1.0: the phone worker (computer use); Voice Transcribe: the mic; (bonus) Spark Open on Baseten |
+| Demo (25) | Clear, live, no dead time, a story with a beginning and an end | The 3-minute script below, rehearsed, cut to the beat, captions, "sped up" labels |
+| Technical depth (20) | Real engineering, not a wrapper | Three kinds of phone behind one interface, per-phone parallel queues, crash detection and automatic escalation, verification gates, vault, game guard (code-enforced), prompt-injection rule for images, 434 tests, measured numbers |
 
-## Mon 2 Nov: freeze and dress rehearsal
-- [ ] Freeze at noon; only bug fixes after that
-- [ ] Full run-through with a screen recorder, fix what breaks, capture b-roll (power states, vault card, steering)
+## 2. The 3-minute video (shot list)
+| Time | Beat | On screen | Narration (draft) | Proves |
+|---|---|---|---|---|
+| 0:00-0:15 | Hook | Master chat, three phones tiles (emulator, Cloud phone 2, your phone) | "Some apps refuse to run on virtual phones. Agents that tap blindly can get your account banned. This agent has three phones and a conscience." | Impact |
+| 0:15-1:10 | **Hero A: it finds a way** | Type "open Clash of Clans" in the Assistant. The emulator crashes (counter 3/3), a message "moving it to Cloud phone 2", the app opens there (age screen). Then "gather my resources": it refuses (account protection), offers Take control; you tap once yourself. Cut to Shattered Pixel Dungeon: the agent plays a few moves **in parallel** with an emulator task | "It saw the crash, moved the app, opened it, and told me why it will not play for me." | Tech depth, safety, parallel lanes |
+| 1:10-2:00 | **Hero B: see it, say it** | Paste a screenshot or a photo of an event flyer, say into the mic "put this in my calendar and remind me an hour before". Spark reads the picture, a confirm card appears, approve, Wonder fills the calendar on the phone, steer mid-run ("make it 6:30") | "Voice, a picture, then the phone does it, and it asks before it saves." | Meta tooling (3 models), approval |
+| 2:00-2:30 | **Hero C: proactive and safe** | The morning routine message arrives first (web-search brief); Master "what needs me?"; a sign-in with a vault secret: approval card, the agent never sees the value; an image with hidden instructions is ignored | "It messages first, asks before it sends, and never reads my passwords." | Impact, safety |
+| 2:30-2:50 | Architecture and numbers | One diagram: phones, lanes, guard, vault; the numbers: 434 tests, QA 10/12, 5 s boot of Cloud phone 2, 4.3 s per step | "Built on Muse Spark, Muse Wonder and Voice Transcribe" (+ "and the open-weight Spark on Baseten" if done) | Tech depth, Meta tooling |
+| 2:50-3:00 | Close | Repo and replay link on screen | "Free, open source, runs on your Mac." | Demo |
 
-## Tue 3 Nov: record
-- [ ] Record on a quiet network, three takes per hero scenario; voice-over; captions; export 1080p under the size limit
-- [ ] Upload the video, test the replay link on a phone
+Rules for the recording: one scenario per take, sped-up segments labelled "4x", captions on, no music without a licence, no real contacts/emails on screen (throwaway Google account only),
+no Clash of Clans gameplay shown or implied, the model names said exactly as Meta writes them.
 
-## Wed 4 Nov: submit
-- [ ] Make the repo public, final README check from a clean clone, submit the form by evening IST, keep the night as buffer
+## 3. Readiness work (priority order)
+P0 = must be done before recording.
 
-## Cut list if time runs short (in this order)
-Open-weight Baseten spike, PWA polish, landscape and game demo, master bot in the video, the second failure-and-recovery replay.
+| # | Work | Why | Effort |
+|---|---|---|---|
+| P0-1 | `scripts/demo_reset.py`: clean database, named bots (Master, Assistant, Cloud phone 2, "My phone"), one routine, one vault entry, calendar and Chrome empty, apps preinstalled, phones in a known state | Repeatable takes | 1.5 h |
+| P0-2 | QA leftovers: rename the `sdk_gphone64_arm64` bot to "My phone"; hide the Google address in job results and Library titles; show routine times in local time; the phone bot greets "connected" only when it is; clear the stale "needs attention" cards; the empty "Assistant has no focus yet" card | First impressions on camera | 3 h |
+| P0-3 | Rehearse Hero A, B, C five times each from a reset; log time and failures; fix the top failure each round (Hero B calendar flow and Hero C routine are not rehearsed yet) | The demo is 25 % of the score | 4-5 h |
+| P0-4 | README rewrite (it still says "Status: planning"), LICENSE (none today; suggest MIT), one architecture picture, a 5-minute quick start tested from a clean clone, docs index | Judges open the repo first | 2 h |
+| P0-5 | Security sweep: **rotate the exposed API key** (owner), delete the local `backup-before-trailer-removal` branch, secret scan of the tree and history (the current key is not in the git history: checked), remove personal data from docs, `.env.example` complete | Public repo | 1 h |
+| P0-6 | Video: script lock, record, edit, captions, export 1080p, upload, test the link while logged out | Required | 6-8 h |
+| P1-7 | **Open-weight path** (Spark Open on Baseten for the orchestrator behind `ORCHESTRATOR_BACKEND`), run 3 scenarios on it, 10 s in the video, README section. Go/no-go decision at 15:00 today; drop if tool-call JSON is unreliable | A $10K bonus prize and extra Meta-tooling credit | 3 h |
+| P1-8 | **Replay site** on GitHub Pages: exported sessions of Heroes A-C and one failure-and-recovery, same UI, read-only, no keys | Judges cannot run our phones | 3-4 h |
+| P1-9 | Real-phone check: install the APK on the owner's real Android phone, pair, run one task ("open Settings, tell me the battery") and, if it works, show it for 10 s in Hero A | "Your own phone" is the strongest Impact moment; unverified today | 1 h owner + 1 h me |
+| P2 | PWA install, Docker deploy, BlueStacks wrapper, more adb phones, the `push_file` op | Cut candidates | - |
+
+## 4. Schedule (IST)
+| When | Plan |
+|---|---|
+| **Mon 2 Nov** 10:00-13:00 | P0-2, P0-1; owner: rotate the key, decide the hero set, charge the real phone |
+| 13:00-15:00 | P1-7 open-weight spike (go/no-go at 15:00) |
+| 15:00-19:00 | P0-3 rehearsal round 1, fix the top failures. **Feature freeze 19:00**: bug fixes only after that |
+| evening | P0-4 README + LICENSE, P1-8 replay recorder |
+| **Tue 3 Nov** 09:00 | Reset, rehearsal round 2 (full run with a stopwatch), reboot the Mac, close all other apps |
+| 11:00-17:00 | **Record** (3 takes per hero, then the voice-over), P1-9 real phone if it works |
+| 17:00-22:00 | Edit, captions, export, upload as unlisted, rough-cut review |
+| **Wed 4 Nov** 09:00-12:00 | Final edit, replay site live, README from a clean clone |
+| 12:00-15:00 | Security sweep again, key rotated, make the repo public, test every link logged out |
+| **by 18:00** | **Submit** (form filled from section 7). Thu 5 Nov before 07:30 IST is emergency buffer only |
+
+## 5. Risks and answers
+| Risk | Answer |
+|---|---|
+| Live phone misbehaves on camera | Record each hero as its own take; keep the first clean take; the replay site and a screen-recorded backup of each hero exist |
+| Mac memory (swap was 4.8 of 5.1 GB) | Reboot before recording, close every other app, record the games-phone segment last, quit the Lima VM and BlueStacks afterwards |
+| Model rate limits or latency (429s) | Retries are built in (about 1 minute); record at a quiet hour; keep the speed-up cut ready |
+| The Clash of Clans story is misread as "bot for a game" | Show opening and the refusal only, say the account-protection rule out loud |
+| Privacy | Throwaway Google account; fake contacts; the Library and chat checked for the owner's address before every take |
+| Judges cannot run it | Replay site, a clear README, `scripts/demo_reset.py`, the honest limits section (local emulator today, a cloud phone is the deployment target) |
+| Brand use | Name the models as Meta writes them, no logos, no endorsement claims; check the official brand rules |
+
+## 6. Cut list (in this order)
+P2 items, PWA, the replay failure-and-recovery session, the real-phone moment, Hero C's image-injection beat, the open-weight segment (keep the README paragraph if it ran).
+
+## 7. Submission checklist (fill the real field names from the official form)
+- [ ] Track: Indie Developer; project name, one-line pitch, long description (use sections 1 and 2)
+- [ ] Video: 3:00 or less, public or unlisted link that plays logged out, captions
+- [ ] Repo: public, README with the video and replay links, LICENSE, no secrets (tree and history scanned), tests green, new-work statement
+- [ ] Meta tooling list: Muse Spark 1.3, Muse Wonder 1.0, Muse Voice Transcribe 1.0, (Spark Open on Baseten if done) and what each does
+- [ ] Open-weight bonus: provider, model id, where in the code, evidence (a run log), only if P1-7 passes
+- [ ] Testing instructions for judges: the replay link, and "run it yourself" steps with the keys they bring
+- [ ] Team members, country, eligibility confirmations, the new-work declaration
+- [ ] Submitted at least 12 h before the deadline; confirmation email saved
+
+## 8. Decisions needed from the owner
+1. Hero set: A (it finds a way) + B (see it, say it) + C (proactive and safe), or drop one?
+2. Open-weight spike: go or no-go?
+3. Real-phone test on your own phone tomorrow morning: yes or no?
+4. Feature freeze at Mon 19:00 IST: ok?
+5. LICENSE: MIT ok?
+6. Who narrates and where is it hosted (YouTube unlisted)?
+7. Paste the official rubric and submission requirements, or the page link, so the checklist uses the real wording.

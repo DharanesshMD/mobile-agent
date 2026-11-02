@@ -1,6 +1,8 @@
 """Which model does what. Only the worker (screen understanding and touch) uses Muse Wonder."""
 ORCHESTRATOR_MODEL = "muse-spark-1.3"
 WORKER_MODEL = "muse-wonder-1.0"
+OPEN_WEIGHT_MODEL = "meta-models/muse-spark-open-1026"  # Muse Spark Open (open weights) on Baseten Model APIs; the orchestrator can run on it (ORCHESTRATOR_BACKEND=baseten)
+OPEN_WEIGHT_BASE_URL = "https://inference.baseten.co/v1"  # OpenAI-compatible; auth is `Authorization: Bearer $BASETEN_API_KEY`
 TRANSCRIBE_MODEL = "muse-voice-transcribe-1.0"  # speech to text for the chat microphone ($0.18 per hour of audio)
 SLEEP_AFTER_IDLE_MIN = 5
 STOP_AFTER_PAUSED_MIN = 60

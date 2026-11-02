@@ -1,0 +1,16 @@
+{
+ "sessions": [
+  {
+   "duration_ms": 75000,
+   "name": "demo",
+   "phones": [
+    "emulator",
+    "games"
+   ],
+   "steps": 6,
+   "synthetic": true,
+   "title": "Synthetic demo: an app that crashes on the emulator and runs on Cloud phone 2"
+  }
+ ],
+ "version": 1
+}

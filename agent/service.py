@@ -22,10 +22,12 @@ from agent.vault import Vault, load_key
 from agent.db import Database
 from agent.hub import Hub
 from agent.device import is_blank
+from agent.privacy import AccountMasker
+from agent.gateway import PhoneGateway, phone_history
 from agent.remote import PhoneHub
 from agent.jobs import JobManager
 from agent.orchestrator import Orchestrator
-from agent.master import Watcher, ensure_adb_bot, ensure_games_bot, ensure_master, ensure_phone_bot
+from agent.master import DEFAULT_ASSISTANT_PERSONA, Watcher, ensure_adb_bot, ensure_games_bot, ensure_master, ensure_phone_bot
 from agent.routines import Scheduler
 from agent.store import Store
 
@@ -240,6 +242,22 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     def index():
         return FileResponse(WEB / "index.html", headers={"Cache-Control": "no-cache"})  # always pick up the newest page after an update
 
+    FONT_FILES = ("Geist-Variable.woff2", "GeistMono-Variable.woff2")  # the interface fonts (SIL OFL), served from web/fonts: no outside request
+
+    @app.get("/fonts/{name}", include_in_schema=False)
+    def font(name: str):
+        if name not in FONT_FILES:
+            raise HTTPException(404, "no such font")
+        return FileResponse(WEB / "fonts" / name, media_type="font/woff2", headers={"Cache-Control": "public, max-age=86400"})
+
+    @app.get("/vendor/qrcode.js", include_in_schema=False)
+    def vendor_qr():  # the QR generator for the "Connect a phone" dialog (MIT, web/vendor/QRCODE-LICENSE.txt): no outside request
+        return FileResponse(WEB / "vendor" / "qrcode.js", media_type="text/javascript", headers={"Cache-Control": "public, max-age=86400"})
+
+    @app.get("/connect.js", include_in_schema=False)
+    def connect_js():  # the "Connect a phone" dialog (QR, gateway switch, live status)
+        return FileResponse(WEB / "connect.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+
     @app.get("/api/health")
     def health():
         return {"ok": True, "auth": bool(token), "models": sorted(MODELS)}
@@ -321,12 +339,12 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     def pair_code(who: dict = Depends(auth)):
         return {"code": issue_code(), "expires_in": PAIR_TTL}
 
-    @app.post("/api/pair")
-    def pair(body: Pair):
+    def do_pair(code: str, name: str) -> tuple[str, str]:
+        """Exchange a pairing code for a device id and token (the main app and the phone gateway share the codes and the throttle)."""
         now = time.time()
         if now < pair_fails["until"]:
             raise HTTPException(429, "too many wrong codes; wait a minute")
-        given = re.sub(r"[^A-Z0-9]", "", body.code.upper())
+        given = re.sub(r"[^A-Z0-9]", "", code.upper())
         match = next((c for c, exp in codes.items() if exp > now and hmac.compare_digest(c.encode(), given.encode())), None)
         if not match:
             pair_fails["n"] += 1
@@ -335,7 +353,11 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
             raise HTTPException(401, "invalid or expired pairing code")
         codes.pop(match)
         pair_fails["n"] = 0
-        did, tok = store.add_device(body.name.strip())
+        return store.add_device(name.strip())
+
+    @app.post("/api/pair")
+    def pair(body: Pair):
+        did, tok = do_pair(body.code, body.name)
         return {"device_id": did, "token": tok}
 
     @app.get("/api/devices")
@@ -560,6 +582,55 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
 
     db = db or Database(":memory:")
     hub = Hub()
+
+    def account_addresses() -> list[str]:  # the Google accounts that really are on the phones, never fetched from a phone that is asleep
+        found = [(store.cloud_account() or {}).get("email") or ""]
+        if lifecycle is None or lifecycle.info().get("power") == "on":
+            try:
+                found += [name for name, _kind in (device.accounts() if hasattr(device, "accounts") else []) if "@" in name]
+            except Exception:
+                pass
+        return [a for a in found if a]
+    masker = AccountMasker(account_addresses)
+    masker.add((store.cloud_account() or {}).get("email") or "", *os.environ.get("MASK_EMAILS", "").split(","))  # known at once, before any phone is asked
+    db.mask = masker.apply
+    app.state.masker = masker
+
+    def device_only(authorization: str | None = Header(default=None)) -> dict:
+        given = (authorization or "").removeprefix("Bearer ").strip()
+        dev = store.find_device(given) if given else None
+        if not dev:
+            raise HTTPException(401, "a device token is required")
+        return dev
+
+    def revoke_device_token(dev: dict) -> None:
+        store.revoke(dev["id"])
+        phones.kick(dev["id"])
+
+    @app.get("/api/me/history")
+    def me_history(dev: dict = Depends(device_only)):
+        return phone_history(db, masker.apply, dev)
+
+    @app.post("/api/me/revoke")
+    def me_revoke(dev: dict = Depends(device_only)):
+        revoke_device_token(dev)
+        return {"ok": True}
+
+    gateway = PhoneGateway(store, phones, do_pair, issue_code, lambda dev: phone_history(db, masker.apply, dev), revoke_device_token,
+                           Path(data_dir) / "apk" / "mobile-agent.apk", int(os.environ.get("PHONE_GATEWAY_PORT", "8765")))
+    app.state.gateway = gateway
+
+    @app.get("/api/gateway/state", dependencies=[Depends(auth)])
+    def gateway_state():
+        return gateway.state()
+
+    @app.post("/api/gateway/open", dependencies=[Depends(auth)])
+    def gateway_open():
+        return gateway.open()
+
+    @app.post("/api/gateway/close", dependencies=[Depends(auth)])
+    def gateway_close():
+        return gateway.close()
     vault = Vault(db, vault_key or secrets.token_bytes(32))  # an in-memory db gets a throwaway key
     jobs = JobManager(db, hub, device, model_factory, data_dir=data_dir, settle=settle, external_busy=lambda: bool(active()), vault=vault)
     orch = Orchestrator(db, hub, model_factory, jobs, vault)
@@ -596,7 +667,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     scheduler.on_change = lambda bot_id: hub.publish(bot_id, {"type": "refresh", "what": "routines"})
     vault.on_change = lambda: [hub.publish(b["id"], {"type": "refresh", "what": "vault"}) for b in db.list_bots()]
     if not [b for b in db.list_bots() if b["kind"] == "bot"]:  # the master and the phones' bots do not count: there is always an ordinary assistant
-        db.create_bot("Assistant", "")
+        db.create_bot("Assistant", DEFAULT_ASSISTANT_PERSONA)
     watcher = Watcher(db, hub)
     if master:
         ensure_master(db, hub)
@@ -627,7 +698,7 @@ def prepare_with_retries(device, tries: int = 10) -> None:
 
 
 def default_serial(env_serial: str | None, emulator_available: bool) -> str | None:
-    """Every adb call names its phone: with the games phone attached to the same adb server, an unnamed call fails with "more than one device".
+    """Every adb call names its phone: with Cloud phone 2 attached to the same adb server, an unnamed call fails with "more than one device".
     The shared phone is ANDROID_SERIAL, else the local emulator; a real USB phone with no emulator on this computer stays the only device."""
     return env_serial or ("emulator-5554" if emulator_available else None)
 
@@ -636,7 +707,8 @@ def create_default_app() -> FastAPI:
     from agent.device import Device
     from agent.lifecycle import EmulatorBackend, Lifecycle
     from agent.virtual import GAMES, LimaRedroidBackend, SERIAL as GAMES_SERIAL
-    from agent.model import MetaClient, load_env
+    from agent.model import load_env
+    from agent.openweights import make_model_factory
     load_env()
     device = Device(default_serial(os.environ.get("ANDROID_SERIAL"), EmulatorBackend.available()))
     light = os.environ.get("PHONE_PROFILE", "light") == "light"
@@ -661,13 +733,19 @@ def create_default_app() -> FastAPI:
         print(f"ADB_PHONES: {p}", flush=True)
     adb_phones = AdbPhones(extra) if extra else None
     virtuals = {}
-    if os.environ.get("GAMES_PHONE", "on") != "off" and LimaRedroidBackend.available():  # the games phone exists on this computer; nothing is started yet
+    if os.environ.get("GAMES_PHONE", "on") != "off" and LimaRedroidBackend.available():  # Cloud phone 2 exists on this computer; nothing is started yet
         games = Device(GAMES_SERIAL)
         games.has_play = False  # Redroid ships without Google Play: apps come as APK files
-        glc = Lifecycle(LimaRedroidBackend(), on_ready=lambda cold: games.reconnect())  # a new boot or a long freeze: forget cached connections
+        def games_ready(cold: bool) -> None:  # a new boot or a long freeze: forget cached connections, and turn the screen to landscape (games are made for it; apps that ask for portrait still get it)
+            games.reconnect()
+            try:
+                games.rotate("landscape")
+            except Exception:
+                pass
+        glc = Lifecycle(LimaRedroidBackend(), on_ready=games_ready)
         glc.last_boot_s = 15  # a cold start (the VM, then the container) takes about 15 s: the progress bar should not promise a minute
         virtuals[GAMES] = (games, glc)
-    app = create_app(device, lambda m: MetaClient(m),
+    app = create_app(device, make_model_factory(),
                      token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
                      db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True,
                      lifecycle=lifecycle, virtuals=virtuals, adb_phones=adb_phones)

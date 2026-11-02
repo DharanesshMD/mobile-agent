@@ -1,4 +1,4 @@
-"""The games phone backend (Redroid in a Lima VM): the contract Lifecycle needs, without Lima or Docker."""
+"""Cloud phone 2 backend (Redroid in a Lima VM): the contract Lifecycle needs, without Lima or Docker."""
 import subprocess
 import tempfile
 import time

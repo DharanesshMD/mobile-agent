@@ -1,7 +1,7 @@
 # Mobile Agent: plan and feasibility
 
 Date: 27 Oct 2026. Hackathon build window: Oct 27 to Nov 4 (submission due Nov 4, 9 PM ET).
-Status: planning. Items marked (verify) are not yet tested.
+Status: the first plan (27 Oct), kept for the hackathon constraints in section 2. Most of it is built since: see the README and docs/README.md. Items marked (verify) were not tested when this was written.
 
 ## 1. Idea
 

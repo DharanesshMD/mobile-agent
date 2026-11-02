@@ -1,0 +1,12 @@
+Third-party components bundled in this repository
+
+- android/gradle/wrapper/gradle-wrapper.jar, android/gradlew, android/gradlew.bat
+  The Gradle wrapper, from the Gradle project (https://gradle.org), licensed under the Apache License 2.0.
+
+Everything else is this project's own code (MIT, see LICENSE). Dependencies that are downloaded at install or build time and not stored in
+this repository (Python packages from uv.lock, OkHttp and the Android SDK for the Android app) keep their own licenses.
+Runtime software the helper scripts download on the owner's machine (Lima, Docker, Redroid images) is not distributed here.
+
+Geist and Geist Mono (web/fonts/)
+  Copyright (c) 2023 Vercel, in collaboration with basement.studio. SIL Open Font License 1.1 (web/fonts/OFL-LICENSE.txt).
+  Source: https://www.npmjs.com/package/geist (version 1.9.0), variable woff2 files, unmodified.

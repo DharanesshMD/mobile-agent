@@ -11,7 +11,7 @@ Checked 27 Oct 2026 with the team's key: `GET /v1/models` returns all nine model
 | Muse Spark 1.2 / 1.1 | `muse-spark-1.2`, `muse-spark-1.1` | Fallbacks. 1.2 for audio understanding. |
 | `*-contributor` variants | `muse-spark-1.3-contributor`, ... | Lower price, content may be used for training. Avoid for personal data. |
 | Muse Voice Transcribe | `muse-voice-transcribe-1.0` | Speech to text: `POST /v1/asr/transcribe` or WebSocket `wss://api.meta.ai/v1/asr/realtime`. No speech synthesis. |
-| Muse Image | `muse-image-1.0` | Image generation/editing. Not needed for the agent. |
+| Muse Image | `muse-image-1.0` | Image generation and editing. Used for the "Show me" use case (agent/museimage.py): an illustration from a prompt, or an edit of the owner's picture or the phone screenshot. |
 | SAM 3.1 | `sam-3.1` | Segmentation via `/v1/responses`. Possible UI grounding aid. |
 | Muse Spark Open / Muse Glimmer | open weights | Run on Baseten/Modal (`meta-models/muse-spark-open-1026` on Baseten) for the open-weight bonus. |
 
@@ -73,3 +73,14 @@ So `MetaClient.search` defaults to low. Each bot turn may search up to three tim
 at most 10 minutes and 32 MB). The response has `transcript` (plus `turns` in other modes). Measured: a 5 second spoken sentence came back correctly in 3 s. Price $0.18 per hour of audio.
 The chat microphone records in the browser (MediaRecorder), converts to 16 kHz mono WAV with an OfflineAudioContext, posts it to `/api/transcribe`, and puts the text in the message box for review.
 Nothing is stored; audio is capped at 3 minutes in the page. The browser pane inside the Claude desktop app blocks the microphone, so use a normal browser at http://localhost:8000.
+
+## Muse Image 1.0 (checked 2 Nov 2026 against dev.meta.ai/docs/image-generation and one live call each)
+- `POST /v1/images/generations` `{"model":"muse-image-1.0","prompt","n","size","output_format"}` and `POST /v1/images/edits` with the Meta JSON body `{"model","prompt","images":[{"image_url": data URL or public URL}],"n"}`
+  (multipart for the OpenAI SDK). Answer: `{"data":[{"b64_json"}],"output_format","background":"opaque","usage"}`. `response_format` can be `url` (temporary signed link).
+- `size` only sets the aspect ratio (up to 16:1): the live calls returned 1600x1600 pictures for `1024x1024`. `output_format` defaults to WEBP; the edit endpoint answered WEBP even for a PNG input,
+  so everything is decoded and re-encoded by `agent/images.normalize` (PNG or JPEG, at most 1568 px, all metadata dropped).
+- No mask on edits (HTTP 400 `unsupported_parameter`), unknown top-level fields and `moderation` are 400s, `n` 1 to 10, 1 to 10 input images.
+- Errors: 400 `content_policy_violation` (param `prompt`) is a safety block (we show it as a refusal and never retry); 503 is retryable; 500 is not. Price: $0.01 per returned image, nothing for a failure.
+- Measured (live, 2 Nov): generation 16.5 s, edit 16.1 s; a 512 px input edit used about 18k input tokens.
+- In the app: action `make_image` (prompts/orchestrator.md), a daily cap (`MUSE_IMAGE_DAILY_CAP`, default 20 pictures), a forged-document refusal before the provider is asked, every picture labelled AI-generated or AI-edited.
+

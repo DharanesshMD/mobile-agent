@@ -117,7 +117,7 @@ class PhoneBot(unittest.TestCase):
         try:
             pb = app.state.db.phone_bot("local")
             self.assertEqual((pb["kind"], pb["name"], pb["phone_id"]), ("phone", "Pixel 8", "local"))
-            self.assertTrue(any("is connected" in m["content"] for m in c.get(f"/api/bots/{pb['id']}/state").json()["messages"]))
+            self.assertTrue(any("is paired" in m["content"] for m in c.get(f"/api/bots/{pb['id']}/state").json()["messages"]))
         finally:
             ws.__exit__(None, None, None)
         until(lambda: not app.state.phones.online())

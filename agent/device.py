@@ -64,12 +64,21 @@ def parse_accounts(dumpsys_account: str) -> list[tuple[str, str]]:
     return sorted({(m.group(1).strip(), m.group(2).strip()) for m in ACCOUNT_RE.finditer(dumpsys_account)})
 
 
+def local_timezone() -> str:
+    """The IANA name of this computer's time zone (for example Asia/Kolkata), from /etc/localtime; "" when it cannot be told."""
+    try:
+        target = os.path.realpath("/etc/localtime")
+        return target.split("zoneinfo/", 1)[1] if "zoneinfo/" in target else ""
+    except OSError:
+        return ""
+
+
 class Device:
     """Reads the screen through uiautomator2's resident on-device service when available (about 0.05 s per UI tree and a
     fast screenshot), and falls back to plain ADB (`uiautomator dump`, `screencap`) otherwise. Taps, swipes and typing stay
     on `adb shell input`, which measured faster. Set PHONE_READER=adb to force the fallback."""
 
-    has_play = True  # False on a phone without Google Play (the games phone): the worker then never offers or opens a Play Store install
+    has_play = True  # False on a phone without Google Play (Cloud phone 2): the worker then never offers or opens a Play Store install
 
     def __init__(self, serial: str | None = None, adb: str = "adb", use_u2: bool | None = None):
         self.serial = serial
@@ -292,18 +301,92 @@ class Device:
         return self._run("shell", "getprop", "ro.kernel.qemu").decode().strip() == "1" or \
             self._run("shell", "getprop", "ro.boot.qemu").decode().strip() == "1"
 
+    def sync_timezone(self, zone: str | None = None) -> str:
+        """Put the phone in the owner's time zone (default: this computer's), so a clock it reads or a time it reports is local, not UTC. Idempotent, needs no root."""
+        zone = zone or local_timezone()
+        if zone:
+            self._run("shell", "service", "call", "alarm", "3", "s16", zone)
+        return zone
+
     def prepare(self, width: int = 720, height: int = 1600, density: int = 300) -> None:
         """Light profile: a smaller screen (cheaper to render, capture and send to the model) and no animations (faster to settle)."""
         self._run("shell", "wm", "size", f"{width}x{height}")
         self._run("shell", "wm", "density", str(density))
         for key in self.ANIMATION_SETTINGS:
             self._run("shell", "settings", "put", "global", key, "0")
+        try:
+            self.sync_timezone()
+        except Exception:  # a time zone is a nicety, never a reason to fail the start-up
+            pass
 
     def restore(self) -> None:
         self._run("shell", "wm", "size", "reset")
         self._run("shell", "wm", "density", "reset")
         for key in self.ANIMATION_SETTINGS:
             self._run("shell", "settings", "put", "global", key, "1")
+
+    # --- a cloud phone's look and feel (cloudtools.set_device): all of these are undone when the task ends ---------------------------------------------
+    def night_mode(self) -> bool:
+        return "yes" in self._run("shell", "cmd", "uimode", "night").decode(errors="replace").lower()
+
+    def set_night(self, on: bool) -> None:
+        self._run("shell", "cmd", "uimode", "night", "yes" if on else "no")
+
+    def font_scale(self) -> float:
+        raw = self._run("shell", "settings", "get", "system", "font_scale").decode().strip()
+        try:
+            return float(raw)
+        except ValueError:  # "null": the default
+            return 1.0
+
+    def set_font_scale(self, scale: float) -> None:
+        self._run("shell", "settings", "put", "system", "font_scale", str(scale))
+
+    def screen_timeout(self) -> int:
+        raw = self._run("shell", "settings", "get", "system", "screen_off_timeout").decode().strip()
+        return int(raw) if raw.lstrip("-").isdigit() else 0
+
+    def set_screen_timeout(self, ms: int) -> None:
+        self._run("shell", "settings", "put", "system", "screen_off_timeout", str(ms))
+
+    def _display_now(self) -> tuple[str, str]:
+        size = self._run("shell", "wm", "size").decode(errors="replace")
+        density = self._run("shell", "wm", "density").decode(errors="replace")
+        pick = lambda text, key: (re.search(rf"{key}:\s*(\S+)", text) or [None, ""])[1]
+        return (pick(size, "Override size") or pick(size, "Physical size"), pick(density, "Override density") or pick(density, "Physical density"))
+
+    def set_display(self, width: int, height: int, density: int) -> None:
+        """Another screen size and density for a look-and-feel check; reset_display() puts back what it was before the first change."""
+        if getattr(self, "_display_before", None) is None:
+            self._display_before = self._display_now()
+        self._run("shell", "wm", "size", f"{width}x{height}")
+        self._run("shell", "wm", "density", str(density))
+        self._size_at = None
+
+    def reset_display(self) -> None:
+        before = getattr(self, "_display_before", None)
+        if before:
+            self._run("shell", "wm", "size", before[0])
+            self._run("shell", "wm", "density", before[1])
+            self._display_before = None
+        self._size_at = None
+
+    def set_app_language(self, package: str, tag: str) -> bool:
+        """Per-app language (Android 13+). Empty tag puts the app back on the system language. False when the app does not offer it."""
+        self._run("shell", "cmd", "locale", "set-app-locales", shlex.quote(package), "--locales", shlex.quote(tag) if tag else "''")
+        got = self._run("shell", "cmd", "locale", "get-app-locales", shlex.quote(package)).decode(errors="replace").lower()
+        return (not tag) or tag.lower().split("-")[0] in got
+
+    def package_dump(self, package: str) -> str:
+        return self._run("shell", "dumpsys", "package", shlex.quote(package)).decode(errors="replace")
+
+    def clear_app(self, package: str) -> None:
+        """Stop an app and wipe its data (a throwaway browser after a link check)."""
+        self._run("shell", "am", "force-stop", shlex.quote(package))
+        self._run("shell", "pm", "clear", shlex.quote(package))
+
+    def uninstall(self, package: str) -> None:
+        self._run("shell", "pm", "uninstall", shlex.quote(package))
 
     def launcher_apps(self) -> list[str]:
         out = self._run("shell", "cmd", "package", "query-activities", "--brief", "-a", "android.intent.action.MAIN",
@@ -372,7 +455,7 @@ class Device:
             out = self._run("shell", "monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1")
             if b"No activities found" not in out:
                 return
-        except subprocess.CalledProcessError:  # monkey exits 251 on some images (the Redroid games phone) although the app is installed
+        except subprocess.CalledProcessError:  # monkey exits 251 on some images (the Redroid phone (Cloud phone 2)) although the app is installed
             pass
         component = parse_launcher_activity(self._run("shell", "cmd", "package", "resolve-activity", "--brief", "-c", "android.intent.category.LAUNCHER", package).decode(errors="replace"))
         if not component:

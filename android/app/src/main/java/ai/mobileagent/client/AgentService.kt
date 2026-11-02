@@ -44,6 +44,8 @@ class AgentService : Service() {
     private val pinger = Executors.newSingleThreadScheduledExecutor()
     private val http = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).connectTimeout(10, TimeUnit.SECONDS).build()
     @Volatile private var running = false
+    @Volatile private var lastOpAt = 0L
+    @Volatile private var controlling = false
     @Volatile private var socket: WebSocket? = null
     private var loop: Thread? = null
 
@@ -59,6 +61,9 @@ class AgentService : Service() {
         if (!running) {
             running = true
             loop = Thread(::connectLoop, "agent-link").also { it.start() }
+            pinger.scheduleWithFixedDelay({  // back to "connected" a few seconds after the last operation
+                if (controlling && System.currentTimeMillis() - lastOpAt > 8000) { controlling = false; notify("Mobile Agent is connected, waiting for a task") }
+            }, 4, 4, TimeUnit.SECONDS)
         }
         return START_STICKY
     }
@@ -114,7 +119,7 @@ class AgentService : Service() {
                             .put("sdk", Build.VERSION.SDK_INT).put("size", org.json.JSONArray(size.toList())).toString())
                         Status.connection = "connected"
                         Status.lastError = ""
-                        notify("Mobile Agent is connected")
+                        notify("Mobile Agent is connected, waiting for a task")
                     }
 
                     override fun onMessage(webSocket: WebSocket, text: String) {
@@ -151,8 +156,15 @@ class AgentService : Service() {
         val reply = JSONObject().put("id", req.getInt("id"))
         val op = req.optString("op")
         Status.lastOp = op
+        val args = req.optJSONObject("args") ?: JSONObject()
+        lastOpAt = System.currentTimeMillis()
+        if (!controlling) { controlling = true; notify("Mobile Agent is controlling this phone") }
+        val pkg = args.optString("package").ifEmpty {
+            runCatching { AgentAccessibilityService.instance?.rootInActiveWindow?.packageName?.toString() }.getOrNull().orEmpty()
+        }
+        OpsLog.add(this, op, pkg)
         try {
-            val result = Ops.handle(this, op, req.optJSONObject("args") ?: JSONObject())
+            val result = Ops.handle(this, op, args)
             reply.put("ok", true).put("result", result ?: JSONObject.NULL)
         } catch (e: Throwable) {
             reply.put("ok", false).put("error", e.message ?: e.javaClass.simpleName)

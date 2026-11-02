@@ -1,6 +1,6 @@
 # Design v2: chat-first agent with a background cloud phone
 
-Date: 28 Oct 2026. Status: proposal, waiting for owner sign-off. Supersedes the "web chatbot beside a phone view" layout in plan.md sections 6 and 12.
+Date: 28 Oct 2026. Status: the original design (28 Oct). Milestones 1 to 4 are built and the Android client and voice since; the sections after 12 record later updates; see docs/README.md. Supersedes the "web chatbot beside a phone view" layout in plan.md sections 6 and 12.
 Items marked (verify) have not been tested.
 
 ## 1. The flow the owner described (from the reference recording)

@@ -65,7 +65,7 @@ class FakeAdb:
 
 
 def build(spark, *workers, emulator, games=None, extras=None, adb=None, up=None):
-    """The whole app with an emulator, optionally the games phone and extra adb phones. extras: {name: (serial, device)}."""
+    """The whole app with an emulator, optionally Cloud phone 2 and extra adb phones. extras: {name: (serial, device)}."""
     queue = list(workers)
     extras = extras or {}
 
@@ -152,7 +152,7 @@ class AdbPhoneConfig(unittest.TestCase):
         ok, problems = parse_adb_phones("Pixel=R5CN1234, bs=127.0.0.1:5565 , games=abc123, x=emulator-5554, y=emulator-5556, two=R5CN1234, ab=x, z=bad serial!")
         self.assertEqual(ok, {"pixel": "R5CN1234"})
         text = " ".join(problems)
-        self.assertIn("clashes with the shared emulator or the games phone", text)  # 5565 and emulator-5554 and any emulator-*
+        self.assertIn("clashes with the shared emulator or Cloud phone 2", text)  # 5565 and emulator-5554 and any emulator-*
         self.assertIn("reserved", text)
         self.assertIn("already used", text)
         self.assertIn("not an adb serial", text)
@@ -235,10 +235,10 @@ class Chain(unittest.TestCase):
         spark = Spark(act(type="mobile_task", goal="open clash of clans", say="On it."))
         c, app, bots = build(spark, Worker(act(type="fail", reason=CRASH)), emulator=emulator, games=games)
         self.crash_on_emulator(c, bots)
-        until(lambda: said(c, assistant(bots), "so I ran it on the games phone"), timeout=40)
+        until(lambda: said(c, assistant(bots), "so I ran it on Cloud phone 2"), timeout=40)
         msgs = texts(c, assistant(bots), "assistant")
-        final = next(t for t in msgs if "so I ran it on the games phone" in t)
-        self.assertIn("Clash of Clans doesn't run on the shared emulator", final)
+        final = next(t for t in msgs if "so I ran it on Cloud phone 2" in t)
+        self.assertIn("Clash of Clans doesn't run on Cloud phone", final)
         self.assertIn("I copied the app over, only the app", final)
         self.assertIn("an age prompt", final)  # what the screen shows
         self.assertIn("nothing was tapped", final)
@@ -256,10 +256,10 @@ class Chain(unittest.TestCase):
         spark = Spark(act(type="mobile_task", goal="open clash of clans", say="On it."), act(type="mobile_task", goal="open clash of clans", say="On it."))
         c, app, bots = build(spark, Worker(act(type="fail", reason=CRASH)), emulator=emulator, games=games)
         self.crash_on_emulator(c, bots)
-        until(lambda: said(c, assistant(bots), "so I ran it on the games phone"), timeout=40)
+        until(lambda: said(c, assistant(bots), "so I ran it on Cloud phone 2"), timeout=40)
         games.opened.clear()
         say(c, assistant(bots), "open clash of clans again")
-        until(lambda: sum("so I ran it on the games phone" in t for t in texts(c, assistant(bots), "assistant")) == 2, timeout=40)
+        until(lambda: sum("so I ran it on Cloud phone 2" in t for t in texts(c, assistant(bots), "assistant")) == 2, timeout=40)
         self.assertEqual(len(c.get(f"/api/bots/{assistant(bots)}/jobs").json()), 1)  # no second job on the emulator: it was known not to run there
         self.assertEqual(games.opened, [PKG])
         self.assertEqual(len(games.installed), 1)  # and nothing was copied again
@@ -272,9 +272,9 @@ class Chain(unittest.TestCase):
         self.crash_on_emulator(c, bots)
         until(lambda: said(c, assistant(bots), "so I ran it on the pixel phone"), timeout=40)
         final = next(t for t in texts(c, assistant(bots), "assistant") if "so I ran it on the pixel phone" in t)
-        self.assertIn("I tried the games phone: it crashed within", final)
+        self.assertIn("I tried Cloud phone 2: it crashed within", final)
         facts = {(f["phone"], f["package"]): f["ok"] for f in app.state.db.launch_facts()}
-        self.assertEqual(facts[("games", PKG)], 0)  # known not to run on the games phone from now on
+        self.assertEqual(facts[("games", PKG)], 0)  # known not to run on Cloud phone 2 from now on
         self.assertEqual(facts[("pixel", PKG)], 1)
         self.assertTrue(phones.known_bad(app.state.db, "games", PKG))
         self.assertEqual(games.opened, [PKG])
@@ -298,7 +298,7 @@ class Chain(unittest.TestCase):
         self.crash_on_emulator(c, bots)
         until(lambda: said(c, assistant(bots), "I couldn't get Clash of Clans to run on any of your phones"), timeout=40)
         final = next(t for t in texts(c, assistant(bots), "assistant") if "couldn't get" in t)
-        self.assertIn("the games phone: it crashed within", final)
+        self.assertIn("Cloud phone 2: it crashed within", final)
         self.assertIn("the pixel phone: it crashed within", final)
         self.assertIn("connect your own phone with the Mobile Agent app", final)  # the one thing that would unblock it
         self.assertEqual(len(c.get(f"/api/bots/{assistant(bots)}/jobs").json()), 1)  # and it did not loop
@@ -318,24 +318,24 @@ class Chain(unittest.TestCase):
     def test_the_answer_lands_in_the_chat_where_masters_delegated_task_was_asked(self):
         emulator, games = Emu("emulator-5554", [PKG]), GamesP("localhost:5565")
         games._packages.append(PKG)
-        spark = Spark(act(type="delegate_task", bot="Games phone", goal="open clash of clans", say="Asking the games phone."))
+        spark = Spark(act(type="delegate_task", bot="Cloud phone 2", goal="open clash of clans", say="Asking Cloud phone 2."))
         c, app, bots = build(spark, Worker(act(type="fail", reason=CRASH)), emulator=emulator, games=games)
         say(c, bots["Master"], "open clash of clans")
-        until(lambda: said(c, bots["Master"], "so I ran it on the shared emulator"), timeout=40)
-        final = next(t for t in texts(c, bots["Master"], "assistant") if "so I ran it on the shared emulator" in t)
-        self.assertIn("doesn't run on the games phone", final)
+        until(lambda: said(c, bots["Master"], "so I ran it on Cloud phone"), timeout=40)
+        final = next(t for t in texts(c, bots["Master"], "assistant") if "so I ran it on Cloud phone" in t)
+        self.assertIn("doesn't run on Cloud phone 2", final)
         self.assertEqual(emulator.opened, [PKG])
 
     def test_an_app_known_not_to_run_on_the_asked_phone_is_not_sent_there(self):
         emulator, games = Emu("emulator-5554", [PKG]), GamesP("localhost:5565")
         games._packages.append(PKG)
-        spark = Spark(act(type="delegate_task", bot="Games phone", goal="open clash of clans", say="Asking."))
+        spark = Spark(act(type="delegate_task", bot="Cloud phone 2", goal="open clash of clans", say="Asking."))
         c, app, bots = build(spark, Worker(act(type="done", answer="never used")), emulator=emulator, games=games)
         app.state.db.set_launch_fact("games", PKG, False, "crashed")
         app.state.db.set_launch_fact("emulator", PKG, True, "")
-        say(c, bots["Master"], "open clash of clans on the games phone")
-        until(lambda: said(c, bots["Master"], "so I ran it on the shared emulator"), timeout=40)
-        self.assertEqual(c.get(f"/api/bots/{bots['Games phone']}/jobs").json(), [])  # no job was started on the games phone
+        say(c, bots["Master"], "open clash of clans on Cloud phone 2")
+        until(lambda: said(c, bots["Master"], "so I ran it on Cloud phone"), timeout=40)
+        self.assertEqual(c.get(f"/api/bots/{bots['Cloud phone 2']}/jobs").json(), [])  # no job was started on Cloud phone 2
         self.assertEqual(getattr(games, "opened", []), [])
 
 
@@ -396,7 +396,7 @@ class OpenShortcut(unittest.TestCase):
         app.state.db.set_launch_fact("emulator", PKG, False, "crashed")
         app.state.db.set_launch_fact("games", PKG, True, "")
         say(c, assistant(bots), "open clash of clans")
-        until(lambda: said(c, assistant(bots), "so I ran it on the games phone"), timeout=40)
+        until(lambda: said(c, assistant(bots), "so I ran it on Cloud phone 2"), timeout=40)
         self.assertEqual(spark.calls, [])  # the model was not asked anything
         self.assertEqual(c.get(f"/api/bots/{assistant(bots)}/jobs").json(), [])  # and no job went to the emulator
         self.assertEqual(games.opened, [PKG])

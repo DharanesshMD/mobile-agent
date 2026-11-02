@@ -2,6 +2,7 @@ package ai.mobileagent.client
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -53,8 +54,8 @@ class MainActivity : Activity() {
         col.addView(status)
 
         col.addView(text("1. Pair with your server", 17f, true))
-        col.addView(text("Open the web app, show the pairing code, and type the server address and code here."))
-        server = EditText(this).apply { setText(Prefs.server(this@MainActivity)); hint = "Server, for example http://192.168.1.20:8001"; inputType = InputType.TYPE_TEXT_VARIATION_URI; setSingleLine() }
+        col.addView(text("Easiest: scan the QR code in the web app (Connect a phone) and tap Open in the app. Or type the server address and pairing code here."))
+        server = EditText(this).apply { setText(Prefs.server(this@MainActivity)); hint = "Server, for example http://192.168.1.20:8765"; inputType = InputType.TYPE_TEXT_VARIATION_URI; setSingleLine() }
         code = EditText(this).apply { hint = "Pairing code, for example ABCD-EFGH"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS; setSingleLine() }
         col.addView(server)
         col.addView(code)
@@ -80,11 +81,56 @@ class MainActivity : Activity() {
         col.addView(text("4. Run", 17f, true))
         toggle = button("Start agent") { toggleAgent() }
         col.addView(toggle)
-        col.addView(button("Forget this server") { AgentService.stop(this); Prefs.forget(this); refresh() })
+        col.addView(button("History: what the assistant did here") { startActivity(Intent(this, HistoryActivity::class.java)) })
+        col.addView(button("Disconnect and revoke") { disconnect() })
         col.addView(text("While it runs, the agent can see and operate this screen when you give it a task. The notification has a Stop button; turning off the accessibility service stops it for good.", 13f))
 
         setContentView(ScrollView(this).apply { addView(col) })
         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        handleLink(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleLink(intent)
+    }
+
+    /** mobileagent://pair?server=...&code=...: fill the fields in and ask once; nothing happens until the owner taps Confirm. */
+    private fun handleLink(i: Intent?) {
+        val u = i?.data ?: return
+        if (u.scheme != "mobileagent" || u.host != "pair") return
+        setIntent(Intent())  // handled once
+        val srv = u.getQueryParameter("server")?.trim().orEmpty()
+        val cd = u.getQueryParameter("code")?.trim().orEmpty()
+        if (!(srv.startsWith("http://") || srv.startsWith("https://")) || cd.length < 4) {
+            Toast.makeText(this, "That pairing link is not valid", Toast.LENGTH_LONG).show()
+            return
+        }
+        server.setText(srv)
+        code.setText(cd)
+        AlertDialog.Builder(this)
+            .setTitle("Pair this phone?")
+            .setMessage("Connect to $srv. The assistant on that computer will be able to operate this phone when you ask it to. You can disconnect any time.")
+            .setPositiveButton("Confirm") { _, _ -> pair() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Tell the server to forget this phone, then forget the token here and stop. */
+    private fun disconnect() {
+        val s = Prefs.server(this)
+        val t = Prefs.token(this)
+        AgentService.stop(this)
+        Thread {
+            val msg = try {
+                if (t.isNotEmpty() && s.isNotEmpty()) Pairing.revoke(s, t)
+                "Disconnected. The server no longer accepts this phone."
+            } catch (e: Exception) {
+                "Disconnected here. The server could not be reached to revoke: ${e.message}"
+            }
+            Prefs.forget(this)
+            runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show(); refresh() }
+        }.start()
     }
 
     override fun onResume() {

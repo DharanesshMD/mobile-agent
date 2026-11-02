@@ -24,7 +24,16 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- mobileagent://pair?server=http://192.168.1.20:8765&code=ABCD-EFGH : the "Open in the app" link on the phone page; the owner still taps Confirm -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="mobileagent" android:host="pair" />
+            </intent-filter>
         </activity>
+
+        <activity android:name=".HistoryActivity" android:exported="false" />
 
         <service
             android:name=".AgentService"

@@ -3,6 +3,7 @@
 `digest` is the text the master's model reads each turn. `find_alerts` and `Watcher` are deterministic: each problem is posted once in the
 master's chat (and shown as a badge and browser notification by the web page), so the owner is told even when nobody asks.
 """
+import re
 import threading
 import time
 
@@ -39,6 +40,16 @@ def ensure_master(db: Database, hub: Hub | None = None) -> dict:
     return m
 
 
+DEFAULT_ASSISTANT_PERSONA = "A general assistant. Ask it anything; it uses the shared phone when a task needs one."
+RAW_MODEL_NAME = re.compile(r"sdk_|gphone|generic|emulator|redroid|^[a-z0-9]+(_[a-z0-9]+)+$", re.I)
+
+
+def phone_name(info: dict) -> str:
+    """A friendly bot name for a phone: the device name unless it is a raw model string (`sdk_gphone64_arm64`), then "My phone"."""
+    name = str(info.get("name") or info.get("model") or "").strip()[:40]
+    return "My phone" if not name or RAW_MODEL_NAME.search(name) else name
+
+
 PHONE_PERSONA = ("The bot of your own phone. It works on that phone in the background through the Mobile Agent app: every task you give it runs there, "
                  "and nothing else uses that phone.")
 
@@ -48,7 +59,7 @@ def ensure_phone_bot(db: Database, hub: Hub | None, phone_id: str, info: dict) -
     bot = db.phone_bot(phone_id)
     if bot:
         return bot
-    name = str(info.get("name") or info.get("model") or "My phone").strip()[:40] or "My phone"
+    name = phone_name(info)
     taken = {b["name"] for b in db.list_bots()}
     if name in taken:  # a second phone (or the same phone paired again) must not get a bot with the same name
         n = 2
@@ -56,25 +67,28 @@ def ensure_phone_bot(db: Database, hub: Hub | None, phone_id: str, info: dict) -
             n += 1
         name = f"{name} {n}"
     bot = db.create_bot(name, PHONE_PERSONA, kind="phone", phone_id=phone_id)
-    msg = db.add_message(bot["id"], "assistant", "text", f"Your phone ({name}) is connected. Tell me what to do on it: I work on it in the background, and these tasks never touch the shared emulator.")
+    msg = db.add_message(bot["id"], "assistant", "text", f"Your phone ({name}) is paired. Tell me what to do on it: I work on it in the background, and these tasks never touch the shared emulator.")
     if hub:
         hub.publish(bot["id"], {"type": "message", "message": msg})
     return bot
 
 
-GAMES_PERSONA = ("The bot of the games phone: a light virtual Android (Android 13 in a container) for games and heavy apps. It runs only here, "
-                 "in the background, and never uses the shared emulator.")
-GAMES_INTRO = ("This is the games phone: a light virtual Android for games and heavy apps. What to expect, honestly: there is no Google Play here, so apps are "
-               "installed from APK files; graphics are software-rendered (low quality, fine for playing); games draw one picture, so I work from screenshots and "
-               "may need a few tries; and some games refuse to run on virtual devices. For those, connect your own phone with the Mobile Agent app.")
+GAMES_NAME = "Cloud phone 2"
+GAMES_PERSONA = ("The bot of Cloud phone 2: a second light Android (a container) for heavy apps and anything the shared Cloud phone cannot run. It runs only here, "
+                 "in the background, and never uses the shared Cloud phone.")
+GAMES_INTRO = ("This is Cloud phone 2: a second light Android for heavy apps and anything the shared Cloud phone cannot run. What to expect, honestly: there is no Google Play here, "
+               "so apps are installed from APK files; graphics are software-rendered (low quality); apps that draw one picture, like games, have no readable screen, so I work from "
+               "screenshots and may need a few tries; and some apps refuse to run on virtual devices. For those, connect your own phone with the Mobile Agent app.")
 
 
 def ensure_games_bot(db: Database, hub: Hub | None, phone_id: str = "games") -> dict:
-    """The persistent bot of the games phone, created at start-up when the phone exists on this computer."""
+    """The persistent bot of Cloud phone 2, created at start-up when the phone exists on this computer."""
     bot = db.phone_bot(phone_id, "virtual")
     if bot:
+        if bot["name"] == "Games phone":  # the old display name: keep the bot and its history, give it the generic name
+            bot = db.rename_bot(bot["id"], GAMES_NAME, GAMES_PERSONA) or bot
         return bot
-    bot = db.create_bot("Games phone", GAMES_PERSONA, kind="virtual", phone_id=phone_id)
+    bot = db.create_bot(GAMES_NAME, GAMES_PERSONA, kind="virtual", phone_id=phone_id)
     msg = db.add_message(bot["id"], "assistant", "text", GAMES_INTRO)
     if hub:
         hub.publish(bot["id"], {"type": "message", "message": msg})
@@ -153,6 +167,27 @@ def find_alerts(db: Database, now: float | None = None) -> list[dict]:
     return found
 
 
+ALERT_TTL_H = 24
+
+
+def resolved(db: Database, alert: dict, now: float) -> bool:
+    """Is the problem an old alert message was about gone? Alerts older than ALERT_TTL_H are always cleared."""
+    if now - alert["created"] > ALERT_TTL_H * 3600:
+        return True
+    meta, key = alert["meta"], alert["meta"].get("key", "")
+    bot = db.get_bot(meta.get("bot_id", "")) if meta.get("bot_id") else None
+    if meta.get("bot_id") and not bot:
+        return True
+    if key.startswith("focus:"):
+        return bool(bot and bot["persona"].strip())
+    if key.startswith("item:"):
+        return key[5:] not in [i["id"] for i in db.open_items(bot["id"])]
+    if key.startswith("job:"):
+        job = db.get_job(key[4:])
+        return not job or any(j["status"] == "done" and (j["ended"] or 0) > (job["ended"] or 0) for j in db.jobs(bot["id"], 20))
+    return False
+
+
 class Watcher:
     def __init__(self, db: Database, hub: Hub, clock=time.time):
         self.db, self.hub, self.clock = db, hub, clock
@@ -165,10 +200,23 @@ class Watcher:
         n = 0
         for a in find_alerts(self.db, self.clock()):
             if self.db.alert_once(a["key"]):
-                msg = self.db.add_message(master["id"], "assistant", "alert", a["text"], {"bot_id": a["bot"]["id"], "bot": a["bot"]["name"]})
+                msg = self.db.add_message(master["id"], "assistant", "alert", a["text"], {"bot_id": a["bot"]["id"], "bot": a["bot"]["name"], "key": a["key"]})
                 self.hub.publish(master["id"], {"type": "message", "message": msg})
                 n += 1
+        self.clear_stale(master["id"])
         return n
+
+    def clear_stale(self, master_id: str) -> int:
+        """Remove alerts whose situation is gone (the bot got a focus or was deleted, the card was answered, a later task of that bot succeeded) and any alert older than 24 h."""
+        now, gone = self.clock(), 0
+        for m in self.db.messages(master_id, 200):
+            if m["kind"] != "alert":
+                continue
+            if resolved(self.db, m, now):
+                self.db.delete_message(m["id"])
+                self.hub.publish(master_id, {"type": "message_delete", "id": m["id"]})
+                gone += 1
+        return gone
 
     def start(self) -> None:
         def loop() -> None:

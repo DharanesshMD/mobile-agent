@@ -19,7 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from agent import gamepolicy
+from agent import cloudtools, gamepolicy
 from agent.device import Element
 from agent.config import IMAGE_MODE, IMAGE_WIDTH
 from agent.config import CRASH_LIMIT, MAX_JOB_MINUTES, MAX_WAIT_S
@@ -161,6 +161,9 @@ def observe(state: State, config: RunnableConfig) -> dict:
     if site and not guard:
         prompt += (f"\n\nPOLICY: this is {site}, a third-party site. Do NOT type anything on it (no login, no code, no search box) and do not use type_secret: "
                    "if a sign-in is needed, use handoff so the owner does it. Tapping and scrolling to read are fine.")
+    if c.get("observe_only"):
+        prompt += ("\n\nOBSERVE-ONLY LINK CHECK: do not type, do not tap the page, do not download anything. Read the address bar and the page, use capture for what you see, "
+                   "then verdict, then done. Only the browser's own first-run or warning screens may be tapped (Use without an account, No thanks, Got it, Details, Back to safety).")
     if guard:
         prompt += (f"\n\nPOLICY: {guard_name} is open here. Its publisher bans accounts that use bots, so you must NOT tap, scroll or type in it"
                    + (" (that includes cloud-gaming pages in a browser)" if guard_name and not gamepolicy.blocked(fg) else "")
@@ -309,9 +312,20 @@ def act(state: State, config: RunnableConfig) -> dict:
     if refused:
         _emit(config, {"type": "result", "n": n, "outcome": refused["history"][-1].split("-> ", 1)[-1]})
         return refused
+    if c.get("observe_only"):  # a link check: the page is never typed into or tapped (only the browser's own first-run and warning screens)
+        why = cloudtools.observe_block(a, elements)
+        if why:
+            count = state.get("blocked", 0) + 1
+            out = {"history": state.get("history", []) + [f"{n}. {json.dumps({k: v for k, v in a.items() if k != 'text'})} -> error: {why}"], "blocked": count}
+            if count >= MAX_BLOCKS:
+                out.update(status="denied", answer="Observe-only link check: the agent does not type into or tap a suspicious page.")
+            _emit(config, {"type": "result", "n": n, "outcome": out["history"][-1].split("-> ", 1)[-1]})
+            return out
     t0 = time.time()
     try:
-        if a["type"] == "wait" and a.get("seconds") is not None:
+        if a["type"] in cloudtools.TOOLS:
+            info = cloudtools.run(c, state, a)
+        elif a["type"] == "wait" and a.get("seconds") is not None:
             secs = max(1, min(int(a["seconds"]), MAX_WAIT_S))
             end = time.time() + secs
             while time.time() < end and not c["cancel"].is_set():  # in small slices, so Stop works at once
@@ -363,7 +377,7 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
         handler: Callable[[dict], dict] | None = None, emit: Callable[[dict], None] | None = None,
         cancel: threading.Event | None = None, graph=None, pause: Callable[[], None] | None = None,
         image_mode: str | None = None, image_width: int | None = None, secrets=None,
-        steer: Callable[[], list[str]] | None = None, max_minutes: float = MAX_JOB_MINUTES) -> Result:
+        steer: Callable[[], list[str]] | None = None, max_minutes: float = MAX_JOB_MINUTES, artifacts=None, observe_only: bool = False) -> Result:
     """Run a goal to completion. Without a handler, the run stops at the first gate with status needs_approval."""
     w, h = device.size()
     image_mode, image_width = image_mode or IMAGE_MODE, image_width or IMAGE_WIDTH
@@ -377,7 +391,7 @@ def run(goal: str, device, model, max_steps: int = 15, trace_dir: str | Path | N
     config = {"recursion_limit": max_steps * 4 * 3 + 30, "configurable": {"deadline": time.time() + max_minutes * 60, "max_minutes": max_minutes,
         "thread_id": uuid.uuid4().hex, "device": device, "model": model, "size": (w, h), "settle": settle,
         "max_steps": max_steps, "trace": str(trace_dir) if trace_dir else None, "emit": fan_out,
-        "cancel": cancel or threading.Event(), "pause": pause, "steer": steer, "secrets": secrets, "image_mode": image_mode, "image_width": image_width,
+        "cancel": cancel or threading.Event(), "pause": pause, "steer": steer, "artifacts": artifacts or cloudtools.Artifacts(), "observe_only": observe_only, "secrets": secrets, "image_mode": image_mode, "image_width": image_width,
         "system": system_prompt(getattr(device, "has_play", True)).replace("WIDTHxHEIGHT", f"{image_width}x{round(h * image_width / w)}")}}
     graph = graph or build_graph()
     try:  # crashes before this task began do not count against it

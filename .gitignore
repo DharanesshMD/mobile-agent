@@ -38,3 +38,18 @@ android/**/build/
 .idea/
 .vscode/
 node_modules/
+
+# more secrets and personal data (belt and braces: none of these should ever be tracked)
+*.pem
+*.key
+vault.key
+state.json
+credentials*.json
+uploads/
+*.bak
+*.dmg
+*.pkg
+*.tar
+*.tar.gz
+*-backup-*/
+*-before.db

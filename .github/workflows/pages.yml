@@ -1,0 +1,47 @@
+# Publishes ONLY the replay player and its recorded sessions (web/replay.html + web/replay/) to GitHub Pages.
+# The app itself (web/index.html, agent/, data/) is never published. No secrets are used.
+# One-time owner step: Settings > Pages > Build and deployment > Source = "GitHub Actions".
+name: Publish replays
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/replay.html", "web/replay/**", "web/fonts/**", "scripts/export_replay.py", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check the sessions are masked and the pictures are small
+        run: |
+          python -m pip install --quiet pillow
+          python scripts/export_replay.py --check web/replay
+      - name: Assemble the site (replay page and sessions only)
+        run: |
+          mkdir -p _site
+          cp web/replay.html _site/index.html
+          cp -R web/replay _site/replay
+          cp -R web/fonts _site/fonts  # the same Geist fonts as the app (SIL OFL, licence file included)
+          # the page links to itself as "?s=<name>", so index.html works as the landing page
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

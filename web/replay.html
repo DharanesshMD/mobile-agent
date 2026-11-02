@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+<title>Mobile Agent replay</title>
+<style>
+  /* Same tokens and fonts as the app (web/index.html): the Switchboard. */
+  @font-face { font-family: "Geist"; src: url("fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+  @font-face { font-family: "Geist Mono"; src: url("fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+  :root {
+    color-scheme: dark;
+    --ink-0: #07080d; --ink-1: #0b0d14; --ink-2: #11141c; --ink-3: #1a1e28;
+    --line: #eef0f514; --line-2: #eef0f524;
+    --text: #eef0f5; --text-2: #a3a9b8; --text-3: #868ea1;
+    --amber: #f0a43a; --amber-ink: #1a1206; --amber-wash: #f0a43a1f; --amber-line: #f0a43a59;
+    --ok: #4cc38a; --bad: #ef6a70;
+    --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--ink-1); color: var(--text); font: 400 14px/1.5 var(--sans); display: flex; flex-direction: column; overflow: hidden; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums; }
+  a { color: var(--text); text-underline-offset: 3px; }
+  button { font: inherit; font-weight: 500; color: var(--text); background: var(--ink-3); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 12px; cursor: pointer; transition: background .15s var(--ease), border-color .15s var(--ease); }
+  button:hover:not(:disabled):not([aria-disabled="true"]) { background: #222735; border-color: #eef0f533; }
+  button[aria-disabled="true"] { opacity: .55; cursor: default; }
+  button.primary { background: var(--text); border-color: var(--text); color: var(--ink-1); }
+  button[aria-pressed="true"]:not(.primary) { border-color: var(--text); }
+  :focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  .banner { flex: none; background: var(--ink-2); color: var(--text-2); border-bottom: 1px solid var(--line); padding: 8px 20px; font: 400 12px var(--mono); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .banner::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex: none; }
+  .banner b { font-weight: 500; color: var(--text); } .banner a { margin-left: auto; color: var(--text-2); }
+
+  main { flex: 1; min-height: 0; }
+  .app { display: grid; grid-template-columns: 248px minmax(0, 1fr) clamp(380px, 32vw, 560px); height: 100%; }
+  .side { background: var(--ink-0); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; padding: 16px; gap: 12px; }
+  .side h1 { margin: 0; font-size: 15px; font-weight: 500; }
+  .tile { display: flex; gap: 12px; align-items: flex-start; background: var(--ink-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 12px; }
+  .av { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; font-weight: 500; flex: none; font-size: 13px; background: var(--ink-3) !important; border: 1px solid var(--line-2); color: var(--text-2); }
+  .tile .n { font-weight: 500; font-size: 14px; } .tile .p { color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+  .tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .tag { font: 400 12px var(--mono); padding: 0; color: var(--text-2); display: inline-flex; align-items: center; gap: 8px; }
+  .tag::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex: none; }
+  .tag.emulator::before, .tag.games::before, .tag.phone::before { background: var(--amber); }
+
+  .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .chat header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); min-height: 57px; }
+  .chat header .t { font-weight: 500; font-size: 15px; } .pill { font: 400 12px var(--mono); color: var(--text-3); }
+  .feed { flex: 1; overflow-y: auto; padding: 24px max(20px, calc((100% - 720px) / 2)); display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .m { max-width: min(640px, 86%); overflow-wrap: anywhere; white-space: pre-wrap; font-size: 15px; line-height: 1.6; }
+  .m.bot { align-self: flex-start; padding: 0 4px; }
+  .m.user { align-self: flex-end; background: var(--ink-3); border: 1px solid var(--line-2); padding: 8px 16px; border-radius: 14px 14px 4px 14px; }
+  .m img { display: block; max-width: 220px; width: 100%; border-radius: 10px; margin-bottom: 8px; }
+  .note { align-self: flex-start; max-width: 90%; color: var(--text-3); font: 400 12px/1.6 var(--mono); overflow-wrap: anywhere; }
+  .note::before { content: "\2192  "; }
+  /* an approval is an amber slip */
+  .card { align-self: flex-start; max-width: min(520px, 92%); background: var(--ink-2); border: 1px solid var(--amber-line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .card.alert { background: var(--ink-2); }
+  .card.done { border-color: var(--line-2); }
+  .card .k { display: flex; align-items: center; gap: 8px; font: 500 12px var(--mono); color: var(--amber); }
+  .card .k::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 2px var(--amber); flex: none; }
+  .card.done .k { color: var(--ok); } .card.done .k::before { background: var(--ok); box-shadow: none; }
+  .card .q { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; }
+  .card .opts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .card .ans { color: var(--text-2); font-size: 13px; } .card .wait { color: var(--text-3); font: 400 12px var(--mono); }
+  .status { flex: none; min-height: 32px; padding: 4px max(20px, calc((100% - 720px) / 2)) 8px; color: var(--text-2); font: 400 12px var(--mono); display: flex; gap: 12px; align-items: center; }
+  .status .dots { display: inline-flex; gap: 4px; } .status .dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); animation: lamp 2s var(--ease) infinite; }
+  .status .dots i:nth-child(n+2) { display: none; }
+  @keyframes lamp { 50% { opacity: .4; } }
+  @media (prefers-reduced-motion: reduce) { .status .dots i { animation: none; } }
+
+  .ctl { flex: none; border-top: 1px solid var(--line); padding: 12px 20px; display: grid; gap: 8px; background: var(--ink-0); }
+  .ctl .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .ctl input[type=range] { flex: 1; min-width: 120px; accent-color: var(--text); }
+  .ctl .time { font: 400 12px var(--mono); color: var(--text-2); min-width: 96px; text-align: right; }
+  .ctl .hint { color: var(--text-3); font: 400 12px var(--mono); }
+
+  /* the phone: a lit device, shaped like the picture it shows */
+  .phone { border-left: 1px solid var(--line); background: var(--ink-0); padding: 20px; display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow-y: auto; align-items: center; }
+  .phone .head { display: flex; gap: 12px; align-items: center; width: 100%; justify-content: space-between; }
+  .frame { width: 100%; max-width: 220px; aspect-ratio: 9 / 19.5; background: #000; border: 8px solid #000; box-shadow: 0 0 0 1px var(--line-2), 0 16px 32px #000a; border-radius: 28px; overflow: hidden; display: grid; place-items: center; }
+  .frame.land { max-width: 100%; }
+  .frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .frame .empty { color: var(--text-3); font: 400 12px var(--mono); padding: 16px; text-align: center; }
+  .cap { width: 100%; font-size: 13px; display: grid; gap: 8px; } .cap .a { font-weight: 500; overflow-wrap: anywhere; } .cap .th { color: var(--text-2); overflow-wrap: anywhere; } .cap .goal { color: var(--text-3); font: 400 12px var(--mono); overflow-wrap: anywhere; }
+
+  .landing { max-width: 760px; margin: 0 auto; padding: 32px 20px; overflow-y: auto; height: 100%; }
+  .landing h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.15; letter-spacing: -0.02em; font-weight: 500; } .landing p { color: var(--text-2); margin: 0 0 24px; font-size: 15px; }
+  .sess { display: block; text-decoration: none; color: inherit; background: var(--ink-2); border: 1px solid var(--line-2); border-radius: 14px; padding: 16px; margin-bottom: 12px; transition: border-color .15s var(--ease); }
+  .sess:hover, .sess:focus-visible { border-color: #eef0f550; }
+  .sess .t { font-weight: 500; font-size: 15px; } .sess .meta { color: var(--text-3); font: 400 12px var(--mono); margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+  .err { padding: 24px 20px; color: var(--bad); max-width: 640px; margin: 0 auto; }
+
+  @media (max-width: 900px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+    .side { display: none; }
+    .phone { order: -1; border-left: 0; border-bottom: 1px solid var(--line); flex-direction: row; align-items: center; gap: 12px; padding: 8px 12px; overflow: hidden; }
+    .phone .head { width: auto; flex-direction: column; align-items: flex-start; }
+    .frame { width: auto; height: 28vh; max-width: none; border-width: 4px; border-radius: 18px; flex: none; }
+    .frame.land { height: auto; width: 46vw; }
+    .cap { font-size: 12px; min-width: 0; flex: 1; overflow: hidden; max-height: 28vh; }
+    .m { max-width: 92%; } .ctl { padding: 8px 12px; } .ctl .hint { display: none; } .feed { padding: 16px 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="banner" role="note"><b>Replay of a recorded session</b><span>no live phone, no model calls, no keys.</span><a id="all" href="?">All replays</a></div>
+<main id="root"></main>
+<script>
+"use strict";
+const root = document.getElementById("root");
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const SAFE = /^(?!\.)[A-Za-z0-9._-]+$/, SAFE_IMG = /^img\/[A-Za-z0-9._-]+\.jpg$/;
+const PHONE_NAMES = { emulator: "Cloud phone", games: "Cloud phone 2", phone: "Your phone" };
+const phoneName = (t) => PHONE_NAMES[t] || String(t || "phone");
+const fmt = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+const params = new URLSearchParams(location.search), wanted = params.get("s");
+
+async function getJSON(url) {
+  const r = await fetch(url, { cache: "no-cache" });
+  if (!r.ok) throw new Error(url + " (" + r.status + ")");
+  return r.json();
+}
+function fail(msg) { root.replaceChildren(Object.assign(el("div", "err", msg), { role: "alert" })); }
+
+function tagEl(t) { return el("span", "tag " + String(t).replace(/[^a-z0-9_-]/gi, ""), phoneName(t)); }
+
+async function landing() {
+  document.getElementById("all").hidden = true;
+  const idx = await getJSON("replay/index.json");
+  const box = el("div", "landing");
+  box.append(el("h1", "", "Mobile Agent replays"), el("p", "", "Recorded sessions of the agent working on its phones. Pick one to watch it play back, with the chat on the left and the phone on the right."));
+  if (!idx.sessions.length) box.append(el("p", "", "No sessions have been published yet."));
+  for (const s of idx.sessions) {
+    if (!SAFE.test(s.name)) continue;
+    const a = el("a", "sess"); a.href = "?s=" + encodeURIComponent(s.name);
+    a.append(el("div", "t", s.title));
+    const meta = el("div", "meta", fmt(s.duration_ms) + " · " + s.steps + " phone steps");
+    for (const p of s.phones || []) meta.append(tagEl(p));
+    if (s.synthetic) meta.append(el("span", "tag", "synthetic demo"));
+    a.append(meta); box.append(a);
+  }
+  root.replaceChildren(box);
+}
+
+async function player(name) {
+  if (!SAFE.test(name)) throw new Error("That is not a valid session name.");
+  const sess = await getJSON("replay/" + name + "/session.json");
+  if (sess.version !== 1 || !Array.isArray(sess.events)) throw new Error("This session file has an unknown format.");
+  document.title = sess.title + " · Mobile Agent replay";
+  const events = sess.events, dur = Math.max(1000, sess.duration_ms || 0);
+
+  // layout
+  const app = el("div", "app");
+  const side = el("aside", "side"); side.setAttribute("aria-label", "Session");
+  side.append(el("h1", "", "Replay"));
+  const tile = el("div", "tile"), av = el("div", "av", (sess.bot.name || "?").slice(0, 1).toUpperCase());
+  av.style.background = /^#[0-9a-f]{6}$/i.test(sess.bot.color || "") ? sess.bot.color : "#4c9aff";
+  const tt = el("div"); tt.append(el("div", "n", sess.bot.name), el("div", "p", sess.title));
+  const tags = el("div", "tags"); for (const p of sess.phones || []) tags.append(tagEl(p)); if (sess.synthetic) tags.append(el("span", "tag", "synthetic demo")); tt.append(tags);
+  tile.append(av, tt); side.append(tile);
+  const back = el("a", "", "All replays"); back.href = "?"; side.append(back);
+
+  const chat = el("section", "chat"); chat.setAttribute("aria-label", "Chat replay");
+  const head = el("header"); head.append(el("span", "t", sess.bot.name), el("span", "pill", "Replay"));
+  const feed = el("div", "feed"); feed.setAttribute("role", "log"); feed.setAttribute("aria-label", "Chat"); feed.tabIndex = 0;
+  const status = el("div", "status"); status.setAttribute("aria-live", "off");
+  const ctl = el("div", "ctl"); ctl.setAttribute("role", "group"); ctl.setAttribute("aria-label", "Playback");
+  const r1 = el("div", "row"), r2 = el("div", "row");
+  const play = el("button", "primary", "Play"), restart = el("button", "", "Restart"), scrub = el("input"), time = el("span", "time", "0:00 / " + fmt(dur));
+  play.type = restart.type = "button"; play.setAttribute("aria-label", "Play or pause");
+  scrub.type = "range"; scrub.min = 0; scrub.max = dur; scrub.step = 100; scrub.value = 0; scrub.setAttribute("aria-label", "Position in the replay");
+  r1.append(play, restart, scrub, time);
+  const speedBtns = [1, 2, 4].map((x) => { const b = el("button", "", x + "x"); b.type = "button"; b.setAttribute("aria-label", "Speed " + x + " times"); b.dataset.speed = x; return b; });
+  r2.append(el("span", "hint", "Speed"), ...speedBtns, el("span", "hint", "Keys: Space play/pause, ←/→ 5 s, 1 2 4 speed, R restart"));
+  ctl.append(r1, r2);
+  chat.append(head, feed, status, ctl);
+
+  const phone = el("aside", "phone"); phone.setAttribute("aria-label", "Phone screen");
+  const ph = el("div", "head"), phTag = el("span", "tag"), phStep = el("span", "pill", "waiting");
+  ph.append(phTag, phStep);
+  const frame = el("div", "frame"), empty = el("div", "empty", "Waiting for the phone…"), shot = el("img"); shot.alt = "The phone screen at this step"; shot.hidden = true;
+  shot.onload = () => { if (shot.naturalWidth) { frame.style.aspectRatio = shot.naturalWidth + " / " + shot.naturalHeight; frame.classList.toggle("land", shot.naturalWidth > shot.naturalHeight); } };
+  frame.append(empty, shot);
+  const cap = el("div", "cap"), capA = el("div", "a"), capT = el("div", "th"), capG = el("div", "goal"); cap.append(capA, capT, capG);
+  phone.append(ph, frame, cap);
+  app.append(side, chat, phone);
+  root.replaceChildren(app);
+  phTag.hidden = true;
+
+  // state derived from time
+  let t = 0, shown = 0, playing = false, speed = 1, last = 0;
+  const cards = new Map(), jobs = new Map();
+  const near = () => feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+
+  function reset() { feed.replaceChildren(); cards.clear(); jobs.clear(); shown = 0; status.replaceChildren(); shot.hidden = true; empty.hidden = false; phTag.hidden = true; phStep.textContent = "waiting"; capA.textContent = capT.textContent = capG.textContent = ""; }
+
+  function cardEl(e) {
+    const c = e.card, box = el("div", "card"), k = { confirm: "Needs your OK", choice: "Your choice", handoff: "Your turn on the phone", text: "Needs your input", need_info: "Needs your input", secret: "Secret input", otp: "One-time code" }[c.kind] || "Needs you";
+    box.append(el("div", "k", k), el("div", "q", c.question));
+    if (c.kind === "confirm") c.options = c.options && c.options.length ? c.options : ["Approve", "Deny"];
+    if (c.kind === "handoff") c.options = ["I'm done"];
+    if (c.options && c.options.length) { const o = el("div", "opts"); for (const x of c.options) { const b = el("button", "", x); b.type = "button"; b.setAttribute("aria-disabled", "true"); b.tabIndex = -1; o.append(b); } box.append(o); }
+    if (["secret", "otp", "text", "need_info"].includes(c.kind)) { const i = el("div", "wait", c.kind === "secret" || c.kind === "otp" ? "(hidden input, never recorded)" : "(typed answer)"); box.append(i); }
+    box.append(el("div", "wait", "Read-only in a replay"));
+    cards.set(c.id, box);
+    return box;
+  }
+  function apply(e) {
+    if (e.type === "message") {
+      let node;
+      if (e.card) node = cardEl(e);
+      else if (e.kind === "alert") { node = el("div", "card alert"); node.append(el("div", "k", "Needs attention"), el("div", "q", e.text)); }
+      else if (e.kind === "bot_note") node = el("div", "note", e.text);
+      else {
+        node = el("div", "m " + (e.role === "user" ? "user" : "bot"));
+        for (const im of e.images || []) if (SAFE_IMG.test(im.src)) { const i = el("img"); i.src = "replay/" + name + "/" + im.src; i.alt = im.hidden ? "A picture the owner attached (hidden in this replay)" : "A picture the owner attached"; node.append(i); }
+        if (e.text) node.append(document.createTextNode(e.text));
+      }
+      const stick = near(); feed.append(node); if (stick) feed.scrollTop = feed.scrollHeight;
+    } else if (e.type === "card") {
+      const box = cards.get(e.id); if (!box) return;
+      box.classList.add("done"); box.querySelector(".k").textContent = "Answered";
+      box.querySelectorAll(".wait").forEach((w) => w.remove());
+      box.querySelectorAll("button").forEach((b) => b.remove()); box.querySelectorAll(".opts").forEach((o) => o.remove());
+      box.append(el("div", "ans", e.answer || ""));
+    } else if (e.type === "job") {
+      if (e.status === "running") { jobs.set(e.job, { goal: e.goal, phone: e.phone, n: 0, thought: "" }); capG.textContent = "Task: " + e.goal; phTag.className = "tag " + String(e.phone).replace(/[^a-z0-9_-]/gi, ""); phTag.textContent = phoneName(e.phone); phTag.hidden = false; phStep.textContent = "working"; }
+      else { jobs.delete(e.job); phStep.textContent = "task " + e.status; if (e.result) capT.textContent = e.result; }
+    } else if (e.type === "step") {
+      const j = jobs.get(e.job); if (j) { j.n = e.n; j.thought = e.thought; }
+      if (e.shot && SAFE_IMG.test(e.shot)) { shot.src = "replay/" + name + "/" + e.shot; shot.hidden = false; empty.hidden = true; }
+      phTag.className = "tag " + String(e.phone).replace(/[^a-z0-9_-]/gi, ""); phTag.textContent = phoneName(e.phone); phTag.hidden = false;
+      phStep.textContent = "step " + e.n; capA.textContent = e.caption; capT.textContent = e.thought;
+    }
+  }
+  function paintStatus() {
+    status.replaceChildren();
+    const j = [...jobs.values()].pop(); if (!j) return;
+    const d = el("span", "dots"); d.append(el("i"), el("i"), el("i"));
+    status.append(d, el("span", "", "Working on the " + phoneName(j.phone).toLowerCase() + (j.n ? " · step " + j.n + ": " + j.thought : "…")));
+  }
+  function render() {
+    let k = 0; while (k < events.length && events[k].t <= t) k++;
+    if (k < shown) reset();
+    while (shown < k) apply(events[shown++]);
+    paintStatus();
+    scrub.value = t; time.textContent = fmt(t) + " / " + fmt(dur); scrub.setAttribute("aria-valuetext", fmt(t) + " of " + fmt(dur));
+  }
+  function setPlaying(on) { playing = on; play.textContent = on ? "Pause" : (t >= dur ? "Replay" : "Play"); play.setAttribute("aria-pressed", on ? "true" : "false"); if (on) { last = performance.now(); requestAnimationFrame(tick); } }
+  function tick(now) {
+    if (!playing) return;
+    t = Math.min(dur, t + (now - last) * speed); last = now; render();
+    if (t >= dur) { setPlaying(false); return; }
+    requestAnimationFrame(tick);
+  }
+  function setSpeed(x) { speed = x; speedBtns.forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.speed) === x))); }
+  function seek(ms) { t = Math.max(0, Math.min(dur, ms)); render(); if (!playing) play.textContent = t >= dur ? "Replay" : "Play"; }
+
+  play.onclick = () => { if (!playing && t >= dur) t = 0; setPlaying(!playing); };
+  restart.onclick = () => { t = 0; render(); setPlaying(true); };
+  scrub.oninput = () => seek(Number(scrub.value));
+  speedBtns.forEach((b) => (b.onclick = () => setSpeed(Number(b.dataset.speed))));
+  document.addEventListener("keydown", (ev) => {
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    const tag = ev.target && ev.target.tagName, onRange = ev.target === scrub;
+    if (tag === "BUTTON" || tag === "A") return;  // buttons and links keep their own keys
+    if (ev.key === " " && !onRange) { ev.preventDefault(); play.click(); }
+    else if (ev.key === " " && onRange) { ev.preventDefault(); play.click(); }
+    else if (ev.key === "ArrowRight" && !onRange) { ev.preventDefault(); seek(t + 5000); }
+    else if (ev.key === "ArrowLeft" && !onRange) { ev.preventDefault(); seek(t - 5000); }
+    else if (ev.key === "1" || ev.key === "2" || ev.key === "4") setSpeed(Number(ev.key));
+    else if (ev.key === "r" || ev.key === "R") restart.click();
+  });
+  setSpeed(1); setPlaying(false); render();
+  window.__replay = { seek, play: () => setPlaying(true), pause: () => setPlaying(false), setSpeed, state: () => ({ t, playing, speed, shown, total: events.length }) };
+}
+
+(async () => {
+  try {
+    if (location.protocol === "file:") throw new Error("Open this page through a web server (for example: python3 -m http.server in the web folder). Browsers block reading the session files from file://.");
+    if (wanted) await player(wanted); else await landing();
+  } catch (e) { fail("Could not load the replay: " + e.message); }
+})();
+</script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-"""The games phone: Android 13 arm64 in a Redroid container inside a Lima VM, controlled over adb at localhost:5565.
+"""Cloud phone 2: Android 13 arm64 in a Redroid container inside a Lima VM, controlled over adb at localhost:5565.
 
 `LimaRedroidBackend` has the same methods `Lifecycle` uses on `EmulatorBackend`, so the sleep and wake policy, the health watch and the UI work unchanged.
 Sleep is `docker pause` (about 0.2 s, adb carries on afterwards), stop shuts the container AND the Lima VM down (frees about 1-2 GB of the Mac's RAM;

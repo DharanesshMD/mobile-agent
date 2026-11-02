@@ -289,7 +289,7 @@ class Card(unittest.TestCase):
         c.post(f"/api/items/{first['meta']['item_id']}/answer", json={"choice": "EasyFun.gg"})
         until(lambda: web_card(c, bot)["meta"]["item_id"] != first["meta"]["item_id"])
         second = web_card(c, bot)
-        self.assertEqual(second["meta"]["options"][:2], ["Show me the link", "Open it on the emulator"])
+        self.assertEqual(second["meta"]["options"][:2], ["Show me the link", "Open it on Cloud phone"])
         c.post(f"/api/items/{second['meta']['item_id']}/answer", json={"choice": "Show me the link"})
         until(lambda: any("https://www.easyfun.gg/games/clashofclans" in t and "Unofficial third party" in t for t in texts(c, bot, "assistant")))
         self.assertEqual(opened, [])
@@ -302,7 +302,7 @@ class Card(unittest.TestCase):
         c.post(f"/api/items/{first['meta']['item_id']}/answer", json={"choice": "EasyFun.gg"})
         until(lambda: web_card(c, bot)["meta"]["item_id"] != first["meta"]["item_id"])
         second = web_card(c, bot)
-        c.post(f"/api/items/{second['meta']['item_id']}/answer", json={"choice": "Open it on the emulator"})
+        c.post(f"/api/items/{second['meta']['item_id']}/answer", json={"choice": "Open it on Cloud phone"})
         until(lambda: opened == ["https://www.easyfun.gg/games/clashofclans"])
         until(lambda: any(m["kind"] == "action_item" and m["meta"]["kind"] == "handoff" for m in c.get(f"/api/bots/{bot}/state").json()["messages"]))
         handoff = [m for m in c.get(f"/api/bots/{bot}/state").json()["messages"] if m["meta"].get("kind") == "handoff"][0]

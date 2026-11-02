@@ -26,8 +26,9 @@ class PhoneOffline(ConnectionError):
 
 class Link:
     """One connected phone."""
-    def __init__(self, ws, phone_id: str, info: dict):
-        self.ws, self.id, self.info = ws, phone_id, info
+    def __init__(self, ws, phone_id: str, info: dict, via: str = "local"):
+        self.ws, self.id, self.info, self.via = ws, phone_id, info, via  # via: "local" (the main app) or "gateway" (the LAN gateway the QR flow opens)
+        self.loop: asyncio.AbstractEventLoop | None = None  # the loop that owns this socket: two servers (main and gateway) run their own loops
         self.pending: dict[int, asyncio.Future] = {}
         self.counter = 0
         self.since = time.time()
@@ -73,14 +74,23 @@ class PhoneHub:
         return max(self.links.values(), key=lambda link: link.since).id if self.links else None
 
     def listing(self) -> list[dict]:
-        return [{"id": link.id, **{k: link.info.get(k) for k in ("name", "model", "sdk", "size")}, "since": link.since} for link in self.links.values()]
+        return [{"id": link.id, **{k: link.info.get(k) for k in ("name", "model", "sdk", "size")}, "since": link.since, "via": link.via} for link in self.links.values()]
 
-    async def serve(self, ws, phone_id: str) -> None:
+    def kick(self, phone_id: str) -> bool:
+        """Close one phone's socket (it was revoked, or the owner disconnected it)."""
+        link = self.links.get(phone_id)
+        if link is None or link.loop is None:
+            return False
+        asyncio.run_coroutine_threadsafe(link.ws.close(code=1000), link.loop)
+        return True
+
+    async def serve(self, ws, phone_id: str, via: str = "local") -> None:
         """Run the socket of one phone until it closes."""
         await ws.accept()
         self.loop = asyncio.get_running_loop()
         hello = await asyncio.wait_for(ws.receive_json(), 15)
-        link = Link(ws, phone_id, hello if hello.get("type") == "hello" else {})
+        link = Link(ws, phone_id, hello if hello.get("type") == "hello" else {}, via)
+        link.loop = self.loop
         with self._lock:
             old = self.links.get(phone_id)
             self.links[phone_id] = link
@@ -113,9 +123,10 @@ class PhoneHub:
         while phone_id not in self.links and time.time() < end:
             time.sleep(0.25)
         link = self.links.get(phone_id)
-        if link is None or self.loop is None:
+        loop = (link.loop if link else None) or self.loop
+        if link is None or loop is None:
             raise PhoneOffline("the phone is offline: open the Mobile Agent app on it")
-        fut = asyncio.run_coroutine_threadsafe(link.request(op, args or {}), self.loop)
+        fut = asyncio.run_coroutine_threadsafe(link.request(op, args or {}), loop)
         try:
             return fut.result(timeout)
         except TimeoutError:  # concurrent.futures.TimeoutError is TimeoutError since Python 3.11

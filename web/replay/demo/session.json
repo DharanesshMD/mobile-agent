@@ -1,0 +1,177 @@
+{
+ "bot": {
+  "color": "#4c9aff",
+  "kind": "bot",
+  "name": "Demo assistant"
+ },
+ "duration_ms": 75000,
+ "events": [
+  {
+   "id": 1,
+   "kind": "text",
+   "role": "user",
+   "t": 0,
+   "text": "open the sample game and tell me what you see",
+   "type": "message"
+  },
+  {
+   "id": 2,
+   "kind": "text",
+   "role": "assistant",
+   "t": 2000,
+   "text": "On it. I'll open the sample game and report back.",
+   "type": "message"
+  },
+  {
+   "goal": "Open the sample game on the emulator and report what it shows",
+   "job": "job-emu",
+   "phone": "emulator",
+   "status": "running",
+   "t": 3000,
+   "type": "job"
+  },
+  {
+   "caption": "look for “sample game”",
+   "job": "job-emu",
+   "n": 1,
+   "phone": "emulator",
+   "shot": "img/demo-job-emu-01.jpg",
+   "t": 6100,
+   "thought": "Opening the app list to find the game.",
+   "type": "step"
+  },
+  {
+   "caption": "open example.samplegame",
+   "job": "job-emu",
+   "n": 2,
+   "phone": "emulator",
+   "shot": "img/demo-job-emu-02.jpg",
+   "t": 10300,
+   "thought": "Found it, opening the app.",
+   "type": "step"
+  },
+  {
+   "caption": "tap (300, 740)",
+   "job": "job-emu",
+   "n": 3,
+   "phone": "emulator",
+   "shot": "img/demo-job-emu-03.jpg",
+   "t": 14500,
+   "thought": "The app shows a crash dialog; closing it and trying once more.",
+   "type": "step"
+  },
+  {
+   "caption": "stopped: App keeps crashing: example.samplegame crashed 3 times while opening",
+   "job": "job-emu",
+   "n": 4,
+   "phone": "emulator",
+   "shot": "img/demo-job-emu-04.jpg",
+   "t": 18700,
+   "thought": "It crashed 3 times, so I'm stopping.",
+   "type": "step"
+  },
+  {
+   "job": "job-emu",
+   "phone": "emulator",
+   "result": "App keeps crashing: example.samplegame crashed 3 times while opening",
+   "status": "failed",
+   "t": 26700,
+   "type": "job"
+  },
+  {
+   "goal": "Open the sample game on Cloud phone 2 and report what it shows",
+   "job": "job-games",
+   "phone": "games",
+   "status": "running",
+   "t": 30700,
+   "type": "job"
+  },
+  {
+   "caption": "open example.samplegame",
+   "job": "job-games",
+   "n": 1,
+   "phone": "games",
+   "shot": "img/demo-job-games-01.jpg",
+   "t": 33800,
+   "thought": "Opening the game on Cloud phone 2.",
+   "type": "step"
+  },
+  {
+   "caption": "done: The start screen with a Play button is showing; nothing was tapped.",
+   "job": "job-games",
+   "n": 2,
+   "phone": "games",
+   "shot": "img/demo-job-games-02.jpg",
+   "t": 38000,
+   "thought": "It stayed up and shows its start screen with a Play button.",
+   "type": "step"
+  },
+  {
+   "job": "job-games",
+   "phone": "games",
+   "result": "The start screen with a Play button is showing; nothing was tapped.",
+   "status": "done",
+   "t": 46000,
+   "type": "job"
+  },
+  {
+   "id": 3,
+   "kind": "text",
+   "role": "assistant",
+   "t": 48000,
+   "text": "The sample game keeps stopping on the shared emulator (3 crashes), so I moved it to Cloud phone 2 and opened it there. It shows its start screen; I did not play it.",
+   "type": "message"
+  },
+  {
+   "id": 4,
+   "kind": "text",
+   "role": "user",
+   "t": 56000,
+   "text": "now play it for me",
+   "type": "message"
+  },
+  {
+   "id": 5,
+   "kind": "text",
+   "role": "assistant",
+   "t": 59000,
+   "text": "I won't play this one for you: automated play can get your account banned. I can keep it open, and you can use Take control to play it yourself.",
+   "type": "message"
+  },
+  {
+   "card": {
+    "id": "card01",
+    "kind": "choice",
+    "options": [
+     "Open it",
+     "Show me the link",
+     "None, I'll decide later"
+    ],
+    "question": "Open the walkthrough site on the emulator?",
+    "status": "open"
+   },
+   "id": 6,
+   "kind": "action_item",
+   "role": "assistant",
+   "t": 67000,
+   "text": "Open the walkthrough site on the emulator?",
+   "type": "message"
+  },
+  {
+   "answer": "Show me the link",
+   "id": "card01",
+   "status": "answered",
+   "t": 75000,
+   "type": "card"
+  }
+ ],
+ "name": "demo",
+ "phones": [
+  "emulator",
+  "games"
+ ],
+ "steps": 6,
+ "synthetic": true,
+ "title": "Synthetic demo: an app that crashes on the emulator and runs on Cloud phone 2",
+ "version": 1
+}

@@ -13,8 +13,9 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent import images, sensitive
+from agent import apkcheck, images, sensitive
 from agent.config import TRANSCRIBE_MODEL
+from agent.master import DEFAULT_ASSISTANT_PERSONA
 
 
 MAX_AUDIO_BYTES = 20 * 1024 * 1024  # 10 minutes of 16 kHz mono 16-bit audio is about 19 MB
@@ -116,14 +117,15 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         job_ids = db.job_ids(bot_id)
         for path in db.delete_bot(bot_id):
             Path(path).unlink(missing_ok=True)
+            Path(path).with_suffix(".md").unlink(missing_ok=True)  # a report is an HTML page with a Markdown twin
         for jid in job_ids:  # screenshots and prompts of its tasks
             shutil.rmtree(Path(jobs.data_dir) / "runs" / jid, ignore_errors=True)
         erased = vault.erase_all() if erase_secrets else 0
-        fresh = db.create_bot("Assistant", "") if last else None
+        fresh = db.create_bot("Assistant", DEFAULT_ASSISTANT_PERSONA) if last else None
         return {"ok": True, "bot": fresh, "erased_secrets": erased}
 
     def own_lane(bot_id: str) -> str:
-        """The Mobile panel of the games phone's bot shows that phone; every other bot shows the shared emulator (a real phone's panel uses the phone list)."""
+        """The Mobile panel of Cloud phone 2's bot shows that phone; every other bot shows the shared emulator (a real phone's panel uses the phone list)."""
         lane = jobs.lane_of(bot_id)
         return lane if lane.startswith("virtual:") else ""
 
@@ -178,6 +180,50 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         row = db.add_attachment(bot_id, mime, str(path), w, h, len(out), aid)
         return {"id": row["id"], "w": w, "h": h, "mime": mime, "bytes": len(out)}
 
+    @app.post("/api/bots/{bot_id}/apk", dependencies=[Depends(auth)])
+    async def upload_apk(bot_id: str, request: Request, name: str = Query(default="app.apk", max_length=120)):
+        """An APK to check (the body is the file). Only stored: it is read with the SDK's static tools and installed on a throwaway cloud phone, never run on this computer
+        and never put on the owner's own phone. The name is only shown; the file is stored under a generated one."""
+        bot_or_404(bot_id)
+        now = time.time()
+        recent = upload_times.setdefault("apk:" + bot_id, deque())
+        while recent and now - recent[0] > 60:
+            recent.popleft()
+        if len(recent) >= 5:
+            raise HTTPException(429, "Too many files in a minute. Wait a moment and try again.")
+        recent.append(now)
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            declared = 0
+        if declared > apkcheck.MAX_APK_BYTES + 4096:
+            raise HTTPException(413, f"That file is too big. The limit is {apkcheck.MAX_APK_BYTES // 1024 // 1024} MB.")
+        for row in db.stale_attachments(3600):
+            drop_attachment(row)
+        if db.unattached_count(bot_id) >= 2 * images.MAX_PER_MESSAGE:
+            raise HTTPException(409, "Too many files are waiting to be sent. Send them or remove some first.")
+        aid = uuid.uuid4().hex[:12]
+        uploads.mkdir(parents=True, exist_ok=True)
+        path = uploads / f"{aid}.apk"
+        size = 0
+        try:
+            with open(path, "wb") as f:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > apkcheck.MAX_APK_BYTES:
+                        raise HTTPException(413, f"That file is too big. The limit is {apkcheck.MAX_APK_BYTES // 1024 // 1024} MB.")
+                    f.write(chunk)
+            try:
+                apkcheck.looks_like_apk(path)
+            except apkcheck.ApkError as e:
+                raise HTTPException(400, str(e)) from e
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
+        clean = re.sub(r"[^A-Za-z0-9._ \-]", "_", Path(name).name)[:80] or "app.apk"
+        row = db.add_attachment(bot_id, apkcheck.APK_MIME, str(path), 0, 0, size, aid, clean)
+        return {"id": row["id"], "name": clean, "bytes": size, "kind": "apk"}
+
     @app.get("/api/attachments/{attachment_id}/file", dependencies=[Depends(auth)])
     def attachment_file(attachment_id: str):
         row = db.get_attachment(attachment_id)
@@ -208,12 +254,13 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         text, kinds = sensitive.redact(body.text.strip())  # secrets never reach the log or a model
         meta = {"sensitive": kinds} if kinds else {}
         if pics:
-            meta["attachments"] = [{"id": a["id"], "w": a["w"], "h": a["h"]} for a in pics]
-        first_picture = bool(pics) and not db.attachment_notice_sent(bot_id)
+            meta["attachments"] = [{"id": a["id"], "kind": "apk", "name": a["name"], "bytes": a["bytes"]} if a["mime"] == apkcheck.APK_MIME else {"id": a["id"], "w": a["w"], "h": a["h"]} for a in pics]
+        first_picture = any(a["mime"] != apkcheck.APK_MIME for a in pics) and not db.attachment_notice_sent(bot_id)
         if first_picture:  # said once per chat, before the picture goes anywhere
             orch.post(bot_id, "Pictures you attach are sent to the model provider, the same as your messages. Avoid photos of cards, IDs or other private documents.",
                       "bot_note", {"notice": "image-privacy"})
-        msg = db.add_message(bot_id, "user", "text", text or images.IMAGE_ONLY, meta or None)
+        only_apk = pics and all(a["mime"] == apkcheck.APK_MIME for a in pics)
+        msg = db.add_message(bot_id, "user", "text", text or (f"APK: {pics[0]['name']}" if only_apk else images.IMAGE_ONLY), meta or None)
         db.attach([a["id"] for a in pics], msg["id"])
         hub.publish(bot_id, {"type": "message", "message": msg})
         if kinds:  # offer a secure input for what was hidden, so the owner never has to paste it in chat again
@@ -334,10 +381,22 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         item = db.get_library(lib_id)
         if not item:
             raise HTTPException(404, "unknown item")
+        if item.get("kind") == "report":  # a generated page: no scripts, nothing from outside, and not allowed to do anything else even if opened on its own
+            return FileResponse(item["path"], media_type="text/html; charset=utf-8", headers={
+                "Cache-Control": "private, max-age=3600", "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+                "X-Content-Type-Options": "nosniff"})
         return FileResponse(item["path"], media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
+    @app.get("/api/library/{lib_id}/md", dependencies=[Depends(auth)])
+    def library_md(lib_id: str):
+        item = db.get_library(lib_id)
+        md = Path(item["path"]).with_suffix(".md") if item and item.get("kind") == "report" else None
+        if not md or not md.exists():
+            raise HTTPException(404, "no Markdown version")
+        return FileResponse(md, media_type="text/markdown; charset=utf-8", headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
     def phone_lane(phone: str | None) -> str:
-        """`?phone=games` selects the games phone; no value is the shared emulator."""
+        """`?phone=games` selects Cloud phone 2; no value is the shared emulator."""
         if not phone:
             return ""
         lane = f"virtual:{phone}"

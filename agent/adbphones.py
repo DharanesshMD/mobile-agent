@@ -1,8 +1,8 @@
 """Extra adb phones: any adb endpoint the owner manages (a real phone over USB debugging, BlueStacks with adb enabled, a cloud phone).
 
 Configured as `ADB_PHONES="name=serial,name=serial"` (environment) or in `data/phones.json` (`{"name": "serial"}`). Each one that answers `adb -s <serial> get-state`
-gets its own bot, lane and live view, like the games phone, but no power management: it is always on while adb reaches it, and a job on a phone that has gone offline fails
-honestly. The serial is always named in every adb call, and a serial that would clash with the shared emulator or the games phone is refused.
+gets its own bot, lane and live view, like Cloud phone 2, but no power management: it is always on while adb reaches it, and a job on a phone that has gone offline fails
+honestly. The serial is always named in every adb call, and a serial that would clash with the shared emulator or Cloud phone 2 is refused.
 """
 import json
 import os
@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 RESERVED_NAMES = {"games", "emulator", "master", "phone", "shared", "default", "main"}
-CLASHING_SERIALS = {"emulator-5554", "localhost:5565", "127.0.0.1:5565", "[::1]:5565"}  # the shared emulator and the games phone
+CLASHING_SERIALS = {"emulator-5554", "localhost:5565", "127.0.0.1:5565", "[::1]:5565"}  # the shared emulator and Cloud phone 2
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,19}$")
 SERIAL_RE = re.compile(r"^[\w.:\[\]-]{3,60}$")
 STATE_TTL = 10  # seconds a get-state answer is reused: the bot list is polled every few seconds
@@ -34,7 +34,7 @@ def parse_adb_phones(spec: str | dict | None) -> tuple[dict[str, str], list[str]
         elif not SERIAL_RE.match(serial):
             problems.append(f"'{name}': '{serial}' is not an adb serial")
         elif serial.lower() in CLASHING_SERIALS or serial.lower().startswith("emulator-"):
-            problems.append(f"'{name}': {serial} clashes with the shared emulator or the games phone")
+            problems.append(f"'{name}': {serial} clashes with the shared emulator or Cloud phone 2")
         elif serial in out.values():
             problems.append(f"'{name}': {serial} is already used by another name")
         elif name in out:

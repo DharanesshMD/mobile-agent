@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Install an APK on the games phone (Redroid, adb at localhost:5565): install-apk.sh <file.apk> [more.apk ...]
-# The games phone has no Google Play, so apps come from APK files. Get free games from F-Droid (https://f-droid.org/) and check the sha256
+# Install an APK on Cloud phone 2 (Redroid, adb at localhost:5565): install-apk.sh <file.apk> [more.apk ...]
+# Cloud phone 2 has no Google Play, so apps come from APK files. Get free games from F-Droid (https://f-droid.org/) and check the sha256
 # against the value on the app's F-Droid page before installing; see docs/virtual-android.md.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}/platform-tools:$PATH"

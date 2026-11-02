@@ -4,6 +4,7 @@ import re
 import sqlite3
 import threading
 import time
+from datetime import datetime
 import uuid
 from pathlib import Path
 
@@ -17,11 +18,11 @@ create table if not exists messages(id integer primary key autoincrement, bot_id
   content text not null default '', meta text not null default '{}', created real, updated real);
 create index if not exists messages_bot on messages(bot_id, id);
 create table if not exists jobs(id text primary key, bot_id text not null, goal text not null, status text not null, started real, ended real,
-  result text not null default '', trace_dir text, after text, verify text, routine text, target text, files text);
+  result text not null default '', trace_dir text, after text, verify text, routine text, target text, files text, report text);
 create table if not exists items(id text primary key, bot_id text not null, job_id text, message_id integer, kind text not null,
   payload text not null default '{}', status text not null default 'open', answer text, created real, answered real);
-create table if not exists attachments(id text primary key, bot_id text not null, message_id integer, mime text not null, path text not null, w integer, h integer, bytes integer, created real);
-create table if not exists library(id text primary key, bot_id text not null, job_id text, title text not null, path text not null, created real);
+create table if not exists attachments(id text primary key, bot_id text not null, message_id integer, mime text not null, path text not null, w integer, h integer, bytes integer, created real, name text);
+create table if not exists library(id text primary key, bot_id text not null, job_id text, title text not null, path text not null, created real, kind text);
 create table if not exists vault(id text primary key, owner text not null, label text not null, kind text not null, nonce blob not null,
   ciphertext blob not null, created real);
 create table if not exists vault_audit(id integer primary key autoincrement, secret_id text, label text, job_id text, app text, at real);
@@ -54,13 +55,14 @@ class Database:
         self.conn = sqlite3.connect(str(path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.lock = threading.RLock()
+        self.mask = lambda text: text  # the app sets an AccountMasker here (agent/privacy.py): phone-derived text hides the phones' account addresses
         with self.lock:
             self.conn.execute("pragma journal_mode=wal")
             self.conn.executescript(SCHEMA)
             if "kind" not in [r["name"] for r in self.conn.execute("pragma table_info(bots)")]:  # databases created before the master bot
                 self.conn.execute("alter table bots add column kind text not null default 'bot'")
                 self.conn.commit()
-            for table, cols in (("jobs", ("after", "verify", "routine", "target", "files")), ("routines", ("last_status",)), ("bots", ("phone_id",))):  # databases created before these columns
+            for table, cols in (("jobs", ("after", "verify", "routine", "target", "files", "report")), ("routines", ("last_status",)), ("bots", ("phone_id",)), ("library", ("kind",)), ("attachments", ("name",))):  # databases created before these columns
                 have = [r["name"] for r in self.conn.execute(f"pragma table_info({table})")]
                 for col in cols:
                     if col not in have:
@@ -90,7 +92,7 @@ class Database:
         return self.get_bot(bid)
 
     def phone_bot(self, phone_id: str, kind: str = "phone") -> dict | None:
-        """The bot of one phone (kind 'phone' for a real phone, 'virtual' for a virtual one such as the games phone): the only bot whose tasks run on it."""
+        """The bot of one phone (kind 'phone' for a real phone, 'virtual' for a virtual one such as Cloud phone 2): the only bot whose tasks run on it."""
         return self._one("select * from bots where kind=? and phone_id=? limit 1", (kind, phone_id))
 
     # what happened when an app was opened on a phone (ok=1 it ran, ok=0 it crashed or would not stay up): the agent uses it to go straight to the phone that works
@@ -144,9 +146,9 @@ class Database:
         return paths
 
     # attachments: pictures the owner shared in chat (agent/images.py). An upload belongs to a bot and has no message until the message is sent.
-    def add_attachment(self, bot_id: str, mime: str, path: str, w: int, h: int, size: int, aid: str | None = None) -> dict:
+    def add_attachment(self, bot_id: str, mime: str, path: str, w: int, h: int, size: int, aid: str | None = None, name: str | None = None) -> dict:
         aid = aid or uuid.uuid4().hex[:12]
-        self._x("insert into attachments(id,bot_id,message_id,mime,path,w,h,bytes,created) values(?,?,?,?,?,?,?,?,?)", (aid, bot_id, None, mime, path, w, h, size, time.time()))
+        self._x("insert into attachments(id,bot_id,message_id,mime,path,w,h,bytes,created,name) values(?,?,?,?,?,?,?,?,?,?)", (aid, bot_id, None, mime, path, w, h, size, time.time(), name))
         return self.get_attachment(aid)
 
     def get_attachment(self, aid: str) -> dict | None:
@@ -171,6 +173,11 @@ class Database:
         """Uploads that were never sent with a message and are older than max_age_s."""
         return self._q("select * from attachments where message_id is null and created<?", (time.time() - max_age_s,))
 
+    def images_today(self) -> int:
+        """Pictures made by Muse Image since local midnight (all bots): the daily cap is counted on the chat messages, so it survives a restart."""
+        midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        return self._one("select count(*) n from messages where kind='image' and created>=?", (midnight,))["n"]
+
     def attachment_notice_sent(self, bot_id: str) -> bool:
         return bool(self._q("select 1 from messages where bot_id=? and kind='bot_note' and meta like '%image-privacy%' limit 1", (bot_id,)))
 
@@ -186,6 +193,8 @@ class Database:
     # messages
     def add_message(self, bot_id: str, role: str, kind: str, content: str = "", meta: dict | None = None) -> dict:
         now = time.time()
+        if role != "user":
+            content = self.mask(content)
         mid = self._x("insert into messages(bot_id,role,kind,content,meta,created,updated) values(?,?,?,?,?,?,?)",
                       (bot_id, role, kind, content, json.dumps(meta or {}), now, now))
         return self.get_message(mid)
@@ -195,6 +204,8 @@ class Database:
 
     def update_message(self, mid: int, content: str | None = None, meta: dict | None = None, kind: str | None = None) -> dict:
         cur = self.get_message(mid)
+        if content is not None and cur["role"] != "user":
+            content = self.mask(content)
         self._x("update messages set content=?, meta=?, kind=?, updated=? where id=?",
                 (cur["content"] if content is None else content, json.dumps(cur["meta"] if meta is None else meta),
                  kind or cur["kind"], time.time(), mid))
@@ -209,11 +220,11 @@ class Database:
 
     # jobs
     def create_job(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None, target: str = "",
-                   files: list[str] | None = None) -> dict:
+                   files: list[str] | None = None, report: str | None = None) -> dict:
         """`after` is the id of a job that must finish successfully before this one runs; `verify` is a phone check (agent/checks.py) that must pass for it to count as done."""
         jid = uuid.uuid4().hex[:10]
-        self._x("insert into jobs(id,bot_id,goal,status,started,after,verify,routine,target,files) values(?,?,?,?,?,?,?,?,?,?)",
-                (jid, bot_id, goal, "queued", time.time(), after, json.dumps(verify) if verify else None, routine, target or None, json.dumps(files) if files else None))
+        self._x("insert into jobs(id,bot_id,goal,status,started,after,verify,routine,target,files,report) values(?,?,?,?,?,?,?,?,?,?,?)",
+                (jid, bot_id, goal, "queued", time.time(), after, json.dumps(verify) if verify else None, routine, target or None, json.dumps(files) if files else None, report or None))
         return self.get_job(jid)
 
     def get_job(self, jid: str) -> dict | None:
@@ -222,6 +233,9 @@ class Database:
     def update_job(self, jid: str, **fields) -> dict:
         cols = {"status", "ended", "result", "trace_dir", "goal"}
         sets = {k: v for k, v in fields.items() if k in cols}
+        for k in ("result", "goal"):
+            if isinstance(sets.get(k), str):
+                sets[k] = self.mask(sets[k])
         if sets:
             self._x(f"update jobs set {', '.join(f'{k}=?' for k in sets)} where id=?", (*sets.values(), jid))
         return self.get_job(jid)
@@ -259,9 +273,9 @@ class Database:
         return self._q("select * from items where status='open'")
 
     # library
-    def add_library(self, bot_id: str, job_id: str | None, title: str, path: str) -> dict:
+    def add_library(self, bot_id: str, job_id: str | None, title: str, path: str, kind: str = "screenshot") -> dict:
         lid = uuid.uuid4().hex[:10]
-        self._x("insert into library values(?,?,?,?,?,?)", (lid, bot_id, job_id, title[:160], path, time.time()))
+        self._x("insert into library(id,bot_id,job_id,title,path,created,kind) values(?,?,?,?,?,?,?)", (lid, bot_id, job_id, self.mask(title)[:160], path, time.time(), kind))
         return self.get_library(lid)
 
     def get_library(self, lid: str) -> dict | None:

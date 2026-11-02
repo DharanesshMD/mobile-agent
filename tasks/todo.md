@@ -64,3 +64,6 @@ P2:
 
 ## Demo-first plan
 Moved to [docs/demo-plan.md](../docs/demo-plan.md) (29 Oct 2026, pending owner approval).
+
+## Cloud-phone use cases (2 Nov 2026)
+See [docs/cloud-usecases.md](../docs/cloud-usecases.md): batch 1 (report, set_device, inspect_app, link check, APK check, look-and-feel, guide) built and tested; batch 2 (watch, QA run, screen recording) and batch 3 (comparison, SMS relay) open.

@@ -1,7 +1,7 @@
 """Reset the app to a first-run state: wipe chats, tasks, memory, routines, screenshots and saved traces, then re-seed the bots.
 
 Stop the service first (it holds the database open), then: .venv/bin/python scripts/reset_fresh.py [--keep-phones]
-Kept: saved secrets (vault), paired devices (data/state.json) and the emulator itself. The phones' own bots (Games phone, real phones) are
+Kept: saved secrets (vault), paired devices (data/state.json) and the emulator itself. The phones' own bots (Cloud phone 2, real phones) are
 kept with a single greeting each, so a connected phone still has its bot. A backup of the database is written next to it first.
 """
 import shutil
@@ -14,10 +14,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent.db import Database  # noqa: E402
-from agent.master import GAMES_INTRO, INTRO  # noqa: E402
+from agent.master import DEFAULT_ASSISTANT_PERSONA, GAMES_INTRO, INTRO  # noqa: E402
 
 DB = ROOT / "data" / "app.db"
-PHONE_GREETING = "Your phone ({name}) is connected. Tell me what to do on it: I work on it in the background, and these tasks never touch the shared emulator."
+PHONE_GREETING = "Your phone ({name}) is paired. Tell me what to do on it: I work on it in the background, and these tasks never touch the shared emulator."
 
 
 def main() -> None:
@@ -40,7 +40,7 @@ def main() -> None:
         text = {"master": INTRO, "virtual": GAMES_INTRO}.get(b["kind"]) or PHONE_GREETING.format(name=b["name"])
         db.add_message(b["id"], "assistant", "text", text)
     if not [b for b in db.list_bots() if b["kind"] == "bot"]:
-        db.create_bot("Assistant", "")
+        db.create_bot("Assistant", DEFAULT_ASSISTANT_PERSONA)
     for d in ("library", "runs", "uploads"):  # uploads: the pictures shared in chat
         p = ROOT / "data" / d
         if p.exists():

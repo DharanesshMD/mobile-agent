@@ -506,7 +506,8 @@ class WebSearch(unittest.TestCase):
         self.assertIn("https://www.python.org/downloads/", result)
         notes = [m["content"] for m in msgs(c, bot) if m["kind"] == "bot_note"]
         self.assertEqual(notes, ["Searched the web: latest python version"])
-        self.assertIn("Today is ", spark.calls[0][0])  # the model knows the date so it can judge what is current
+        self.assertIn("the owner's local time", spark.calls[0][0])  # the model knows the date and time (local, not UTC) so it can judge what is current
+        self.assertRegex(spark.calls[0][0], r"It is \w+day \d{2} \w+ \d{4}, \d{2}:\d{2}")
 
     def test_failed_and_empty_searches_are_reported_not_raised(self):
         spark = self.SearchSpark(act(type="web_search", query="a"), act(type="web_search", query="first"), act(type="web_search", query="second"),

@@ -1,6 +1,6 @@
 """Automatic escalation: an app that cannot run on one phone is tried on the owner's other phones, in order, with no question at each step.
 
-Order: the phones where the agent already saw the app stay up, then the shared emulator, the games phone, the extra adb phones, and last the owner's own phone (only while its app is
+Order: the phones where the agent already saw the app stay up, then the shared emulator, Cloud phone 2, the extra adb phones, and last the owner's own phone (only while its app is
 connected, and it installs from its own Play Store). Moving an app between the owner's own phones and opening it are not destructive and are undone by closing the app, so they need no
 permission. Signing in, entering secrets, installing from an untrusted source, deleting and buying still ask the owner, and nothing here ever plays a game.
 
@@ -24,7 +24,7 @@ LANE_WAIT_S = 120  # how long to wait for a phone that is busy with another task
 
 OPEN_RE = re.compile(r"\b(open|launch|start|run|play|use)\b", re.I)
 SKIP_RE = re.compile(r"\b(install|uninstall|delete|remove|update|download|sign ?in|log ?in|purchase|buy)\b", re.I)
-NAME_RE = re.compile(r"\b(?:open|launch|start|run|play|use)\s+(?:the\s+)?(.+?)(?:\s+(?:app|game|and|then|on|in|to|so)\b|[.,;:!?]|$)", re.I)
+NAME_RE = re.compile(r"\b(?:open|launch|start|run|play|use)\s+(?:the\s+)?(.+?)(?:\s+(?:app|game|and|then|on|in|to|so)\b|[.,;:!?](?:\s|$)|$)", re.I)
 
 
 SIMPLE_OPEN = re.compile(r"^\s*(?:please\s+|can you\s+|could you\s+)?(?:open|launch|start|run)\s+(?:the\s+)?[\w'’&. -]{2,40}?\s*(?:app|game)?\s*[.!?]*\s*$", re.I)
@@ -61,7 +61,7 @@ def _sentence(text: str) -> str:
 def app_name(goal: str, package: str) -> str:
     """The name the owner used for the app (for the messages), else the last part of its package."""
     seg = package.split(".")[-1]
-    m = NAME_RE.search(goal or "")
+    m = NAME_RE.search(re.sub(r"\s*\([\w.]+\)", "", goal or ""))  # the model often writes "Clash of Clans (com.supercell.clashofclans)": keep only the name
     name = m.group(1).strip(" \"'") if m else ""
     if name and (_norm(seg) in _norm(name) or _norm(name) in _norm(package)):
         return _nice(name)
@@ -163,11 +163,11 @@ class Escalator:
 
     def _label(self, key: str) -> str:
         if key == "emulator":
-            return "the shared emulator"
+            return "Cloud phone"
         if key.startswith("phone:"):
             b = next((x for x in self.orch.db.list_bots() if x["kind"] == "phone" and x["phone_id"] == key.split(":", 1)[1]), None)
             return (b or {}).get("name") or "your phone"
-        return "the games phone" if key == "games" else f"the {key} phone"
+        return "Cloud phone 2" if key == "games" else f"the {key} phone"
 
     def _lane(self, key: str) -> str:
         return "" if key == "emulator" else key if key.startswith("phone:") else f"virtual:{key}"

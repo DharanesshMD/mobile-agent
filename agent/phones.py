@@ -1,7 +1,7 @@
 """A directory of every phone the agent can use, what each can and cannot do, how it is doing right now, which Google account each has, and which apps are known not to run on it.
 
 Every bot gets a short version in its context, so a task goes to a phone that can really do it (route by capability) and no bot offers an action its phone
-cannot do (for example a Play Store install on the games phone). Master gets how to route as well.
+cannot do (for example a Play Store install on Cloud phone 2). Master gets how to route as well.
 """
 import re
 import threading
@@ -11,13 +11,13 @@ from agent.graph import CRASH_PREFIX
 
 CRASH_RE = re.compile(re.escape(CRASH_PREFIX) + r"([\w.]+) crashed")
 
-EMULATOR = ("The shared emulator: Google Play and Google sign-in work here, and Google apps, system apps and intents (alarm, SMS, maps). It is the only phone to "
-            "install from the Play Store on. Some apps and games detect it and refuse to run. It can receive an app moved from the games phone (move_app).")
-GAMES = ("The games phone: a light virtual Android for free games and heavy apps. Apps reach it only as APK files that the owner installs, or moved from the emulator with "
+EMULATOR = ("Cloud phone (the shared emulator): Google Play and Google sign-in work here, and Google apps, system apps and intents (alarm, SMS, maps). It is the only phone to "
+            "install from the Play Store on. Some apps and games detect it and refuse to run. It can receive an app moved from Cloud phone 2 (move_app).")
+GAMES = ("Cloud phone 2: a second light Android for heavy apps and anything the shared Cloud phone cannot run. Apps reach it only as APK files that the owner installs, or moved from the emulator with "
          "move_app (the app is copied, never its data or sign-in): NO Google Play, NO Google apps or Google sign-in, so it can never have a Google account. Games draw one "
          "picture (no UI tree), software graphics, and some games still refuse to run on a virtual device.")
 ADB = ("An extra adb phone the owner manages ({serial}; a real phone over USB debugging, BlueStacks with adb, or a cloud phone). It is always on while adb reaches it and has no power "
-       "management, so if it goes offline a task fails honestly. {play} It can receive an app moved from the emulator or the games phone (move_app).")
+       "management, so if it goes offline a task fails honestly. {play} It can receive an app moved from the emulator or Cloud phone 2 (move_app).")
 REAL = ("The owner's own phone: genuine hardware with their own apps and accounts, driven in the background through the Mobile Agent app. It works only while the app is "
         "connected. It installs from its own Play Store: apps cannot be moved to or from it, so route a normal task to its bot.")
 
@@ -165,21 +165,21 @@ def render(entries: list[dict], viewer_key: str | None = None, master: bool = Fa
         lines.append(f"- {e['label']} [{e['status']}]{mark}: {e['can']}{acct}{apps}{bad}" + (f" Its bot: {e['bot']}." if e["bot"] and e["key"] != "emulator" else ""))
     lines.append("Game accounts: no phone plays Supercell games (Clash of Clans, Clash Royale, Brawl Stars, Hay Day, Boom Beach, Squad Busters), Pokemon GO or any game in the owner's policy list: "
                  "their publishers ban accounts that use bots, so the phone refuses every tap, scroll and key in them. The agent may only open them, check they are installed, move them between phones "
-                 "and say what the screen shows; the owner plays them with Take control on the games phone (or any extra adb phone).")
+                 "and say what the screen shows; the owner plays them with Take control on Cloud phone 2 (or any extra adb phone).")
     if master:
         lines.append(
             "How to route a phone task: (1) list the candidate phones, and use phone_check with \"on\" (emulator, games, or a real phone's bot name) to see where the app is installed; "
             "(2) prefer the phone that already has the app (see its Installed apps) and is not listed as Known NOT to run it; (3) installs from the Play Store only on the emulator (queue it with mobile_task); "
-            "(4) hand the task to a phone's bot with delegate_task (the games phone and a real phone have their own bot); run it yourself on the emulator with mobile_task; "
-            "(5) an app that is installed on the emulator but is wanted on the games phone is moved with move_app (emulator -> games), never re-downloaded. When an app crashes on a phone, "
-            "THE SYSTEM ITSELF tries the owner's other phones in order (emulator, games phone, extra adb phones, the owner's own phone), copying the app where needed and checking that it "
-            "really stays up, with no question to the owner, and it posts the result in the chat where they asked: never ask 'want me to try the games phone?' for these steps and do not "
+            "(4) hand the task to a phone's bot with delegate_task (Cloud phone 2 and a real phone have their own bot); run it yourself on the emulator with mobile_task; "
+            "(5) an app that is installed on the emulator but is wanted on Cloud phone 2 is moved with move_app (emulator -> games), never re-downloaded. When an app crashes on a phone, "
+            "THE SYSTEM ITSELF tries the owner's other phones in order (emulator, Cloud phone 2, extra adb phones, the owner's own phone), copying the app where needed and checking that it "
+            "really stays up, with no question to the owner, and it posts the result in the chat where they asked: never ask 'want me to try Cloud phone 2?' for these steps and do not "
             "start that chain yourself; "
-            "(6) when no phone can do it, say so plainly: what was tried where, why it cannot work, and the ONE thing that would unblock it (an APK on the games phone, "
+            "(6) when no phone can do it, say so plainly: what was tried where, why it cannot work, and the ONE thing that would unblock it (an APK on Cloud phone 2, "
             "the Mobile Agent app connected on the owner's phone). Do not invent options.\n"
             "Google sign-in is never copied between phones. When a phone that CAN have a Google account (the emulator, the owner's phone) needs it, queue a sign-in task on THAT phone's bot "
             "(Settings > Accounts > Add account > Google; the password goes in only with type_secret from the vault, the owner approving each use; 2-step verification is a handoff to the owner). "
-            "The games phone has no Google services and can never sign in: say so, do not offer it.")
+            "Cloud phone 2 has no Google services and can never sign in: say so, do not offer it.")
     else:
         lines.append("If an app crashes on your phone, or is listed above as Known NOT to run on it, the system itself tries the owner's other phones and tells them where it ran, in this chat: "
                      "still queue the owner's task with mobile_task as usual, and never tell them to ask Master or to try another phone for that. "

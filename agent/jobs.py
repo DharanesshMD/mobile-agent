@@ -12,6 +12,8 @@ import threading
 import time
 from pathlib import Path
 
+from agent import cloudtools, report as report_mod, reportsave
+from agent.artifacts import Artifacts
 from agent.checks import run_check
 from agent.config import HOLD_IDLE_MIN, OWNER_WAIT_MIN, WORKER_MODEL
 from agent.db import Database
@@ -31,11 +33,28 @@ def is_phone_error(e: Exception) -> bool:
     return not isinstance(e, (ValueError, KeyError, TypeError)) and any(w in str(e).lower() for w in PHONE_ERROR_WORDS)
 
 
+REPORT_GOAL = {
+    "link": ("\n\nLINK CHECK (observe only, on a throwaway phone): open the address with open_url in Chrome (never tap links on the page, never type, never download). "
+             "Wait for it to load. Read the address bar for the FINAL address and say whether it changed from the one you were given (a redirect). Note whether Chrome shows a warning page "
+             "(for example 'Deceptive site ahead', 'Dangerous site', 'malware'), whether a password, card or personal-data form is visible, and what the page claims to be. "
+             "If Chrome first shows a welcome or sign-in screen, tap 'Stay signed out' (or No thanks) and never capture that screen. Use capture for 2 or 3 pictures (the page after it loads, the warning or the form if there is one). Then record verdict: level harmful (a Chrome warning page, "
+             "or a sign-in or payment form that imitates another brand, or an obvious scam), suspicious (urgent pressure, a look-alike address, an unexpected redirect, a request for personal data) "
+             "or nothing_found; the reasons; what you checked; what you did NOT check. Never use the word safe. Finish with done: one sentence with the verdict."),
+    "matrix": ("\n\nLOOK-AND-FEEL CHECK: open the app or Settings page the goal names. FIRST set the baseline with set_device (dark_mode off, font_scale normal, size normal) so the first picture is a true 'Normal'. For each state the goal lists (dark mode, large text, another language, a small and a big screen), "
+               "apply it with set_device (language needs the app's package; if it says the app does not support it, say so and continue), then capture one picture of the SAME screen with the state as its title. "
+               "Do not undo anything yourself: the phone is put back when the task ends. Finish with done: what you could SEE differ (text cut off, overlapping, unreadable) and what you could not check."),
+    "guide": ("\n\nSTEP-BY-STEP GUIDE: do the task one step at a time. After each meaningful step use capture with a short imperative title ('Open Settings') and a note in plain words for a beginner "
+              "(what to tap and what they will see). 5 to 12 steps. Never put passwords, personal data or the owner's account name in a title or note. The phone's dark mode, text size and screen timeout are put back when the task ends, so do not add 'undo' steps unless the owner asked for them. Finish with done: one sentence."),
+    "plain": "\n\nREPORT: use capture for the screens that matter, with a title and a caption, then finish with done.",
+}
+
+
 class JobRun:
     def __init__(self, job: dict, status_msg_id: int):
         self.job_id, self.bot_id, self.goal, self.after, self.verify = job["id"], job["bot_id"], job["goal"], job.get("after"), job.get("verify")
+        self.report = job.get("report") or ""  # link | matrix | guide | plain: what the task collects and how its report is built (agent/report.py)
         self.files = list(job.get("files") or [])  # ids of pictures the owner shared that this task needs on the phone
-        self.target = job.get("target") or ""  # "" is the shared emulator, "virtual:games" the games phone, "phone:<id>" the owner's real phone
+        self.target = job.get("target") or ""  # "" is the shared emulator, "virtual:games" Cloud phone 2, "phone:<id>" the owner's real phone
         self.lane = self.target  # one running job per lane
         self.timed_out = False
         self.status_msg_id = status_msg_id
@@ -66,7 +85,7 @@ class JobManager:
         self._running: dict[str, JobRun] = {}  # lane -> its running job
         self._pending: list[JobRun] = []  # queued jobs in the order they were asked, all lanes
         self._cv = threading.Condition()
-        self.held_lanes: set[str] = set()  # lanes whose phone the owner is driving ("" is the shared emulator, "virtual:games" the games phone, ...)
+        self.held_lanes: set[str] = set()  # lanes whose phone the owner is driving ("" is the shared emulator, "virtual:games" Cloud phone 2, ...)
         self._hold_at: dict[str, float] = {}  # lane -> when the owner last did something there (the idle release)
         self._threads: dict[str, threading.Thread] = {}
         self._started = False
@@ -123,7 +142,7 @@ class JobManager:
         return lane in self.held_lanes
 
     def lane_of(self, bot_id: str) -> str:
-        """Which phone a bot's jobs run on: the games phone's bot and a real phone's bot have their own, every other bot uses the shared emulator."""
+        """Which phone a bot's jobs run on: Cloud phone 2's bot and a real phone's bot have their own, every other bot uses the shared emulator."""
         bot = self.db.get_bot(bot_id) or {}
         if bot.get("kind") == "phone" and bot.get("phone_id"):
             return f"phone:{bot['phone_id']}"
@@ -208,11 +227,12 @@ class JobManager:
                 "lanes": lanes}
 
     # --- submit and cancel ---------------------------------------------------------------------------------------
-    def submit(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None, files: list[str] | None = None) -> dict:
+    def submit(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None, files: list[str] | None = None,
+               report: str | None = None) -> dict:
         """Queue a phone job. With `after` (a job id) it waits for that job to finish successfully and is skipped if it does not.
         With `verify` (a phone check) the worker's "done" only counts if the phone really shows it."""
         target = self.lane_of(bot_id)  # a phone's bot only ever works on that phone, and no other bot ever uses it
-        job = self.db.create_job(bot_id, goal, after, verify, routine, target, files)
+        job = self.db.create_job(bot_id, goal, after, verify, routine, target, files, report)
         msg = self.db.add_message(bot_id, "assistant", "status", "Waiting for the phone…" if self.busy(target) or after else "Starting…", {"job_id": job["id"]})
         self.hub.publish(bot_id, {"type": "message", "message": msg})
         jr = JobRun(job, msg["id"])
@@ -406,10 +426,10 @@ class JobManager:
                 jr.goal += f"\nResult of the previous step: {dep['result'][:400]}"
                 self.db.update_job(jr.job_id, goal=jr.goal)
         device, lifecycle = self.device, self.lifecycle
-        if jr.target.startswith("virtual:"):  # the games phone: its own device and power, never the emulator
+        if jr.target.startswith("virtual:"):  # Cloud phone 2: its own device and power, never the emulator
             device, lifecycle = self.pair(jr.target)
             if device is None:
-                return self._fail(jr, "The games phone is not set up on this computer (see docs/virtual-android.md).")
+                return self._fail(jr, "Cloud phone 2 is not set up on this computer (see docs/virtual-android.md).")
             name = jr.target.split(":", 1)[1]
             if lifecycle is None and self.adb_phones is not None and name in self.adb_phones.config and not self.adb_phones.online(name, fresh=True):
                 return self._fail(jr, f"The {name} phone is offline: adb cannot reach it ({self.adb_phones.serial(name)}). Connect it, then ask again.")
@@ -430,15 +450,21 @@ class JobManager:
                 pushed = self._push_files(jr, device)
             except Exception as e:
                 return self._fail(jr, f"I could not copy the picture to the phone: {str(e)[:150]}")
+        if jr.report in ("link", "matrix") and (jr.target.startswith("phone:") or not hasattr(device, "set_night")):
+            return self._fail(jr, "Link checks and screen-setting checks run only on the agent's own cloud phones, never on your own phone.")
+        art = Artifacts()
+        if jr.report in ("guide", "matrix", "plain"):
+            cloudtools.snapshot(device, art)  # whatever the task changes in Settings is put back afterwards
+        run_goal = jr.goal + REPORT_GOAL.get(jr.report, "")
         trace = self.data_dir / "runs" / jr.job_id
         status, result, attempt = "failed", "", 0
         while True:
             jr.notes.clear()  # updates sent while it was queued, or before a retry, are already part of the goal
             try:
-                res = run_graph(jr.goal, device, self.model_factory(WORKER_MODEL), self.max_steps, trace_dir=trace,
+                res = run_graph(run_goal, device, self.model_factory(WORKER_MODEL), self.max_steps + (15 if jr.report in ("guide", "matrix") else 0), trace_dir=trace,
                                 settle=self.settle, handler=lambda p: self._handler(jr, p), emit=lambda e: self._emit(jr, e),
                                 cancel=jr.cancel, pause=lambda: self._pause(jr), graph=self.graph, steer=lambda: self._take_notes(jr),
-                                secrets=SecretUse(self.vault, jr.job_id) if self.vault else None)
+                                secrets=SecretUse(self.vault, jr.job_id) if self.vault else None, artifacts=art, observe_only=jr.report == "link")
                 status, result = res.status, res.answer
                 break
             except Exception as e:
@@ -451,6 +477,15 @@ class JobManager:
                 result = f"{type(e).__name__}: {str(e)[:200]}"
                 break
         self._remove_files(device, pushed)
+        answer_text = result  # what the worker said, before the verdict is put in front of it for the job result
+        undo_errors = art.finish()  # the display, dark mode and font size go back to what they were
+        if jr.report == "link" and hasattr(device, "clear_app"):
+            try:
+                device.clear_app("com.android.chrome")  # the throwaway browser keeps nothing from the suspicious page
+            except Exception as e:
+                undo_errors.append(f"could not clear the browser: {e}"[:160])
+        if art.verdict and status == "done":
+            result = f"Verdict: {report_mod.VERDICT_LABEL[art.verdict['level']]}. " + "; ".join(art.verdict["reasons"][:4]) + f" | {result}"
         if status == "done" and jr.verify:
             ok, detail = run_check(device, jr.verify)
             if not ok:  # the worker said it was done but the phone disagrees: the job counts as failed, so tasks that depend on it do not run
@@ -468,6 +503,7 @@ class JobManager:
         self._drop_status(jr)
         self._close_items(jr)
         self._save_artifact(jr, trace, status)
+        self._save_report(jr, art, status, answer_text, undo_errors)
         self.orch.job_finished(jr.bot_id, job)
 
     PICTURE_DIR = "/sdcard/Pictures/MobileAgent"
@@ -563,6 +599,16 @@ class JobManager:
         m = self.db.get_message(item["message_id"]) if item.get("message_id") else None
         if m:
             self.hub.publish(jr.bot_id, {"type": "message", "message": self.db.update_message(m["id"], meta={**m["meta"], "status": "expired"})})
+
+    def _save_report(self, jr: JobRun, art: Artifacts, status: str, result: str, undo_errors: list[str]) -> None:
+        """A task that captured pictures or recorded a verdict leaves a report in the Library and a card in the chat."""
+        if not (art.captures or art.verdict):
+            return
+        kind = jr.report or "plain"
+        label = {"": "Cloud phone", "virtual:games": "Cloud phone 2"}.get(jr.target, jr.target.split(":", 1)[-1] if jr.target else "")
+        title = report_mod.title_for(kind, jr.goal)
+        reportsave.save(self.db, self.hub, self.data_dir, jr.bot_id, jr.job_id, kind, title, jr.goal.splitlines()[0], status, result, art, label,
+                        [f"Could not put the phone back fully: {e}" for e in undo_errors])
 
     def _save_artifact(self, jr: JobRun, trace: Path, status: str) -> None:
         shots = sorted(trace.glob("step*.png")) if trace.exists() else []
