@@ -51,20 +51,20 @@ class Panel(unittest.TestCase):
     def setUp(self):
         self.html = (ROOT / "web" / "index.html").read_text()
 
-    def test_the_panel_has_idle_chips_and_a_connect_slot_and_no_empty_pairing_tile(self):
-        for needle in ('id="benchIdle"', 'id="connectSlot"', "function idleChip(", "function phoneUp("):
+    def test_the_sidebar_is_a_close_button_an_avatar_pill_tabs_and_one_card(self):
+        for needle in ('id="panelClose"', 'class="av xl"', 'role="tablist"', 'data-tab="mobile"', 'role="tabpanel"', 'cs.id = "connectSlot"', "function phoneUp(", "function paintWork("):
             self.assertIn(needle, self.html)
-        self.assertNotIn("Not paired", self.html)  # the empty 'your phone' tile is gone: a phone shows only while it is connected
-        self.assertNotIn('"Not connected"', self.html)
+        self.assertNotIn("Not paired", self.html)  # no empty 'your phone' tile
+        for gone in ('id="benchIdle"', 'id="benchStrip"', 'class="benchstrip"', "function idleChip(", "function drawPatch(", 'id="patch"'):
+            self.assertNotIn(gone, self.html)      # nothing about phone state above the chat, no idle chips, no patch line
 
-    def test_only_lit_phones_become_tiles(self):
-        body = self.html[self.html.index("function renderBench()"):self.html.index("let benchBusy")]
-        self.assertIn('d.p.kind === "real") return !!v.up', body)           # a physical phone is a tile only while connected
-        self.assertIn('d.p.key === own && v.power === "on"', body)        # the selected bot's phone, only while awake
-        self.assertIn("idleChip", body)                                    # everything else is a chip
-        self.assertIn('"k:" + d.p.key', body)                             # the first phone's key is "": one tile must not look like none
-        self.assertIn("openConnectDialog", body)                           # the connect dialog hook
-        self.assertIn("cs.hidden = realUp", body)                          # the button hides while a phone is connected
+    def test_only_working_phones_get_a_chip_and_the_second_phone_stays_hidden_until_it_runs(self):
+        body = self.html[self.html.index("const workingView"):self.html.index("async function renderTab()")]
+        self.assertIn('d.p.kind === "real") return !!v.up', body)           # a physical phone shows only while it is connected
+        self.assertIn('v.lamp === "on" || v.lamp === "wait"', body)         # a chip means a lane is working or waiting for you
+        self.assertIn("openConnect", body)                                  # the connect dialog hook
+        self.assertIn("if (realUp) cs.replaceChildren()", body)             # the button is gone while a phone is connected
+        self.assertIn("It starts by itself when you give it a task.", self.html)  # an asleep second phone is a calm sentence, not a card
 
     def test_the_first_phone_is_called_cloud_phone_in_the_panel(self):
         self.assertIn('name: "Cloud phone", lane: "cloud phone"', self.html)
