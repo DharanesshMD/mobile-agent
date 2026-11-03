@@ -21,6 +21,8 @@ Three kinds of phone sit behind one interface:
 | **Cloud phone 2** | Redroid (Android 13 in a container) inside a Lima VM; boots in about 5 s, pauses in 0.2 s | Apps and games the emulator cannot run; free games from F-Droid | Anything that needs Google Play or Google sign-in (it has none); fast 3D (software graphics) |
 | **Your own phone** | The Mobile Agent app (Kotlin, `android/`) dials out to the server and acts through Android accessibility | Genuine hardware; its own bot and chat | Invisible background work (you see it act on the screen); banking apps |
 
+**Connectors (MCP).** Connect an app's own tools (GitHub, Linear, Notion, Hugging Face, Firecrawl, a web fetcher, or any MCP server) from the Connectors page, and the agent uses them before it reaches for the phone: faster, no screen, and it works while the phone sleeps. Anything that could change something asks you first, with the exact arguments on the card. See [docs/connectors.md](docs/connectors.md).
+
 Each phone has its own queue, so a long task on one never blocks another. Extra `adb` phones (a USB phone, a cloud phone) can be added with `ADB_PHONES`.
 
 ## Demo scenarios
@@ -74,6 +76,7 @@ Details: [docs/design-v2.md](docs/design-v2.md), [docs/phone-client.md](docs/pho
 | Text in a picture or web page is data, not orders | Prompt rule plus tests; pictures are stripped of metadata and resized before they leave your machine |
 | No sign-in tokens move between phones | The vault and your approval are the only sharing mechanism; Cloud phone 2 cannot sign in at all |
 | Third-party sites never get your login | The "other ways" card lists options with risks read from the sites' own pages; a pick only opens the page and hands the sign-in to you |
+| Connectors cannot act on their own | Only you connect them; a tool that is not read-only waits for your yes on a card showing the exact arguments; what a tool returns is data, size-capped and never followed as orders; their keys sit in the vault under hidden labels no bot or phone job can ask for |
 | Local by default | The server listens on 127.0.0.1; any other `HOST` refuses to start without `APP_TOKEN`; pairing codes are throttled |
 
 ## Honest limits
@@ -82,6 +85,7 @@ Details: [docs/design-v2.md](docs/design-v2.md), [docs/phone-client.md](docs/pho
 - Cloud phone 2 has no Google Play, no Google sign-in, and software-only graphics. Apps go in as APK files (`scripts/virtual-android/install-apk.sh`).
 - The real-phone app needs a manual step on Android 13 and newer: allow restricted settings, then turn on its accessibility service. The phone must be unlocked. It is a sideloaded debug build, not on Google Play (Play forbids autonomous accessibility agents).
 - Supercell and Niantic games are never played by the agent, on any phone.
+- Connectors sign in with a key or token only. Browser sign-in (OAuth) is not built, so Gmail, Calendar and servers that offer only OAuth are not available as connectors; the phone remains the way to use those apps.
 - Phone control is local today (a Mac with the emulator). A hosted cloud phone is the deployment target; `docs/phone-client.md` and `docs/virtual-android.md` explain the options and what is not verified.
 - Tested on macOS (Apple Silicon). Linux is untested.
 
@@ -136,7 +140,7 @@ From [docs/qa-run-2026-10-31.md](docs/qa-run-2026-10-31.md) and [docs/virtual-an
 
 | Path | What |
 |---|---|
-| `agent/` | The service: `orchestrator.py`, `graph.py` and `loop.py` (worker), `jobs.py` (queue lanes), `escalate.py`, `gamepolicy.py`, `vault.py`, `remote.py` (real phones), `virtual.py` (Cloud phone 2), `images.py`, `options.py`, `chat_api.py`, `service.py` |
+| `agent/` | The service: `orchestrator.py`, `graph.py` and `loop.py` (worker), `jobs.py` (queue lanes), `escalate.py`, `gamepolicy.py`, `vault.py`, `remote.py` (real phones), `mcp.py` and `connectors.py` (connected apps), `virtual.py` (Cloud phone 2), `images.py`, `options.py`, `chat_api.py`, `service.py` |
 | `prompts/` | Orchestrator, master and worker prompts |
 | `web/index.html` | The chat UI (one file, no build step) |
 | `android/` | The Mobile Agent app for a real phone (Kotlin, Gradle wrapper pinned to 8.11.1) |

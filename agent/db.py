@@ -28,6 +28,8 @@ create table if not exists vault(id text primary key, owner text not null, label
 create table if not exists vault_audit(id integer primary key autoincrement, secret_id text, label text, job_id text, app text, at real);
 create table if not exists routines(id text primary key, bot_id text not null, name text not null, prompt text not null, schedule text not null,
   enabled integer not null default 1, next_run real, last_run real, created real, last_status text);
+create table if not exists connectors(id text primary key, kind text not null, name text not null, transport text not null, url text not null default '', command text not null default '',
+  auth text not null default '{}', secret_label text, status text not null, tools text not null default '[]', error text not null default '', fails integer not null default 0, created real, updated real);
 create virtual table if not exists memory using fts5(text, bot_id unindexed, created unindexed);
 """
 
@@ -36,7 +38,7 @@ def _row(r: sqlite3.Row | None) -> dict | None:
     if r is None:
         return None
     d = dict(r)
-    for k in ("meta", "payload", "schedule", "verify", "files"):
+    for k in ("meta", "payload", "schedule", "verify", "files", "tools", "auth"):
         if k in d and isinstance(d[k], str):
             d[k] = json.loads(d[k] or "{}")
     return d

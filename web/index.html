@@ -111,6 +111,71 @@
   dialog label.opt { display: flex; gap: 12px; align-items: flex-start; margin-top: 16px; padding: 12px; border: 1px solid var(--line-2); border-radius: 10px; font-size: 13px; cursor: pointer; }
   dialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
   dialog button.danger.solid { background: var(--bad); color: var(--ink-0); border-color: var(--bad); }
+  /* connectors: the directory of apps the agent can use through MCP */
+  .sidelink { display: flex; align-items: center; gap: 12px; margin: 4px 8px 8px; padding: 8px; border: 1px solid transparent; background: transparent; border-radius: 10px; color: var(--text-2); font-weight: 400; text-align: left; }
+  .sidelink:hover:not(:disabled) { background: var(--ink-2); border-color: transparent; color: var(--text); }
+  .sidelink .av { background: transparent; }
+  .sidelink .t { flex: 1; min-width: 0; font-size: 14px; }
+  .sidelink .count { font: 400 12px var(--mono); color: var(--text-3); }
+  dialog.conn { width: min(860px, 94vw); height: min(720px, 90vh); max-width: none; max-height: none; padding: 0; overflow: hidden; }
+  dialog.conn[open] { display: flex; flex-direction: column; }
+  .conn [hidden] { display: none !important; }
+  .conn .chead { display: flex; align-items: center; gap: 8px; padding: 12px 12px 12px 16px; border-bottom: 1px solid var(--line); flex: none; }
+  .conn .chead .sbox { flex: 1; min-width: 0; position: relative; }
+  .conn .chead .sbox .ico { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
+  .conn .chead input[type=search] { width: 100%; padding-left: 36px; background: var(--ink-1); }
+  .conn .chead h3 { flex: 1; margin: 0; font-size: 15px; }
+  .conn .pills { display: flex; gap: 8px; padding: 12px 16px 0; overflow-x: auto; flex: none; scrollbar-width: none; }
+  .conn .pills::-webkit-scrollbar { display: none; }
+  .conn .pill { flex: none; padding: 6px 14px; border-radius: 999px; background: transparent; border: 1px solid var(--line-2); color: var(--text-2); font-size: 13px; font-weight: 400; }
+  .conn .pill[aria-pressed=true] { background: var(--ink-3); color: var(--text); border-color: #eef0f533; }
+  .conn .cbody { flex: 1; overflow-y: auto; padding: 8px 16px 16px; min-height: 0; }
+  .conn .csec { margin-top: 20px; }
+  .conn .csec h4 { margin: 0 0 6px; font-size: 14px; font-weight: 500; }
+  .conn .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; }
+  .conn .crow { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: 1px solid transparent; background: transparent; border-radius: 12px; text-align: left; font-weight: 400; min-height: 56px; }
+  .conn .crow:hover:not(:disabled) { background: var(--ink-3); border-color: transparent; }
+  .conn .tile { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; flex: none; font-size: 15px; font-weight: 600; }
+  .conn .tile.lg { width: 48px; height: 48px; border-radius: 12px; font-size: 20px; }
+  .conn .tile .ico { width: 18px; height: 18px; }
+  .conn .ctxt { flex: 1; min-width: 0; }
+  .conn .ctxt .n { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conn .ctxt .b { font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conn .cact { flex: none; font-size: 13px; padding: 4px 12px; border-radius: 8px; background: var(--ink-3); border: 1px solid var(--line-2); color: var(--text); }
+  .conn .crow:hover .cact { background: #222735; }
+  .conn .cact.ok { background: transparent; border-color: transparent; color: var(--ok); padding-right: 0; }
+  .conn .cact.warn { background: transparent; border-color: transparent; color: var(--amber); padding-right: 0; }
+  .conn .cempty { color: var(--text-3); padding: 32px 0; text-align: center; }
+  .conn .cfoot { flex: none; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--text-3); }
+  .conn .detail { max-width: 600px; margin: 8px auto 0; display: flex; flex-direction: column; gap: 16px; }
+  .conn .dhead { display: flex; align-items: center; gap: 16px; }
+  .conn .dhead h3 { margin: 0; font-size: 20px; }
+  .conn .dhead .b { color: var(--text-2); font-size: 14px; }
+  .conn .dstate { font-size: 13px; } .conn .dstate.ok { color: var(--ok); } .conn .dstate.warn { color: var(--amber); }
+  .conn .dsec h5 { margin: 0 0 8px; font-size: 12px; font-weight: 500; color: var(--text-3); }
+  .conn .tools { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .conn .tools li { display: flex; gap: 12px; align-items: baseline; padding: 8px 12px; background: var(--ink-1); }
+  .conn .tools .tn { font: 400 12px var(--mono); color: var(--text); flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+  .conn .tools .td { flex: 1; min-width: 0; color: var(--text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conn .tools .chip { flex: none; font: 400 11px var(--mono); padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--text-2); }
+  .conn .tools .chip.ask { color: var(--amber); border-color: var(--amber-line); }
+  .conn .hint { align-self: stretch; display: block; max-width: none; color: var(--text-3); font-size: 12px; }
+  .conn .hint a { color: var(--text-2); }
+  .conn form.kform { display: flex; flex-direction: column; gap: 12px; }
+  .conn .field { display: flex; flex-direction: column; gap: 4px; }
+  .conn .field label { font-size: 13px; color: var(--text-2); }
+  .conn .field input, .conn .field select { width: 100%; }
+  .conn .warnnote { color: var(--amber); font-size: 12px; }
+  .conn .cerr { color: var(--bad); font-size: 13px; padding: 8px 12px; border: 1px solid #ef6a7059; border-radius: 10px; background: #ef6a701a; }
+  .conn .cacts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .conn .cacts .primary { background: var(--amber); border-color: var(--amber); color: var(--amber-ink); }
+  .conn .cacts button:disabled { opacity: .6; cursor: default; }
+  .conn .sure { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--text-2); }
+  @media (max-width: 600px) {
+    dialog.conn { width: 100vw; height: 100dvh; max-width: none; max-height: none; border-radius: 0; border: 0; }
+    .conn .grid { grid-template-columns: minmax(0, 1fr); }
+    .conn .tools .td { display: none; }
+  }
   .menu { position: absolute; right: 8px; top: calc(50% + 20px); z-index: 20; min-width: 160px; background: var(--ink-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 4px; display: flex; flex-direction: column; gap: 0; box-shadow: 0 12px 32px #000a; }
   .menu button { background: transparent; border: 0; text-align: left; padding: 8px 12px; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 8px; font-weight: 400; }
   .menu button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
@@ -340,6 +405,7 @@
     <div class="search" id="searchBox" hidden><input id="searchInput" type="search" placeholder="Search bots" aria-label="Search bots"></div>
     <div class="label">Bots</div>
     <div class="bots" id="bots"></div>
+    <button class="sidelink" id="connBtn" aria-haspopup="dialog"><span class="av" aria-hidden="true"><svg class="ico" viewBox="0 0 16 16"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.2a3.5 3.5 0 01-7 0zM8 11.2v2.3"/></svg></span><span class="t">Connectors</span><span class="count" id="connCount"></span></button>
     <footer>
       <div class="who" id="who">
         <div class="av owner" aria-hidden="true">O</div>
@@ -605,6 +671,7 @@ function onEvent(ev) {
     if (m.kind === "action_item" && m.meta.status === "open") pollMobile();
   } else if (ev.type === "message_delete") { S.msgs.delete(ev.id); renderFeed(); }
   else if (ev.type === "refresh" && ((ev.what === "routines" && S.tab === "details") || (ev.what === "vault" && S.tab === "vault") || (ev.what === "library" && S.tab === "library"))) renderTab();
+  else if (ev.type === "refresh" && ev.what === "connectors") refreshConnectors();
   else if (ev.type === "refresh" && ev.what === "phone") { loadBots(); pollMobile().then(() => { if (S.tab === "mobile") renderTab(); }); }
   if (S.tab === "library") renderTab();
 }
@@ -1363,6 +1430,204 @@ async function pollBench() {
 }
 setInterval(pollBench, 2500); document.addEventListener("visibilitychange", () => { if (!document.hidden) pollBench(); });
 
+// ---------- connectors: the apps the agent can use through MCP ----------
+const CONN = { data: null, view: "dir", cat: "All", q: "", pick: null, busy: false, ask: false, err: "", dlg: null, draft: null };
+const PLUG = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.2a3.5 3.5 0 01-7 0zM8 11.2v2.3"/></svg>';
+function tileOf(name, big) {  // a coloured tile with the first letter: no logos are fetched from anywhere
+  let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  const t = el("span", "tile" + (big ? " lg" : ""), name.trim().charAt(0).toUpperCase() || "?");
+  t.style.background = `hsl(${h} 30% 20%)`; t.style.color = `hsl(${h} 70% 78%)`; t.setAttribute("aria-hidden", "true");
+  return t;
+}
+const connEntries = () => CONN.data ? [...CONN.data.catalog, ...CONN.data.custom.map(c => ({ id: c.id, name: c.name, category: "Custom MCP server", blurb: c.transport === "stdio" ? "Runs on this computer" : "Custom server", transport: c.transport, local: c.transport === "stdio", auth: { kind: "none" }, connection: c, custom: true }))] : [];
+const connState = (e) => !e.connection ? "off" : e.connection.status === "connected" ? "ok" : "warn";
+async function refreshConnectors() {
+  try { CONN.data = await api("/api/connectors"); } catch { return; }
+  const n = CONN.data.catalog.filter(e => e.connection && e.connection.status === "connected").length + CONN.data.custom.filter(c => c.status === "connected").length;
+  $("connCount").textContent = n ? String(n) : "";
+  if (!CONN.dlg || !CONN.dlg.open) return;
+  const typing = CONN.view !== "dir" && (CONN.busy || (CONN.dlg.querySelector(".kform") && [...CONN.dlg.querySelectorAll(".kform input")].some(i => i.value)));
+  if (!typing) renderConn();
+}
+function connRow(e) {
+  const b = el("button", "crow"); b.type = "button";
+  const t = el("span", "ctxt"); t.append(el("div", "n", e.name), el("div", "b", e.blurb));
+  const st = connState(e);
+  const act = el("span", "cact" + (st === "ok" ? " ok" : st === "warn" ? " warn" : ""), st === "ok" ? "✓ Connected" : st === "warn" ? "Not responding" : "Connect");
+  b.append(tileOf(e.name), t, act);
+  b.onclick = () => openConnDetail(e.id);
+  return b;
+}
+function addRow() {
+  const b = el("button", "crow"); b.type = "button";
+  const tile = el("span", "tile"); tile.style.background = "var(--ink-3)"; tile.style.color = "var(--text-2)"; tile.innerHTML = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>';
+  const t = el("span", "ctxt"); t.append(el("div", "n", "Add a custom server"), el("div", "b", "Any MCP server, by its address"));
+  b.append(tile, t, el("span", "cact", "Add")); b.onclick = () => { CONN.view = "custom"; CONN.err = ""; CONN.draft = null; renderConn(); };
+  return b;
+}
+function renderConn() {
+  const dlg = CONN.dlg; if (!dlg) return;
+  const body = dlg.querySelector(".cbody"), pills = dlg.querySelector(".pills"), foot = dlg.querySelector(".cfoot");
+  const dir = CONN.view === "dir";
+  dlg.querySelector(".sbox").hidden = !dir; dlg.querySelector(".back").hidden = dir; dlg.querySelector("h3").hidden = dir; pills.hidden = !dir; foot.hidden = !dir;
+  body.replaceChildren();
+  if (!CONN.data) { body.append(el("div", "cempty", "Loading…")); return; }
+  if (CONN.view === "detail") return renderConnDetail(body);
+  if (CONN.view === "custom") return renderConnCustom(body);
+  const q = CONN.q.trim().toLowerCase();
+  const all = connEntries(), match = (e) => !q || [e.name, e.blurb, e.category, ...(e.connection ? e.connection.tools.map(t => t.name) : [])].some(x => String(x).toLowerCase().includes(q));
+  const cats = [...CONN.data.categories, "Custom MCP server"].filter(c => all.some(e => e.category === c));
+  pills.replaceChildren();
+  for (const c of ["All", ...cats.filter(c => c !== "Custom MCP server")]) {
+    const p = el("button", "pill", c); p.type = "button"; p.setAttribute("aria-pressed", String(CONN.cat === c)); p.onclick = () => { CONN.cat = c; renderConn(); }; pills.append(p);
+  }
+  let shown = 0;
+  for (const c of cats) {
+    if (CONN.cat !== "All" && CONN.cat !== c) continue;
+    const list = all.filter(e => e.category === c && match(e)); if (!list.length) continue;
+    shown += list.length;
+    const sec = el("section", "csec"), g = el("div", "grid"); sec.append(el("h4", "", c)); for (const e of list) g.append(connRow(e)); sec.append(g); body.append(sec);
+  }
+  if (CONN.cat === "All" && (!q || "custom mcp server".includes(q))) {
+    const sec = el("section", "csec"), g = el("div", "grid"); sec.append(el("h4", "", "Custom MCP server")); g.append(addRow()); sec.append(g); body.append(sec); shown++;
+  }
+  if (!shown) body.append(el("div", "cempty", "Nothing matches “" + CONN.q.trim() + "”."));
+}
+function openConnDetail(id) { CONN.pick = id; CONN.view = "detail"; CONN.err = ""; CONN.ask = false; CONN.draft = null; renderConn(); }
+function renderConnDetail(body) {
+  const e = connEntries().find(x => x.id === CONN.pick);
+  if (!e) { CONN.view = "dir"; return renderConn(); }
+  const d = el("div", "detail"), st = connState(e), conn = e.connection, auth = e.auth || {};
+  const head = el("div", "dhead"), ht = el("div"); ht.append(el("h3", "", e.name), el("div", "b", e.blurb));
+  if (st !== "off") ht.append(el("div", "dstate " + st, st === "ok" ? "✓ Connected" : "Not responding" + (conn.error ? ": " + conn.error : "")));
+  head.append(tileOf(e.name, true), ht); d.append(head);
+  const what = el("div", "dsec"); what.append(el("h5", "", "What it can do"));
+  if (conn && conn.tools.length) {
+    const ul = el("ul", "tools");
+    for (const t of conn.tools.slice(0, 30)) {
+      const li = el("li"); li.append(el("span", "tn", t.name), el("span", "td", t.description), el("span", "chip" + (t.read_only ? "" : " ask"), t.read_only ? "Reads" : "Asks you first")); ul.append(li);
+    }
+    what.append(ul); if (conn.tools.length > 30) what.append(el("div", "hint", `and ${conn.tools.length - 30} more`));
+    what.append(el("div", "hint", "“Asks you first” tools show you the exact request and run only after you approve it."));
+  } else what.append(el("div", "hint", "The tools it offers appear here once it is connected."));
+  d.append(what);
+  const err = el("div", "cerr", CONN.err); err.setAttribute("role", "alert"); err.hidden = !CONN.err;
+  if (st !== "ok") {
+    const f = el("form", "kform"); f.autocomplete = "off";
+    let key = null;
+    if (auth.kind && auth.kind !== "none") {
+      const fld = el("div", "field"), lab = el("label", "", auth.label || "Key"); key = el("input"); key.type = "password"; key.id = "connKey"; key.autocomplete = "off"; key.spellcheck = false; lab.htmlFor = "connKey";
+      key.required = !auth.optional; if (CONN.draft && !CONN.draft.custom && CONN.err) key.value = CONN.draft.secret || ""; fld.append(lab, key);
+      const note = el("div", "hint", "Stored encrypted. Never shown again, never sent to a model."); fld.append(note);
+      if (auth.help || auth.help_url) {
+        const h = el("div", "hint", (auth.help || "") + " ");
+        if (auth.help_url && /^https:\/\//.test(auth.help_url)) { const a = el("a", "", "Where to get it"); a.href = auth.help_url; a.target = "_blank"; a.rel = "noopener noreferrer"; h.append(a); }
+        fld.append(h);
+      }
+      f.append(fld);
+    }
+    if (e.local) f.append(el("div", "hint", "Runs a small helper on this computer."));
+    const acts = el("div", "cacts"), go = el("button", "primary", CONN.busy ? "Connecting…" : (st === "warn" ? "Reconnect" : "Connect")); go.type = "submit"; go.disabled = CONN.busy; acts.append(go);
+    if (CONN.busy) f.setAttribute("aria-busy", "true");
+    f.append(err, acts);
+    f.onsubmit = (ev) => { ev.preventDefault(); if (CONN.busy) return; connectCall(e.custom ? null : { id: e.id }, key ? key.value.trim() : ""); };
+    d.append(f);
+    if (st === "warn") d.append(disconnectRow(e));
+  } else {
+    d.append(err);
+    d.append(disconnectRow(e, true));
+  }
+  body.append(d);
+  const k = d.querySelector("#connKey"); if (k && !CONN.busy) k.focus();
+}
+function disconnectRow(e, withTest) {
+  const row = el("div", "cacts");
+  if (CONN.ask) {
+    const s = el("div", "sure"); s.append(el("span", "", `Disconnect ${e.name}? Any saved key is deleted.`));
+    const y = el("button", "danger solid", "Disconnect"), n = el("button", "", "Keep it"); y.type = n.type = "button";
+    y.onclick = async () => { try { await api(`/api/connectors/${e.id}`, undefined, "DELETE"); CONN.view = "dir"; CONN.ask = false; await refreshConnectors(); } catch (x) { CONN.err = x.message; CONN.ask = false; renderConn(); } };
+    n.onclick = () => { CONN.ask = false; renderConn(); }; s.append(y, n); row.append(s); return row;
+  }
+  if (withTest) {
+    const t = el("button", "", CONN.busy ? "Checking…" : "Check again"); t.type = "button"; t.disabled = CONN.busy;
+    t.onclick = async () => { CONN.busy = true; CONN.err = ""; renderConn(); try { await api(`/api/connectors/${e.id}/test`, {}); } catch (x) { CONN.err = x.message; } CONN.busy = false; await refreshConnectors(); renderConn(); };
+    row.append(t);
+  }
+  const d = el("button", "danger", "Disconnect"); d.type = "button"; d.onclick = () => { CONN.ask = true; renderConn(); }; row.append(d);
+  return row;
+}
+async function connectCall(spec, secret, custom) {
+  CONN.busy = true; CONN.err = ""; CONN.draft = { custom, secret }; renderConn();
+  try {
+    const row = await api("/api/connectors", { ...(spec || {}), ...(custom ? { custom } : {}), secret });
+    CONN.busy = false; CONN.draft = null; CONN.pick = row.id; CONN.view = "detail"; await refreshConnectors(); renderConn();
+  } catch (x) { CONN.busy = false; CONN.err = x.message || "Could not connect"; renderConn(); }  // the form comes back with what was typed, next to the reason
+}
+function renderConnCustom(body) {
+  const d = el("div", "detail"), head = el("div", "dhead"), ht = el("div");
+  ht.append(el("h3", "", "Custom MCP server"), el("div", "b", "Connect any MCP server. Its tools show up for your bots, and anything that changes something asks you first."));
+  const t = el("span", "tile lg"); t.style.background = "var(--ink-3)"; t.style.color = "var(--text-2)"; t.innerHTML = PLUG; head.append(t, ht); d.append(head);
+  const f = el("form", "kform"); f.autocomplete = "off";
+  const field = (label, node, id) => { const w = el("div", "field"), l = el("label", "", label); node.id = id; l.htmlFor = id; w.append(l, node); return w; };
+  const name = el("input"); name.maxLength = 40; name.required = true; name.placeholder = "e.g. My server";
+  const mode = el("select"), modeOpts = [["http", "Server address"], ...(CONN.data.commands_allowed ? [["stdio", "Command on this computer"]] : [])];
+  for (const [v, l] of modeOpts) { const o = el("option", "", l); o.value = v; mode.append(o); }
+  const addr = el("input"); addr.type = "text"; addr.placeholder = "https://example.com/mcp"; addr.spellcheck = false; addr.autocomplete = "off";
+  const cmd = el("input"); cmd.type = "text"; cmd.placeholder = "npx -y some-mcp-server"; cmd.spellcheck = false;
+  const kind = el("select"), key = el("input"), hdr = el("input"), env = el("input");
+  key.type = "password"; key.autocomplete = "off"; key.spellcheck = false; hdr.placeholder = "X-Api-Key"; hdr.spellcheck = false; env.placeholder = "SOME_API_KEY"; env.spellcheck = false;
+  const fName = field("Name", name, "cName"), fMode = field("How to reach it", mode, "cMode"), fAddr = field("Address (https://)", addr, "cAddr"), fCmd = field("Command", cmd, "cCmd"), fKind = field("Key", kind, "cKind"),
+        fHdr = field("Header name", hdr, "cHdr"), fEnv = field("Variable name", env, "cEnv"), fKey = field("Key or token", key, "cKey");
+  fCmd.append(el("div", "warnnote", "Runs on this computer."));
+  fKey.append(el("div", "hint", "Stored encrypted. Never shown again, never sent to a model."));
+  const sync = () => {
+    const stdio = mode.value === "stdio"; kind.replaceChildren();
+    for (const [v, l] of (stdio ? [["none", "No key"], ["env", "Environment variable"]] : [["none", "No key"], ["bearer", "Bearer token"], ["header", "Custom header"]])) { const o = el("option", "", l); o.value = v; kind.append(o); }
+    fAddr.hidden = stdio; fCmd.hidden = !stdio; addr.required = !stdio; cmd.required = stdio; syncKind();
+  };
+  const syncKind = () => { fHdr.hidden = kind.value !== "header"; fEnv.hidden = kind.value !== "env"; fKey.hidden = kind.value === "none"; hdr.required = kind.value === "header"; env.required = kind.value === "env"; key.required = kind.value !== "none"; };
+  mode.onchange = sync; kind.onchange = syncKind; sync();
+  const dr = CONN.draft && CONN.draft.custom && CONN.err ? CONN.draft : null;  // a failed try: put back what was typed
+  if (dr) {
+    const c = dr.custom, a = c.auth || {}; name.value = c.name || ""; addr.value = c.url || ""; cmd.value = c.command || ""; key.value = dr.secret || ""; hdr.value = a.header || ""; env.value = a.env || "";
+    if (c.command && modeOpts.length > 1) { mode.value = "stdio"; sync(); } kind.value = a.kind || "none"; syncKind();
+  }
+  const err = el("div", "cerr", CONN.err); err.setAttribute("role", "alert"); err.hidden = !CONN.err;
+  const go = el("button", "primary", CONN.busy ? "Connecting…" : "Connect"); go.type = "submit"; go.disabled = CONN.busy;
+  const acts = el("div", "cacts"); acts.append(go);
+  if (CONN.busy) f.setAttribute("aria-busy", "true");
+  if (modeOpts.length > 1) f.append(fName, fMode, fAddr, fCmd, fKind, fHdr, fEnv, fKey, err, acts); else f.append(fName, fAddr, fCmd, fKind, fHdr, fEnv, fKey, err, acts);
+  f.onsubmit = (ev) => {
+    ev.preventDefault(); if (CONN.busy) return;
+    const stdio = mode.value === "stdio", a = { kind: kind.value }; if (a.kind === "header") a.header = hdr.value.trim(); if (a.kind === "env") a.env = env.value.trim();
+    connectCall(null, a.kind === "none" ? "" : key.value.trim(), { name: name.value.trim(), ...(stdio ? { command: cmd.value.trim() } : { url: addr.value.trim() }), auth: a });
+  };
+  d.append(f); body.append(d); name.focus();
+}
+function openConnectors() {
+  if (!CONN.dlg) {
+    const dlg = el("dialog", "conn"); dlg.setAttribute("aria-labelledby", "connTitle");
+    const head = el("div", "chead"), back = el("button", "ghost back", ""); back.type = "button"; back.setAttribute("aria-label", "Back to the directory"); back.innerHTML = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>';
+    back.onclick = () => { CONN.view = "dir"; CONN.err = ""; CONN.ask = false; CONN.draft = null; renderConn(); };
+    const sbox = el("div", "sbox"), si = el("input"); si.type = "search"; si.placeholder = "Search across apps and skills"; si.setAttribute("aria-label", "Search across apps and skills"); si.autocomplete = "off";
+    sbox.innerHTML = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>'; sbox.append(si);
+    si.oninput = () => { CONN.q = si.value; renderConn(); };
+    const h3 = el("h3", "", "Connectors"); h3.id = "connTitle";
+    const close = el("button", "ghost", ""); close.type = "button"; close.setAttribute("aria-label", "Close"); close.innerHTML = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>'; close.onclick = () => dlg.close();
+    head.append(back, sbox, h3, close);
+    const pills = el("div", "pills"); pills.setAttribute("role", "group"); pills.setAttribute("aria-label", "Categories");
+    const body = el("div", "cbody"), foot = el("div", "cfoot", "Sign-in with a key or token. Browser sign-in (OAuth) is not supported yet.");
+    dlg.append(head, pills, body, foot);
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });  // a click on the backdrop
+    dlg.addEventListener("close", () => { CONN.busy = false; $("connBtn").focus(); });
+    document.body.append(dlg); CONN.dlg = dlg;
+  }
+  CONN.view = "dir"; CONN.q = ""; CONN.cat = "All"; CONN.err = ""; CONN.ask = false; CONN.draft = null; CONN.dlg.querySelector("input[type=search]").value = "";
+  closeSide(); CONN.dlg.showModal(); renderConn(); refreshConnectors().then(renderConn);
+  CONN.dlg.querySelector("input[type=search]").focus();
+}
+$("connBtn").onclick = openConnectors;
+refreshConnectors();
 loadBots(); pollMobile(); setInterval(loadBots, 6000);
 </script>
 <script src="/vendor/qrcode.js"></script>

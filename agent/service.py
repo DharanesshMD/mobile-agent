@@ -26,6 +26,7 @@ from agent.privacy import AccountMasker
 from agent.gateway import PhoneGateway, phone_history
 from agent.remote import PhoneHub
 from agent.jobs import JobManager
+from agent.connectors import Connectors
 from agent.orchestrator import Orchestrator
 from agent.master import DEFAULT_ASSISTANT_PERSONA, Watcher, ensure_adb_bot, ensure_games_bot, ensure_master, ensure_phone_bot
 from agent.routines import Scheduler
@@ -634,6 +635,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     vault = Vault(db, vault_key or secrets.token_bytes(32))  # an in-memory db gets a throwaway key
     jobs = JobManager(db, hub, device, model_factory, data_dir=data_dir, settle=settle, external_busy=lambda: bool(active()), vault=vault)
     orch = Orchestrator(db, hub, model_factory, jobs, vault)
+    orch.connectors = Connectors(db, vault)
     jobs.orch = orch
     jobs.phones = phones
     for name, (vdev, vlc) in (virtuals or {}).items():

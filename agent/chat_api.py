@@ -15,10 +15,17 @@ from pydantic import BaseModel, Field
 
 from agent import apkcheck, images, sensitive
 from agent.config import TRANSCRIBE_MODEL
+from agent.connectors import ConnectorError
 from agent.master import DEFAULT_ASSISTANT_PERSONA
 
 
 MAX_AUDIO_BYTES = 20 * 1024 * 1024  # 10 minutes of 16 kHz mono 16-bit audio is about 19 MB
+
+
+class Connect(BaseModel):
+    id: str | None = Field(default=None, max_length=40)  # a catalog entry, or...
+    custom: dict | None = None  # ...{name, url | command, auth: {kind, header | env}}
+    secret: str = Field(default="", max_length=4000)  # the key or token: goes to the vault, never stored on the connector or echoed
 
 
 class NewBot(BaseModel):
@@ -120,6 +127,8 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
             Path(path).with_suffix(".md").unlink(missing_ok=True)  # a report is an HTML page with a Markdown twin
         for jid in job_ids:  # screenshots and prompts of its tasks
             shutil.rmtree(Path(jobs.data_dir) / "runs" / jid, ignore_errors=True)
+        if erase_secrets and orch.connectors:
+            orch.connectors.erase_all()  # their keys are in the vault: they go with it
         erased = vault.erase_all() if erase_secrets else 0
         fresh = db.create_bot("Assistant", DEFAULT_ASSISTANT_PERSONA) if last else None
         return {"ok": True, "bot": fresh, "erased_secrets": erased}
@@ -359,7 +368,9 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         if not item["job_id"] and user_text:
             msg = db.add_message(item["bot_id"], "user", "text", user_text)
             hub.publish(item["bot_id"], {"type": "message", "message": msg})
-            if payload.get("web"):  # a "other ways" card: the pick is carried out in code (open a link, show it, or nothing), never decided by a model turn
+            if payload.get("connector"):  # an app's tool the owner was asked to allow: run (or skip) in code, then the bot reports
+                threading.Thread(target=orch.connector_decided, args=(item, bool(body.approved)), daemon=True).start()
+            elif payload.get("web"):  # a "other ways" card: the pick is carried out in code (open a link, show it, or nothing), never decided by a model turn
                 threading.Thread(target=orch.web_pick, args=(item, user_text), daemon=True).start()
             else:
                 threading.Thread(target=orch.turn, args=(item["bot_id"],), daemon=True).start()
@@ -445,6 +456,39 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     def vault_delete(secret_id: str):
         if not vault.delete(secret_id):
             raise HTTPException(404, "unknown secret")
+        return {"ok": True}
+
+    def connectors_changed():
+        for b in db.list_bots():
+            hub.publish(b["id"], {"type": "refresh", "what": "connectors"})
+
+    @app.get("/api/connectors", dependencies=[Depends(auth)])
+    def connectors_list():
+        return orch.connectors.directory()
+
+    @app.post("/api/connectors", dependencies=[Depends(auth)])
+    def connectors_connect(body: Connect):
+        try:
+            row = orch.connectors.connect(body.id, body.custom, body.secret)
+        except ConnectorError as e:
+            raise HTTPException(422, str(e)) from None
+        connectors_changed()
+        return row
+
+    @app.post("/api/connectors/{cid}/test", dependencies=[Depends(auth)])
+    def connectors_test(cid: str):
+        try:
+            row = orch.connectors.test(cid)
+        except ConnectorError as e:
+            raise HTTPException(404, str(e)) from None
+        connectors_changed()
+        return row
+
+    @app.delete("/api/connectors/{cid}", dependencies=[Depends(auth)])
+    def connectors_delete(cid: str):
+        if not orch.connectors.disconnect(cid):
+            raise HTTPException(404, "unknown connector")
+        connectors_changed()
         return {"ok": True}
 
     @app.get("/api/vault/audit", dependencies=[Depends(auth)])

@@ -18,6 +18,7 @@ from agent.db import Database
 
 OWNER = "owner"
 KINDS = ("password", "card", "id", "note")
+HIDDEN = "connector:"  # labels the connectors keep their keys under; hidden from the Vault tab and from every bot
 
 
 def load_key(key_file: str | Path = "data/vault.key") -> bytes:
@@ -49,11 +50,13 @@ class Vault:
     def _aad(sid: str) -> bytes:
         return f"{sid}:{OWNER}".encode()
 
-    def put(self, label: str, value: str, kind: str = "password") -> dict:
+    def put(self, label: str, value: str, kind: str = "password", internal: bool = False) -> dict:
         label, kind = label.strip(), kind if kind in KINDS else "note"
         if not label or not value:
             raise ValueError("label and value are required")
-        if self.find(label):
+        if label.lower().startswith(HIDDEN) != internal:
+            raise ValueError(f"names starting with '{HIDDEN}' are reserved for connectors")
+        if self.db._one("select id from vault where lower(label)=lower(?)", (label,)):
             raise ValueError(f"a secret named '{label}' already exists")
         sid, nonce = uuid.uuid4().hex[:10], secrets.token_bytes(12)
         ct = self._aes.encrypt(nonce, value.encode(), self._aad(sid))
@@ -65,10 +68,18 @@ class Vault:
         return self.db._one("select id,label,kind,created from vault where id=?", (sid,))
 
     def find(self, label: str) -> dict | None:
+        if label.strip().lower().startswith(HIDDEN):
+            return None  # connector keys are not part of what the owner or a bot sees in the Vault
         return self.db._one("select id,label,kind,created from vault where lower(label)=lower(?)", (label.strip(),))
 
     def entries(self) -> list[dict]:
-        return self.db._q("select id,label,kind,created from vault order by label")
+        return self.db._q("select id,label,kind,created from vault where lower(label) not like ? order by label", (HIDDEN + "%",))
+
+    def drop_internal(self, label: str) -> None:
+        """Remove a connector's key (the owner disconnected it or reconnected with a new one)."""
+        with self.db.lock:
+            self.db.conn.execute("delete from vault where lower(label)=lower(?) and lower(label) like ?", (label.strip(), HIDDEN + "%"))
+            self.db.conn.commit()
 
     def labels(self) -> list[str]:
         return [s["label"] for s in self.entries()]
@@ -89,8 +100,10 @@ class Vault:
         self.on_change()
         return n
 
-    def reveal(self, label: str, job_id: str | None = None, app: str = "") -> str:
+    def reveal(self, label: str, job_id: str | None = None, app: str = "", internal: bool = False) -> str:
         """Decrypt for use. Writes an audit row (label, job, app, time) and never the value."""
+        if label.strip().lower().startswith(HIDDEN) and not internal:
+            raise KeyError(label)  # a phone job can never ask for a connector's key
         row = self.db._one("select * from vault where lower(label)=lower(?)", (label.strip(),))
         if not row:
             raise KeyError(label)
