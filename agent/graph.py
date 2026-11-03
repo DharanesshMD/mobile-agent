@@ -32,7 +32,7 @@ CRASH_PREFIX = "App keeps crashing: "  # the orchestrator recognises a failed ta
 
 
 def crash_report(pkg: str, n: int, emulator: bool) -> str:
-    why = (" It closes itself right after it starts, which some apps and games do on an emulated phone (they detect it and refuse to run)."
+    why = (" It closes itself right after it starts, which some apps and games do on a phone like this one (they detect its setup and refuse to run)."
            if emulator else "")
     return f"{CRASH_PREFIX}{pkg} crashed {n} times while opening, so I stopped instead of trying again and again.{why} It cannot be fixed by tapping."
 

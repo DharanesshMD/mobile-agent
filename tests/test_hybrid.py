@@ -21,7 +21,7 @@ from test_remote import connect
 
 
 class Games(GamesDevice):
-    """Cloud phone 2: no Google Play, a couple of installed apps."""
+    """Phone 2: no Google Play, a couple of installed apps."""
     has_play = False
 
     def __init__(self, packages=()):
@@ -139,8 +139,8 @@ class Directory(unittest.TestCase):
     def test_the_games_phone_context_forbids_offering_a_play_store_install(self):
         spark = Spark(act(type="reply", text="ok"))
         c, app, *_, bots = make(spark, AlwaysFails())
-        say(c, bots["Cloud phone 2"], "open clash of clans")
-        until(lambda: "ok" in texts(c, bots["Cloud phone 2"], "assistant"))
+        say(c, bots["Phone 2"], "open clash of clans")
+        until(lambda: "ok" in texts(c, bots["Phone 2"], "assistant"))
         system = spark.calls[0][0]
         self.assertIn("NEVER offer, ask about or promise a Play Store install", system)
         self.assertIn("<- this is YOUR phone", system)
@@ -151,12 +151,12 @@ class PhoneCheckOn(unittest.TestCase):
     def test_a_bot_can_see_where_an_app_is_installed_on_another_phone(self):
         spark = Spark(act(type="phone_check", kind="app_installed", query="shattered pixel", on="games"),
                       act(type="phone_check", kind="app_installed", query="shattered pixel", on="emulator"),
-                      act(type="reply", text="it is on Cloud phone 2"))
+                      act(type="reply", text="it is on Phone 2"))
         c, app, emulator, games, glc, backend, bots = make(spark, AlwaysFails(), games_packages=["com.shatteredpixel.shatteredpixeldungeon"])
         say(c, bots["Assistant"], "where is shattered pixel dungeon?")
-        until(lambda: "it is on Cloud phone 2" in texts(c, bots["Assistant"], "assistant"))
-        self.assertIn("[tool result for phone_check] yes (on Cloud phone 2): installed: com.shatteredpixel.shatteredpixeldungeon", json.dumps(spark.calls[1][1]))
-        self.assertIn("[tool result for phone_check] no (on Cloud phone)", json.dumps(spark.calls[2][1]))
+        until(lambda: "it is on Phone 2" in texts(c, bots["Assistant"], "assistant"))
+        self.assertIn("[tool result for phone_check] yes (on Phone 2): installed: com.shatteredpixel.shatteredpixeldungeon", json.dumps(spark.calls[1][1]))
+        self.assertIn("[tool result for phone_check] no (on Phone)", json.dumps(spark.calls[2][1]))
 
     def test_checking_a_sleeping_phone_wakes_it(self):
         spark = Spark(act(type="phone_check", kind="app_installed", query="shattered", on="games"), act(type="reply", text="done"))
@@ -165,7 +165,7 @@ class PhoneCheckOn(unittest.TestCase):
         say(c, bots["Assistant"], "check")
         until(lambda: "done" in texts(c, bots["Assistant"], "assistant"))
         self.assertIn("resume", backend.calls)
-        self.assertIn("yes (on Cloud phone 2)", json.dumps(spark.calls[1][1]))
+        self.assertIn("yes (on Phone 2)", json.dumps(spark.calls[1][1]))
 
     def test_an_offline_or_unknown_phone_answers_honestly(self):
         spark = Spark(act(type="phone_check", kind="app_installed", query="x", on="Pixel 8"), act(type="phone_check", kind="app_installed", query="x", on="toaster"),
@@ -175,7 +175,7 @@ class PhoneCheckOn(unittest.TestCase):
         say(c, bots["Assistant"], "check")
         until(lambda: "done" in texts(c, bots["Assistant"], "assistant"))
         self.assertIn("error: Pixel 8 is offline (the Mobile Agent app is not connected)", json.dumps(spark.calls[1][1]))
-        self.assertIn("error: unknown phone 'toaster'; use cloud phone, cloud phone 2, Pixel 8", json.dumps(spark.calls[2][1]))
+        self.assertIn("error: unknown phone 'toaster'; use phone, phone 2, Pixel 8", json.dumps(spark.calls[2][1]))
 
 
 class Reroute(unittest.TestCase):
@@ -186,21 +186,21 @@ class Reroute(unittest.TestCase):
         if "[tool result for delegate_task] error" in last:
             return {"type": "reply", "text": "Nothing can run it here."}
         if reroutes == 0:
-            return {"type": "delegate_task", "bot": "Cloud phone 2", "goal": Reroute.GOAL, "say": "On it."}
+            return {"type": "delegate_task", "bot": "Phone 2", "goal": Reroute.GOAL, "say": "On it."}
         if reroutes == 1:
             return {"type": "delegate_task", "bot": "Assistant", "goal": Reroute.GOAL, "say": "Trying the emulator."}
         if reroutes == 2:
             return {"type": "mobile_task", "goal": Reroute.GOAL + " (myself)", "say": "Trying myself."}
-        return {"type": "delegate_task", "bot": "Cloud phone 2", "goal": Reroute.GOAL + " again", "say": "Once more."}
+        return {"type": "delegate_task", "bot": "Phone 2", "goal": Reroute.GOAL + " again", "say": "Once more."}
 
     def test_a_failed_handover_is_rerouted_to_another_phone_and_the_limit_stops_it(self):
         brain = Brain(self.rules)
         c, app, emulator, games, glc, backend, bots = make(brain, AlwaysFails())
         say(c, bots["Master"], "open clash of clans and report what you see")
         until(lambda: "Nothing can run it here." in texts(c, bots["Master"], "assistant"), timeout=60)
-        j = {name: jobs_of(c, bots[name]) for name in ("Cloud phone 2", "Assistant", "Master")}
+        j = {name: jobs_of(c, bots[name]) for name in ("Phone 2", "Assistant", "Master")}
         self.assertEqual([len(v) for v in j.values()], [1, 1, 1])  # the original handover and exactly two reroutes
-        self.assertEqual(j["Cloud phone 2"][0]["target"], "virtual:games")
+        self.assertEqual(j["Phone 2"][0]["target"], "virtual:games")
         self.assertFalse(j["Assistant"][0]["target"])  # the emulator lane
         self.assertIn(bots["Master"], app.state.orch._explain_only)
         self.assertEqual(brain.reroutes, 3)  # the third failure was explain-only: its delegate was refused
@@ -210,14 +210,14 @@ class Reroute(unittest.TestCase):
     def test_master_never_sends_the_same_goal_to_a_phone_that_already_tried_it(self):
         def rules(reroutes, last):
             if "[tool result for delegate_task] error" in last:
-                return {"type": "reply", "text": "Cloud phone 2 already tried."}
-            return {"type": "delegate_task", "bot": "Cloud phone 2", "goal": Reroute.GOAL, "say": "On it."}
+                return {"type": "reply", "text": "Phone 2 already tried."}
+            return {"type": "delegate_task", "bot": "Phone 2", "goal": Reroute.GOAL, "say": "On it."}
         brain = Brain(rules)
         c, app, emulator, games, glc, backend, bots = make(brain, AlwaysFails())
         say(c, bots["Master"], "open clash of clans")
-        until(lambda: "Cloud phone 2 already tried." in texts(c, bots["Master"], "assistant"), timeout=40)
-        self.assertEqual(len(jobs_of(c, bots["Cloud phone 2"])), 1)
-        self.assertIn("Cloud phone 2 already tried this", json.dumps([m for _, ms in brain.calls for m in ms]))
+        until(lambda: "Phone 2 already tried." in texts(c, bots["Master"], "assistant"), timeout=40)
+        self.assertEqual(len(jobs_of(c, bots["Phone 2"])), 1)
+        self.assertIn("Phone 2 already tried this", json.dumps([m for _, ms in brain.calls for m in ms]))
 
     def test_the_reroute_budget_is_new_for_each_owner_request(self):
         c, app, emulator, games, glc, backend, bots = make(Spark(act(type="reply", text="ok")), AlwaysFails())
@@ -232,8 +232,8 @@ class Reroute(unittest.TestCase):
     def test_a_non_master_bot_is_told_to_name_the_better_phone_and_never_to_promise(self):
         spark = Spark(act(type="mobile_task", goal="open clash of clans", say="On it."), act(type="reply", text="It needs another phone; ask Master."))
         c, app, emulator, games, glc, backend, bots = make(spark, AlwaysFails())
-        say(c, bots["Cloud phone 2"], "open clash of clans")
-        until(lambda: "It needs another phone; ask Master." in texts(c, bots["Cloud phone 2"], "assistant"), timeout=40)
+        say(c, bots["Phone 2"], "open clash of clans")
+        until(lambda: "It needs another phone; ask Master." in texts(c, bots["Phone 2"], "assistant"), timeout=40)
         note = spark.calls[-1][1][-1]["content"]
         self.assertIn("tell the owner to ask Master", note)
         self.assertIn("Never offer or promise an install", note)

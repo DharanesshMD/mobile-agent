@@ -168,13 +168,13 @@ OTPs does not exist yet (the web OTP card is a stand-in); Play Store image and G
 ## 13. Google sign-in in the client app and the cloud-phone account consent (added 27 Oct 2026)
 
 Requirement: the Android client signs the owner in with Google (SSO). At that moment the app asks whether the same Google account may
-also be set up on the cloud phone, so automation (Play Store installs, Gmail-based apps) can start right away.
+also be set up on the phone, so automation (Play Store installs, Gmail-based apps) can start right away.
 
 ### What SSO can and cannot do
 - Sign in with Google (Credential Manager / Google Identity Services) proves who the owner is and gives an ID token (identity only).
   It does not let another device sign in to that Google account. There is no supported way to copy a signed-in Google session from
   the owner's phone to a cloud emulator. Moving tokens or cookies across devices breaks Google's terms and can lock the account, so we do not do it.
-- Setting the account up on the cloud phone therefore means a normal Google sign-in on the emulator, done by the owner. The email is
+- Setting the account up on the phone therefore means a normal Google sign-in on the emulator, done by the owner. The email is
   known from SSO (the agent may type it); the password is typed by the owner only. Google's "Is this you?" prompt or SMS code then
   arrives on the owner's real phone, which already runs our app (use the `request_otp` flow for SMS codes).
 - Google can still refuse or add checks for a sign-in from an emulator. Fallback: Gmail and Calendar via OAuth scopes on the server
@@ -184,18 +184,18 @@ also be set up on the cloud phone, so automation (Play Store installs, Gmail-bas
 1. App start: "Continue with Google". The app sends the ID token to `POST /api/auth/google`. The server verifies it (signature,
    audience = our web client ID, email verified). The first account becomes the owner; any other account is rejected (single owner).
    The server issues a device-bound token, which replaces the pairing code.
-2. Consent screen right after login: "Use <email> on your cloud phone so the agent can start working right away?"
+2. Consent screen right after login: "Use <email> on your phone so the agent can start working right away?"
    - Yes, use this account
    - Use a different account (recommended: a throwaway or secondary account)
    - Not now (the agent works without Google; apps that need it will ask later)
    It states plainly: the agent will be able to use Play Store and apps on that account; the password is typed by you and is never seen by the app,
    the server or the model; you can remove the account at any time.
-3. Yes: `POST /api/cloud-account/start {email}`. The server runs a provisioning run on the cloud phone: open Add account, type the
-   email, then `handoff`. The app shows "Finish sign-in on your cloud phone" with the live phone view and touch/keyboard takeover.
+3. Yes: `POST /api/cloud-account/start {email}`. The server runs a provisioning run on the phone: open Add account, type the
+   email, then `handoff`. The app shows "Finish sign-in on your phone" with the live phone view and touch/keyboard takeover.
 4. The owner types the password. If Google asks for confirmation, the prompt appears on the owner's phone; SMS codes go through `request_otp`.
 5. Verify: the agent checks the Play Store (or Settings > Passwords & accounts) shows the account, and the server records `google_linked = email`.
 6. Kickstart: the app offers starter tasks (for example "Install an app from the Play Store") and queues the chosen one.
-7. Remove: "Disconnect Google from the cloud phone" clears the account on the device (Settings > Passwords & accounts > Remove, or wipe the
+7. Remove: "Disconnect Google from the phone" clears the account on the device (Settings > Passwords & accounts > Remove, or wipe the
    emulator data) and the app reminds the owner to check myaccount.google.com device activity.
 
 ### API additions
@@ -221,18 +221,18 @@ The earlier `android-personal-agent` project has its own Android client; do not 
 
 ## 13b. Revision: one Google sign-in only (27 Oct 2026)
 
-Requirement from the owner: the user must not sign in to the same Google account twice (once in the app, once on the cloud phone).
-Plain Sign in with Google in the app cannot give the cloud phone that account (see 13), so the two-login design is dropped.
+Requirement from the owner: the user must not sign in to the same Google account twice (once in the app, once on the phone).
+Plain Sign in with Google in the app cannot give the phone that account (see 13), so the two-login design is dropped.
 
 Options that give a single login:
-- A. Sign in once, on the cloud phone (recommended). The app has no separate Google login. It pairs with the server (one-time code),
-  then shows "Sign in to your cloud phone" with the live phone view. The owner signs in to Google there, once, and types the password
+- A. Sign in once, on the phone (recommended). The app has no separate Google login. It pairs with the server (one-time code),
+  then shows "Sign in to your phone" with the live phone view. The owner signs in to Google there, once, and types the password
   themselves. The server reads the account from the device (`adb shell dumpsys account` lists `Account {name=<email>, type=com.google}`;
-  currently `Accounts: 0`) and shows "Signed in as <email>" in the app. The consent question becomes: "Sign in to your cloud phone now so the agent
+  currently `Accounts: 0`) and shows "Signed in as <email>" in the app. The consent question becomes: "Sign in to your phone now so the agent
   can start right away?" Play Store and app installs work. No Google Cloud OAuth setup is needed, which also removes that manual step.
 - B. Sign in once in the app with extra OAuth scopes (Gmail, Calendar, Drive). The server keeps a refresh token and the agent uses APIs.
-  One login, but the cloud phone has no Google account, so no Play Store installs. Could be added later next to A for API-only tasks.
-- C. Copy the session from the owner's phone to the cloud phone. Not supported, breaks Google's terms, rejected.
+  One login, but the phone has no Google account, so no Play Store installs. Could be added later next to A for API-only tasks.
+- C. Copy the session from the owner's phone to the phone. Not supported, breaks Google's terms, rejected.
 
 Decision (pending owner confirmation): A as the default; B optional later.
 

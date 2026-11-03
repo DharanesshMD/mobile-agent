@@ -14,14 +14,14 @@ conservative reading.
 
 ## What the agent does and does not do
 - **Never:** tap, scroll, swipe, type, or press a key other than back/home in one of those apps (code-enforced in the worker, `agent/graph.py`, on every phone: the emulator,
-  Cloud phone 2, extra adb phones and the real phone's app). It also never types a saved secret there.
+  Phone 2, extra adb phones and the paired phone's app). It also never types a saved secret there.
 - **Still does:** open the app, wait, take screenshots, press back/home, install it, move it between phones, check that it stays up, and tell you what the screen shows (launch,
   age or login screen).
 - **How it is enforced:** each screen read also reads the app in front (in parallel, no extra step). Before an input action the worker looks at that verdict; a refused input
   is answered with the reason and the way out ("finish with done and describe the screen"); after three refusals the task ends with "Not played, to protect your account: ...".
   It holds for tasks you ask for, routines, steering notes, and the escalation chain.
 - **Asked to play it:** the bot says so plainly in two sentences (the publisher bans bot accounts), lists what it CAN do, and points you to **Take control**: you can drive the
-  Cloud phone 2 yourself (Mobile tab > Open > Take control, with tap, scroll, typing and keys), and the agent's lane for that phone pauses while you do.
+  Phone 2 yourself (Mobile tab > Open > Take control, with tap, scroll, typing and keys), and the agent's lane for that phone pauses while you do.
 - **Other games:** the worker warns once before it plays any other game ("Automating a game can get your account banned by its publisher. Continue?", a confirm card) and plays
   only if you approve. Other publishers may ban bots too; the built-in list holds only the ones whose public rules we read.
 

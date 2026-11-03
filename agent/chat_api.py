@@ -53,6 +53,7 @@ class Answer(BaseModel):
     secret: str | None = Field(default=None, max_length=2000, repr=False)
     label: str | None = Field(default=None, max_length=60)
     done: bool | None = None
+    use_relay: bool = False  # a one-time code: send the one the owner's phone found (the code itself never travels here)
 
 
 class RoutinePatch(BaseModel):
@@ -352,6 +353,11 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         else:  # otp: the code goes to the phone and is never stored, echoed or logged
             if body.approved is False:
                 label, resume = "Declined", {"code": ""}
+            elif body.use_relay:  # the code the owner's phone found, approved with one click: taken from memory here, typed on the phone, never shown
+                got = jobs.otp.take(item_id) if jobs.otp else None
+                if got is None:
+                    raise HTTPException(409, "no code from your phone yet")
+                label, resume = f"Code from {got[1]} sent to the phone", {"code": got[0]}
             elif body.code and re.fullmatch(r"\d{4,8}", body.code):
                 label, resume = "Code sent to the phone", {"code": body.code}
             else:
@@ -365,6 +371,8 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
             m = db.get_message(item["message_id"])
             upd = db.update_message(item["message_id"], meta={**m["meta"], "status": "answered", "answer": label})
             hub.publish(item["bot_id"], {"type": "message", "message": upd})
+        if kind == "otp" and jobs.otp:
+            jobs.otp.finish(item_id)  # stop watching the owner's phone and clear the card's masked hint
         if field and kind in ("text", "choice"):
             db.memory_add(item["bot_id"], f"Owner said {field}: {resume['value']}")
         if not item["job_id"] and kind == "secret" and resume["saved"]:

@@ -415,7 +415,7 @@ class AppCrashes(unittest.TestCase):
         self.assertEqual(res.status, "failed")
         self.assertTrue(res.answer.startswith(CRASH_PREFIX))
         self.assertIn("com.supercell.clashofclans crashed 3 times", res.answer)
-        self.assertIn("emulated phone", res.answer)
+        self.assertIn("a phone like this one", res.answer)
         self.assertEqual(len(phone.taps), 3)  # it did not keep trying
         self.assertNotIn("CRASHES", model.prompts[0])  # the crash from before the task is not counted
         self.assertIn("com.supercell.clashofclans crashed 1x", model.prompts[1])  # the model learns about it on the next step

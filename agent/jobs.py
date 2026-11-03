@@ -13,7 +13,7 @@ import threading
 import time
 from pathlib import Path
 
-from agent import cloudtools, report as report_mod, reportsave
+from agent import cloudtools, names, report as report_mod, reportsave
 from agent.artifacts import Artifacts
 from agent.checks import run_check
 from agent.config import HOLD_IDLE_MIN, OWNER_WAIT_MIN, WORKER_MODEL
@@ -80,6 +80,7 @@ class JobManager:
         self.lifecycle = None  # phone power (sleep and wake), attached by the app
         self.adb_phones = None  # extra adb phones (agent/adbphones.py), attached by the app
         self.phones = None  # real phones connected through the app (agent/remote.py), attached by the app
+        self.otp = None  # the one-time-code relay (agent/otprelay.py), attached by the app
         self.app_cache: dict = self._load_app_cache()  # phone key -> (when, user-installed packages)
         self.virtuals: dict[str, tuple] = {}  # name -> (Device, Lifecycle) of each virtual phone (agent/virtual.py), attached by the app
         self.orch = None  # set by the app after construction
@@ -435,7 +436,7 @@ class JobManager:
         if jr.target.startswith("virtual:"):  # Cloud phone 2: its own device and power, never the emulator
             device, lifecycle = self.pair(jr.target)
             if device is None:
-                return self._fail(jr, "Cloud phone 2 is not set up on this computer (see docs/virtual-android.md).")
+                return self._fail(jr, f"{names.SECOND} is not set up on this computer.")
             name = jr.target.split(":", 1)[1]
             if lifecycle is None and self.adb_phones is not None and name in self.adb_phones.config and not self.adb_phones.online(name, fresh=True):
                 return self._fail(jr, f"The {name} phone is offline: adb cannot reach it ({self.adb_phones.serial(name)}). Connect it, then ask again.")
@@ -457,7 +458,7 @@ class JobManager:
             except Exception as e:
                 return self._fail(jr, f"I could not copy the picture to the phone: {str(e)[:150]}")
         if jr.report in ("link", "matrix") and (jr.target.startswith("phone:") or not hasattr(device, "set_night")):
-            return self._fail(jr, "Link checks and screen-setting checks run only on the agent's own cloud phones, never on your own phone.")
+            return self._fail(jr, "Link checks and screen-setting checks never run on a phone paired through the app: run them on Phone or Phone 2.")
         art = Artifacts()
         if jr.report in ("guide", "matrix", "plain"):
             cloudtools.snapshot(device, art)  # whatever the task changes in Settings is put back afterwards
@@ -518,7 +519,7 @@ class JobManager:
     def _push_files(self, jr: JobRun, device) -> list[str]:
         """Copy the task's pictures to the phone and tell the worker where they are. Not on the owner's real phone yet (its app has no file hand-off)."""
         if not hasattr(device, "push"):
-            raise ValueError("sending a picture to your own phone is not supported yet")
+            raise ValueError("sending a picture to this phone is not supported yet")
         remotes = []
         try:
             for fid in jr.files:
@@ -587,6 +588,8 @@ class JobManager:
                     "handoff": {"kind": "handoff", "question": text or "Please take over the phone for this step."},
                     "request_otp": {"kind": "otp", "question": f"{text or 'An app'} sent a one-time code. Enter it here."}}[kind]
             item = self.orch.make_item(jr.bot_id, jr.job_id, spec)
+            if kind == "request_otp" and self.otp:
+                self.otp.begin(item, jr)  # the owner's own phone is asked to watch for the code (never raises; the card works without it)
         jr.pending_item = item["id"]
         self.db.update_job(jr.job_id, status="waiting")
         self._set_status(jr, "Waiting for you")
@@ -615,7 +618,7 @@ class JobManager:
         if not (art.captures or art.verdict):
             return
         kind = jr.report or "plain"
-        label = {"": "Cloud phone", "virtual:games": "Cloud phone 2"}.get(jr.target, jr.target.split(":", 1)[-1] if jr.target else "")
+        label = {"": names.SHARED, "virtual:games": names.SECOND}.get(jr.target, jr.target.split(":", 1)[-1] if jr.target else "")
         title = report_mod.title_for(kind, jr.goal)
         reportsave.save(self.db, self.hub, self.data_dir, jr.bot_id, jr.job_id, kind, title, jr.goal.splitlines()[0], status, result, art, label,
                         [f"Could not put the phone back fully: {e}" for e in undo_errors])

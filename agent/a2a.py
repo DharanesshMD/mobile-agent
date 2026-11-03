@@ -121,11 +121,10 @@ def hash_token(token: str) -> str:
 
 
 def scrub(text: str) -> str:
-    """The owner knows the phones as Cloud phone, Cloud phone 2 and your phone: an outside agent never hears the internal names."""
+    """The phones are Phone, Phone 2, Phone 3 ...: an outside agent never hears the internal names or the older ones."""
     text = re.sub(r"\s*\(\w*(?:Error|Exception)\)", "", text)  # "(RuntimeError)" and the like: what went wrong inside is the owner's business
-    text = re.sub(r"\bgames[ -]phone\b", "Cloud phone 2", text, flags=re.I)
-    text = re.sub(r"\bredroid\b", "Cloud phone 2", text, flags=re.I)
-    return re.sub(r"\bemulator\b", "Cloud phone", text, flags=re.I)
+    text = re.sub(r"\b(?:games[ -]phone|redroid|cloud phone 2)\b", "Phone 2", text, flags=re.I)
+    return re.sub(r"\b(?:emulator|cloud phone)\b", "Phone", text, flags=re.I)
 
 
 class Store:
@@ -426,21 +425,21 @@ OUTPUT_MODES = ["text/plain", "application/json", "image/png", "text/html", "tex
 
 SKILLS = [
     {"id": "phone-task", "scope": "phone", "name": "Do something on an Android phone",
-     "description": "Hands a goal to a real Android phone in the cloud (Cloud phone, Cloud phone 2, or the owner's own phone when it is connected). The agent opens apps, reads screens, taps and types until the goal is done and checked. "
+     "description": "Hands a goal to an Android phone (Phone, Phone 2, or another phone the owner connected). The agent opens apps, reads screens, taps and types until the goal is done and checked. "
                     "It asks its owner before it sends, pays, installs or signs in, so such a task can pause in the input-required state until the owner answers on their own device. It never plays games whose publishers ban bot accounts.",
-     "tags": ["android", "phone", "automation", "apps"], "examples": ["Open Settings and tell me the Android version", "Install Google Keep and write a note called Dentist", "Which games are installed on Cloud phone 2?"],
+     "tags": ["android", "phone", "automation", "apps"], "examples": ["Open Settings and tell me the Android version", "Install Google Keep and write a note called Dentist", "Which games are installed on Phone 2?"],
      "inputModes": ["text/plain", "application/json", "image/png", "image/jpeg"], "outputModes": ["text/plain", "application/json", "image/png", "text/html", "text/markdown"],
      "outputs": "Artifacts: `answer` (text), `job-results` (data: goal, status and result of each phone task), `screenshot-*` and `picture-*` (image files), `report` and `report-markdown` (files).",
      "schema": {"type": "object", "properties": {"skill": {"const": "phone-task"}, "goal": {"type": "string", "maxLength": 4000, "description": "What to get done, in plain words"},
-                                                  "phone": {"enum": ["Cloud phone", "Cloud phone 2"], "description": "Optional: which phone. Default: the agent chooses"},
+                                                  "phone": {"enum": ["Phone", "Phone 2"], "description": "Optional: which phone. Default: the agent chooses"},
                                                   "report": {"enum": ["link", "matrix", "guide", "plain"], "description": "Optional: collect pictures into a report"}}, "required": ["goal"]}},
     {"id": "link-check", "scope": "phone", "name": "Is this link safe?",
-     "description": "Opens a link in a throwaway browser on a cloud phone, types nothing and taps nothing on the page, and answers with a verdict (looks harmful, looks suspicious, nothing found in these checks), the reasons and what was NOT checked. It never says a link is safe.",
+     "description": "Opens a link in a throwaway browser on Phone, types nothing and taps nothing on the page, and answers with a verdict (looks harmful, looks suspicious, nothing found in these checks), the reasons and what was NOT checked. It never says a link is safe.",
      "tags": ["security", "link", "phishing"], "examples": ["Is https://example.com safe to open?"], "inputModes": ["text/plain", "application/json"], "outputModes": ["application/json", "text/plain", "text/html"],
      "outputs": "Artifacts: `verdict` (data: verdict, reasons), `answer` (text), `report` (file).",
      "schema": {"type": "object", "properties": {"skill": {"const": "link-check"}, "url": {"type": "string", "format": "uri", "pattern": "^https?://"}}, "required": ["url"]}},
     {"id": "apk-check", "scope": "phone", "name": "Check an APK before installing it",
-     "description": "Reads an Android app file WITHOUT running it (permissions, signing certificate), installs it on a throwaway cloud phone, launches it for 20 seconds watching for crashes, uninstalls it and returns a verdict and a report. Send the .apk as a file part (raw, base64).",
+     "description": "Reads an Android app file WITHOUT running it (permissions, signing certificate), installs it on a throwaway phone (Phone 2 or Phone), launches it for 20 seconds watching for crashes, uninstalls it and returns a verdict and a report. Send the .apk as a file part (raw, base64).",
      "tags": ["security", "apk", "android"], "examples": ["Check this APK"], "inputModes": ["application/vnd.android.package-archive", "text/plain"], "outputModes": ["application/json", "text/html", "text/plain"],
      "outputs": "Artifacts: `verdict` (data), `report` and `report-markdown` (files), `answer` (text).",
      "schema": {"type": "object", "properties": {"skill": {"const": "apk-check"}}, "description": "The APK goes in a file part with filename ending in .apk"}},

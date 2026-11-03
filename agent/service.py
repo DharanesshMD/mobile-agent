@@ -31,8 +31,10 @@ from agent.jobs import JobManager
 from agent.a2a_rpc import Service as A2AService
 from agent.a2a_server import Manager as A2AManager, register_management as register_a2a
 from agent.connectors import Connectors
+from agent.phoneinstall import PhoneInstaller, register_install
 from agent.orchestrator import Orchestrator
-from agent.master import DEFAULT_ASSISTANT_PERSONA, Watcher, ensure_adb_bot, ensure_games_bot, ensure_master, ensure_phone_bot
+from agent.otprelay import OtpRelay
+from agent.master import DEFAULT_ASSISTANT_PERSONA, Watcher, ensure_adb_bot, ensure_games_bot, ensure_master, ensure_phone_bot, migrate_phone_names
 from agent.routines import Scheduler
 from agent.store import Store
 
@@ -395,12 +397,12 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     @app.post("/api/cloud-account/start")
     def cloud_account_start(body: CloudAccountStart, who: dict = Depends(auth)):
         if not body.consent:
-            raise HTTPException(422, "consent is required to set up a Google account on the cloud phone")
+            raise HTTPException(422, "consent is required to set up a Google account on Phone")
         email = (body.email or "").strip() or None
         if email and not EMAIL.match(email):
             raise HTTPException(422, "invalid email")
         if sync_account():
-            raise HTTPException(409, "a Google account is already signed in on the cloud phone")
+            raise HTTPException(409, "a Google account is already signed in on Phone")
         goal = ("Set up a Google account on this phone. Open the Play Store app and tap Sign in "
                 "(or Settings > Passwords & accounts > Add account > Google). "
                 + (f"When the email field appears, type the email {email} and continue. " if email else "")
@@ -413,10 +415,10 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     @app.delete("/api/cloud-account")
     def cloud_account_remove(confirm: bool = False, who: dict = Depends(auth)):
         if not confirm:
-            raise HTTPException(422, "pass confirm=true to remove the Google account from the cloud phone")
+            raise HTTPException(422, "pass confirm=true to remove the Google account from Phone")
         email = sync_account()
         if not email:
-            raise HTTPException(404, "no Google account on the cloud phone")
+            raise HTTPException(404, "no Google account on Phone")
         goal = (f"Remove the Google account {email} from this phone: open Settings > Passwords & accounts, select that account, "
                 "tap Remove account and confirm. Finish with done once no Google account is listed.")
         r = start_run(goal, "muse-wonder-1.0", 20, "deprovision")
@@ -629,6 +631,18 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
                            Path(data_dir) / "apk" / "mobile-agent.apk", int(os.environ.get("PHONE_GATEWAY_PORT", "8765")))
     app.state.gateway = gateway
 
+    def pairing_link() -> str | None:
+        """What the installer hands the app on the phone: the same link the QR page offers, only while the owner has the phone door open."""
+        g = gateway.state()
+        return f"mobileagent://pair?server=http://{g['address']}&code={g['code']}" if g["window"] and g["address"] and g["code"] else None
+
+    def managed_serials() -> set:
+        from agent.adbphones import load_adb_phones
+        return set(load_adb_phones()[0].values())
+
+    app.state.installer = PhoneInstaller(adb=os.environ.get("ADB", "adb"), apk_path=Path(data_dir) / "apk" / "mobile-agent.apk", managed=managed_serials, link=pairing_link)
+    register_install(app, auth, app.state.installer)
+
     @app.get("/api/gateway/state", dependencies=[Depends(auth)])
     def gateway_state():
         return gateway.state()
@@ -648,6 +662,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     app.state.knowledge = orch.knowledge = db.knowledge  # the shared notes: bots and (through the A2A service) outside agents retrieve from it
     jobs.orch = orch
     jobs.phones = phones
+    jobs.otp = OtpRelay(db, hub, jobs)
     for name, (vdev, vlc) in (virtuals or {}).items():
         jobs.virtuals[name] = (vdev, vlc)
         if vlc is not None:
@@ -668,6 +683,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
                 ensure_adb_bot(db, hub, name, adb_phones.serial(name), adb_phones.has_play(name))
     app.state.sync_adb = sync_adb_phones
     sync_adb_phones()
+    migrate_phone_names(db, {d["id"]: d.get("name", "") for d in store.devices()})  # bots still carrying an old phone name get the current one, once
     phones.on_change = lambda: [hub.publish(b["id"], {"type": "refresh", "what": "phone"}) for b in db.list_bots()]
     phones.on_connect = lambda pid, info: ensure_phone_bot(db, hub, pid, info)
     app.state.phones = phones
@@ -768,8 +784,9 @@ def create_default_app() -> FastAPI:
                      token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
                      db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True,
                      lifecycle=lifecycle, virtuals=virtuals, adb_phones=adb_phones)
+    app.state.gateway.restore()  # phones paired earlier can reconnect without the owner opening the pairing window again
     app.state.orch.web_in_chain = True  # when no phone can run an app, the last step is a web search for other ways (a card; nothing runs until the owner picks)
-    log.info("ready: shared phone %s, Cloud phone 2 %s, extra adb phones %d", "yes" if lifecycle else "no sleep control", "yes" if virtuals else "no", len(extra))
+    log.info("ready: Phone %s, Phone 2 %s, extra phones %d", "yes" if lifecycle else "no sleep control", "yes" if virtuals else "no", len(extra))
     print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)  # the console only: a code never goes into a file
     return app
 

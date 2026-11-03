@@ -56,7 +56,7 @@ Check the official rules whether a partly open-weight build qualifies.
 - `agent/openweights.py`: `OpenWeightClient` (a subclass of `MetaClient`: same `chat()`/`complete()`, same retries for 429/5xx/network errors, token counting; no Meta-only `reasoning_effort`; strips `<think>` blocks),
   `make_model_factory()` (returns the open client only for the orchestrator model name; the service uses it), `strip_images`/`has_images`.
 - `agent/config.py`: `OPEN_WEIGHT_MODEL`, `OPEN_WEIGHT_BASE_URL`. `agent/service.py`: one line uses the factory. `.env.example`: all settings.
-- `scripts/openweights_check.py`: 10 decisions (answer, phone task, phone check, plan, memory, routine, delegate to the games phone, approval before texting, request a secret, refuse to play a
+- `scripts/openweights_check.py`: 10 decisions (answer, phone task, phone check, plan, memory, routine, delegate to Phone 2, approval before texting, request a secret, refuse to play a
   blocked game) on a temporary database with fake phones; `--dry-run` proves the harness without calling any model.
 - `tests/test_openweights.py`: 16 tests (request shape and Bearer key, retries, token counting, JSON mode, `<think>` removal, missing key, picture handling and fallback, factory, search/transcribe stay on Meta).
 

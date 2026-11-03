@@ -3,17 +3,17 @@
 Stop the service first (it holds the database open); this script refuses to run while one is up or a job is running. Then:
     .venv/bin/python scripts/demo_reset.py [--no-phones] [--fresh-chain]
 
---fresh-chain is for filming Hero A (an app that crashes on the emulator is moved to Cloud phone 2): it forgets where apps already ran and removes Clash of Clans from the
-Cloud phone 2 (starting that phone if needed), so the whole chain shows. Without it a second take goes straight to Cloud phone 2, which is also a good thing to film.
+--fresh-chain is for filming Hero A (an app that crashes on Phone is moved to Phone 2): it forgets where apps already ran and removes Clash of Clans from the
+Phone 2 (starting that phone if needed), so the whole chain shows. Without it a second take goes straight to Phone 2, which is also a good thing to film.
 and start the service again (preview_start "mobile-agent", or `uv run python -m agent.service`). Run scripts/demo_check.py to see what is green.
 
 What it does, in order:
  1. backs up the database (data/app.db.before-demo-reset-<time>);
  2. wipes chats, tasks, memory, routines, screenshots, pictures and traces (like scripts/reset_fresh.py), keeps the vault's other secrets, paired devices and phone bots;
- 3. seeds: Master with its introduction, "Home assistant" (persona set), the Cloud phone 2 bot, the real-phone bot renamed "My phone" when there is one, a "Morning brief" routine
+ 3. seeds: Master with its introduction, "Home assistant" (persona set), the Phone 2 bot, the real-phone bot renamed "My phone" when there is one, a "Morning brief" routine
     (daily 07:30 local time, web search), a vault entry "Demo login" with a clearly fake value, and two memories (favourite colour, Mom's demo number);
  4. prepares the phones (skipped with --no-phones): emulator awake on the launcher with the demo screen profile and the Mac's time zone, three FAKE contacts, Chrome and
-    Calendar first-run dialogs dismissed; Cloud phone 2 checked for Shattered Pixel Dungeon and Clash of Clans (opened, never played).
+    Calendar first-run dialogs dismissed; Phone 2 checked for Shattered Pixel Dungeon and Clash of Clans (opened, never played).
 
 PRIVACY: the emulator's Google account syncs that account's own contacts and calendar. This script never reads or changes them, but they are on the phone: do not film
 the Contacts or Calendar lists unless that account is a throwaway.
@@ -41,7 +41,7 @@ DB = ROOT / "data" / "app.db"
 EMULATOR = os.environ.get("ANDROID_SERIAL", "emulator-5554")
 GAMES = "localhost:5565"
 HOME_PERSONA = "The owner's home assistant: answers questions, remembers what the owner tells it, and uses the phone for errands."
-PHONE_GREETING = "Your phone ({name}) is paired. Tell me what to do on it: I work on it in the background, and these tasks never touch the shared emulator."
+PHONE_GREETING = "{name} is paired. Tell me what to do on it: I work on it in the background, and these tasks run only on this phone."
 BRIEF = ("Give me a short morning brief: today's date, the weather in my city if you can find it, and the three biggest news headlines of the day. "
          "Use web search, keep it to five lines, and say where each fact came from.")
 DEMO_SECRET = ("Demo login", "demo-not-a-real-password", "password")
@@ -105,7 +105,7 @@ def wipe_and_seed(db: Database) -> dict:
     for b in db.list_bots():
         if b["kind"] == "phone":
             db._x("update bots set name=? where id=?", ("My phone", b["id"]))
-            db.add_message(b["id"], "assistant", "text", PHONE_GREETING.format(name="My phone"))
+            db.add_message(b["id"], "assistant", "text", PHONE_GREETING.format(name="Phone 3"))
     sched = {"daily_at": "07:30"}
     db.routine_add(home["id"], "Morning brief", BRIEF, sched, next_run(sched, time.time()))
     for text in MEMORIES:
@@ -165,14 +165,14 @@ def add_fake_contacts(serial: str) -> int:
 
 
 def fresh_chain() -> list[str]:
-    """Take Clash of Clans off Cloud phone 2 so Hero A shows the whole chain (crash on the emulator, copy, open on Cloud phone 2)."""
+    """Take Clash of Clans off Phone 2 so Hero A shows the whole chain (crash on Phone, copy, open on Phone 2)."""
     notes: list[str] = []
     script = ROOT / "scripts" / "virtual-android" / "redroid.sh"
     if adb(GAMES, "get-state", timeout=6).strip() != "device":
         r = subprocess.run(["bash", str(script), "start"], capture_output=True, text=True, timeout=240)
-        notes.append("Cloud phone 2 started for the clean-up" if r.returncode == 0 else f"Cloud phone 2 did not start: {(r.stdout + r.stderr)[-120:]}")
+        notes.append("Phone 2 started for the clean-up" if r.returncode == 0 else f"Phone 2 did not start: {(r.stdout + r.stderr)[-120:]}")
     out = adb(GAMES, "uninstall", "com.supercell.clashofclans", timeout=60).strip()
-    notes.append(f"Clash of Clans removed from Cloud phone 2: {out or 'no answer'}")
+    notes.append(f"Clash of Clans removed from Phone 2: {out or 'no answer'}")
     return notes
 
 
@@ -183,15 +183,15 @@ def prepare_phones() -> list[str]:
     backend = EmulatorBackend([adb_path(), "-s", EMULATOR])
     state = backend.status()
     if state == "stopped":
-        notes.append("emulator is stopped: start the service, wake the phone from the Mobile tab, then run this script's phone step again (--phones-only)")
+        notes.append("Phone is stopped: start the service, wake the phone from the Mobile tab, then run this script's phone step again (--phones-only)")
         return notes
     if state == "paused" and not backend.resume():
-        notes.append("emulator did not resume")
+        notes.append("Phone did not resume")
         return notes
     try:
         dev = Device(EMULATOR)
         dev.prepare()
-        notes.append(f"emulator: demo screen profile and time zone {dev.sync_timezone() or '(unknown)'}")
+        notes.append(f"Phone: demo screen profile and time zone {dev.sync_timezone() or '(unknown)'}")
         notes.append(f"fake contacts added: {add_fake_contacts(EMULATOR)}")
         for name, pkg in APPS.items():
             if f"package:{pkg}" in adb(EMULATOR, "shell", "pm", "list", "packages", pkg):
@@ -200,16 +200,16 @@ def prepare_phones() -> list[str]:
                 notes.append(f"{name}: NOT installed")
         adb(EMULATOR, "shell", "input", "keyevent", "KEYCODE_HOME")
     except Exception as e:  # a phone that does not answer must not hide the database result
-        notes.append(f"emulator step failed: {type(e).__name__}: {str(e)[:120]}")
+        notes.append(f"Phone step failed: {type(e).__name__}: {str(e)[:120]}")
     try:
         if adb(GAMES, "get-state", timeout=6).strip() != "device":
-            notes.append("Cloud phone 2: off (it starts by itself when a task needs it): app check skipped, demo_check.py checks it once it is up")
+            notes.append("Phone 2: off (it starts by itself when a task needs it): app check skipped, demo_check.py checks it once it is up")
             return notes
         have = adb(GAMES, "shell", "pm", "list", "packages", timeout=10)
         for label, pkg in GAME_APPS.items():
-            notes.append(f"Cloud phone 2 {label}: {'installed' if f'package:{pkg}' in have else 'NOT installed (scripts/virtual-android/install-apk.sh)'}")
+            notes.append(f"Phone 2 {label}: {'installed' if f'package:{pkg}' in have else 'NOT installed (scripts/virtual-android/install-apk.sh)'}")
     except Exception:
-        notes.append("Cloud phone 2: not answering; app check skipped")
+        notes.append("Phone 2: not answering; app check skipped")
     return notes
 
 

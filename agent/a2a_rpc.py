@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agent import names
 from agent import a2a, apkcheck, images
 from agent.a2a import (A2AError, AuthError, COMPLETED, FAILED, CANCELED, INPUT_REQUIRED, INTERRUPTED, REJECTED, SUBMITTED, TERMINAL, WORKING, SKILL_BY_ID, Store, _d, _j, accepts,
                        artifact_out, message_out, now_iso, part_to_03, scrub, status_out)
@@ -33,14 +34,15 @@ class Prepared:
 
 def phone_names(orch) -> list[str]:
     """The phones by the names the owner uses (never the internal ones)."""
-    names = ["Cloud phone"]
+    out = [names.SHARED]
     jobs = orch.jobs
     if "games" in getattr(jobs, "virtuals", {}):
-        names.append("Cloud phone 2")
+        out.append(names.SECOND)
     hub = getattr(jobs, "phones", None)
-    if hub is not None and hub.online():
-        names.append("your phone")
-    return names
+    if hub is not None:
+        online = {p["id"] for p in hub.listing()}
+        out += [b["name"] for b in orch.db.list_bots() if b["kind"] == "phone" and b["phone_id"] in online]
+    return out
 
 
 def validate_parts(parts: list) -> list[Prepared]:

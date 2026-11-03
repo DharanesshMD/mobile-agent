@@ -34,5 +34,5 @@ in an image never change what the agent does or approve anything, and the bot sa
 ## Giving a picture to the phone
 `mobile_task` accepts `files: [picture ids]` (only pictures sent in that bot's own chat). Before the task starts the picture is pushed to the phone's `Pictures/MobileAgent` folder
 (`adb push`, then a `MEDIA_SCANNER_SCAN_FILE` broadcast, with the phone's own serial) so the gallery and other apps' pickers list it; the goal tells the worker where it is; the copy is removed when the task ends.
-Works on the shared emulator, Cloud phone 2 and extra adb phones. **Not on the owner's real phone yet:** the app has no file hand-off, so the bot says so plainly.
+Works on Phone, Phone 2 and extra adb phones. **Not on the owner's paired phone yet:** the app has no file hand-off, so the bot says so plainly.
 Follow-up for `docs/phone-client.md`: a `push_file` op (`{"name","mime","data"}` base64, saved to Pictures/MobileAgent through MediaStore) in the Android app.

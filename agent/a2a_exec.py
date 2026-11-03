@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agent import names
 from agent import a2a, images
 from agent.a2a import CANCELED, COMPLETED, FAILED, INPUT_REQUIRED, REJECTED, TERMINAL, WORKING, scrub
 
@@ -23,7 +24,7 @@ MAX_SCREENSHOTS = 3
 
 PHONE_ACTIONS = {"mobile_task", "mobile_plan", "delegate_task", "check_apk", "move_app", "phone_check", "steer_task", "stop_task", "resume_task"}
 NEVER_FOR_OUTSIDE = {"ask_bot", "request_secret", "vault_check", "routine_create", "routine_list", "routine_delete", "connector_call", "web_options"}
-LEFT = {"games": "Cloud phone 2", "emulator": "Cloud phone"}
+LEFT = {"games": names.SECOND, "emulator": names.SHARED}
 
 
 @dataclass
@@ -131,7 +132,7 @@ class Executor:
         body = " ".join(t for t in texts if t).strip()
         if skill == "phone-task":
             body = str(f.get("goal") or body)
-            if f.get("phone") in ("Cloud phone", "Cloud phone 2"):
+            if f.get("phone") in (names.SHARED, names.SECOND):
                 body += f" (use {f['phone']})"
             if f.get("report") in ("link", "matrix", "guide", "plain"):
                 body += f" (collect the pictures in a '{f['report']}' report)"
@@ -243,13 +244,13 @@ class Executor:
                 if not url.lower().startswith(("http://", "https://")) or len(url) > 2000:
                     self.svc.set_state(tid, FAILED, "link-check needs a data part with an http(s) url.")
                     return
-                self.orch._queue_tasks(bot, {"type": "mobile_task", "goal": f"check this link: {url}", "report": "link", "say": "Checking the link on a cloud phone."}, "mobile_task")
+                self.orch._queue_tasks(bot, {"type": "mobile_task", "goal": f"check this link: {url}", "report": "link", "say": f"Checking the link on {names.SHARED}."}, "mobile_task")
             elif w.skill == "apk-check":
                 apk = next((a for a in w.attachments if a.get("kind") == "apk"), None)
                 if not apk:
                     self.svc.set_state(tid, FAILED, "apk-check needs the app as a file part (a raw base64 .apk).")
                     return
-                self.orch._check_apk(bot, {"type": "check_apk", "attachment": apk["id"], "on": "cloud phone 2"})
+                self.orch._check_apk(bot, {"type": "check_apk", "attachment": apk["id"]})  # no "on": Phone 2 when it exists, else Phone
                 expect = "report"
             elif w.skill == "show-me":
                 src = next((a["id"] for a in w.attachments if a["mime"].startswith("image/")), "")

@@ -13,7 +13,7 @@ from agent.checks import KINDS, find_packages, run_check
 from agent.config import MAX_ACTIVE_PER_BOT, ORCHESTRATOR_MODEL
 from agent.db import Database
 from agent.escalate import SIMPLE_OPEN, Escalator, app_name
-from agent import logs, apkcheck, cloudtools, gamepolicy, images, museimage, options, reportsave, sensitive, websearch
+from agent import names, logs, apkcheck, cloudtools, gamepolicy, images, museimage, options, reportsave, sensitive, websearch
 from agent.artifacts import Artifacts
 from agent.graph import CRASH_PREFIX
 from agent.moveapp import move_app
@@ -205,28 +205,28 @@ class Orchestrator:
                          "Approvals, choices, codes and secrets can only be answered on their card; tell the owner to use it.")
         if bot["kind"] == "virtual":
             _, lc = self.jobs.pair(self.jobs.lane_of(bot_id))
-            parts.append("You are the bot of CLOUD PHONE 2: a second light Android (Android 13 in a container) for heavy apps and anything the shared Cloud phone cannot run. Every phone task you queue runs on it, "
-                         "in the background, and never on the shared Cloud phone; no other bot can use it. There is no Google Play on it: apps are installed from APK files by the owner, "
+            parts.append(f"You are the bot of {bot['name'].upper()}: a second light Android for heavy apps and anything {names.SHARED} cannot run. Every phone task you queue runs on it, "
+                         f"in the background, and never on {names.SHARED}; no other bot can use it. There is no Google Play on it: apps are installed from APK files by the owner, "
                          "so find_app tells you what is installed. NEVER offer, ask about or promise a Play Store install (this phone has none): if an app is not installed, say it needs an APK "
                          "from the owner or another phone (name which one from the phone directory). Apps that draw one picture (games) have no UI tree: the worker works from "
-                         "screenshots and coordinates, so keep tasks short and concrete (one level, a few moves) and expect several tries. Some games refuse to run on virtual "
-                         "devices: if one crashes or closes at start, say so plainly and suggest the owner's own phone (the Mobile Agent app) instead of retrying. "
-                         f"Cloud phone 2 is {(lc.info() if lc else {'power': 'unavailable'})['power']} right now (a sleeping or stopped one wakes by itself, which takes a few seconds).")
+                         "screenshots and coordinates, so keep tasks short and concrete (one level, a few moves) and expect several tries. Some games refuse to run here: "
+                         "if one crashes or closes at start, say so plainly and suggest connecting another phone with the Mobile Agent app instead of retrying. "
+                         f"{bot['name']} is {(lc.info() if lc else {'power': 'unavailable'})['power']} right now (a sleeping or stopped one wakes by itself, which takes a few seconds).")
         elif bot["kind"] == "phone":
             up = bool(self.jobs.phones and self.jobs.phones.online(bot["phone_id"]))
-            parts.append(f"You are the bot of the owner's OWN phone ({bot['name']}). Every phone task you queue runs on that phone, in the background, through the Mobile Agent app; "
-                         "never on the shared emulator, and no other bot can use that phone. It acts on the phone's real screen, so keep tasks short and clear. "
-                         + ("The phone is connected now." if up else "The phone is NOT connected right now: tasks cannot run until the owner opens the Mobile Agent app on it."))
+            parts.append(f"You are the bot of {bot['name']}, a phone paired through the Mobile Agent app. Every phone task you queue runs on that phone, in the background, through the app; "
+                         f"never on {names.SHARED}, and no other bot can use that phone. It acts on the phone's screen, so keep tasks short and clear. "
+                         + ("The phone is connected now." if up else "The phone is NOT connected right now: tasks cannot run until the Mobile Agent app is opened on it."))
         else:
             games = [b for b in self.db.list_bots() if b["kind"] == "virtual"]
             if games:
-                parts.append("Cloud phone 2 (a second light Android for heavy apps and anything the shared Cloud phone cannot run, apps installed from APK, no Google Play) has its own bot: " +
+                parts.append(f"{names.SECOND} (a second light Android for heavy apps and anything {names.SHARED} cannot run, apps installed from APK, no Google Play) has its own bot: " +
                              ", ".join(b["name"] for b in games) + ". You cannot run tasks on it; tell the owner to ask that bot" +
                              (" (Master can hand a task to it)." if bot["kind"] != "master" else ", or hand the task to it with delegate."))
             mine_phones = [b for b in self.db.list_bots() if b["kind"] == "phone"]
             if mine_phones:
-                parts.append("The owner's own phone has its own bot: " + ", ".join(b["name"] for b in mine_phones) + ". You cannot run tasks on it; for something "
-                             "on their own phone (apps that refuse to run on a virtual phone, their real accounts) tell them to ask that bot." +
+                parts.append("Phones paired through the Mobile Agent app have their own bots: " + ", ".join(b["name"] for b in mine_phones) + ". You cannot run tasks on them; for something "
+                             f"on one of those phones (apps that refuse to run on {names.SHARED} or {names.SECOND}, the accounts signed in there) tell them to ask that phone's bot." +
                              (" Master can hand such a task to it." if bot["kind"] != "master" else " You can hand such a task to it with delegate."))
         parts.append(phones.render(phones.describe(self.db, self.jobs), phones.phone_key(bot), master=bot["kind"] == "master"))
         lane = self.jobs.lane_of(bot_id)
@@ -468,13 +468,12 @@ class Orchestrator:
         real = [b for b in self.db.list_bots() if b["kind"] == "phone"]
         if not on:
             return phones.phone_key(own)
-        if on in ("emulator", "shared", "shared emulator", "main", "default", "cloud phone"):
-            return "emulator"
-        if on in ("games", "game", "cloud phone 2", "second cloud phone", "virtual"):
-            return "games"
+        alias = names.alias_key(on)  # "phone", "phone 2" and the older spellings
+        if alias:
+            return alias
         hit = next((b for b in real if b["name"].lower() == on or b["phone_id"].lower() == on), None) or next((b for b in real if b["name"].lower().startswith(on)), None)
         if not hit:
-            return "error: unknown phone '" + on + "'; use cloud phone, cloud phone 2" + "".join(f", {b['name']}" for b in real)
+            return "error: unknown phone '" + on + f"'; use {names.SHARED.lower()}, {names.SECOND.lower()}" + "".join(f", {b['name']}" for b in real)
         return phones.phone_key(hit)
 
     def _resolve_phone(self, bot_id: str, on: str) -> tuple | str:
@@ -483,17 +482,17 @@ class Orchestrator:
         if key.startswith("error"):
             return key
         if key == "emulator":
-            return self.jobs.device, self.jobs.lifecycle, "Cloud phone"
+            return self.jobs.device, self.jobs.lifecycle, names.SHARED
         if key.startswith("phone:"):
-            b = next((x for x in self.db.list_bots() if x["kind"] == "phone" and x["phone_id"] == key.split(":", 1)[1]), {"name": "your phone"})
+            b = next((x for x in self.db.list_bots() if x["kind"] == "phone" and x["phone_id"] == key.split(":", 1)[1]), {"name": "that phone"})
             pid = self.jobs.phones.pick(key.split(":", 1)[1]) if self.jobs.phones else None
             if not pid:
                 return f"error: {b['name']} is offline (the Mobile Agent app is not connected), so I cannot look at it"
             return RemoteDevice(self.jobs.phones, pid), None, b["name"]
         dev, lc = self.jobs.virtuals.get(key, (None, None))
         if dev is None:
-            return "error: Cloud phone 2 is not set up on this computer"
-        return dev, lc, "Cloud phone 2"
+            return f"error: {names.SECOND} is not set up on this computer"
+        return dev, lc, names.SECOND
 
     def _phone_check(self, bot_id: str, act: dict) -> str:
         """Read a fact straight from a phone (app installed, Google account signed in, app in front) so a task's result can be checked, not trusted.
@@ -502,8 +501,8 @@ class Orchestrator:
         if isinstance(target, str):
             return target
         dev, lc, label = target
-        if label == "Cloud phone 2" and act.get("kind") == "account":
-            return "no (on Cloud phone 2): it has no Google services, so no Google account can be signed in there"
+        if label == names.SECOND and act.get("kind") == "account":
+            return f"no (on {names.SECOND}): it has no Google services, so no Google account can be signed in there"
         if not hasattr(dev, "packages"):
             return "error: phone checks are not available"
         if lc is not None and not lc.ensure_healthy(90):
@@ -549,7 +548,7 @@ class Orchestrator:
             cloud_game = gamepolicy.cloud_play_request(goal)
             if cloud_game:  # playing it through a cloud-gaming site is the same bot risk: no phone, no browser, no task
                 self.post(bot_id, f"I won't play {cloud_game} through a browser or a cloud-gaming site either: its publisher bans accounts that use bots, however the game is run. "
-                                  "I can open the site and tell you what it shows, or you can play it yourself (Take control on Cloud phone 2).")
+                                  f"I can open the site and tell you what it shows, or you can play it yourself (Take control on {names.SECOND}).")
                 return
             dup = next((j for j in known if same_goal(j["goal"], goal)), None)
             if dup:
@@ -559,13 +558,13 @@ class Orchestrator:
                 break
             files = self._owned_files(bot_id, st.get("files") if kind == "mobile_plan" else act.get("files"))
             if files and own.get("kind") == "phone":  # the app on a real phone has no file hand-off yet: say so, do not run the task without the picture
-                self.post(bot_id, "Sending a picture to your own phone is not supported yet (the Mobile Agent app cannot receive files). "
-                                  "I can do it on the shared emulator, or you can do the picture step on your phone yourself.")
+                self.post(bot_id, f"Sending a picture to {own['name']} is not supported yet (the Mobile Agent app cannot receive files). "
+                                  f"I can do it on {names.SHARED}, or you can do the picture step on {own['name']} yourself.")
                 return
             report = str((st if kind == "mobile_plan" else act).get("report") or "").strip().lower()
             report = report if report in ("link", "matrix", "guide", "plain") else ""
-            if report in ("link", "matrix") and own.get("kind") == "phone":  # these change or open untrusted things: only ever on the agent's own cloud phones
-                self.post(bot_id, "I never run link checks or screen-setting checks on your own phone. Ask the Assistant (it uses the cloud phone), and I'll keep your phone out of it.")
+            if report in ("link", "matrix") and own.get("kind") == "phone":  # these change or open untrusted things: never on a phone paired through the app
+                self.post(bot_id, f"I never run link checks or screen-setting checks on {own['name']}. Ask the Assistant: it runs them on {names.SHARED}, and I'll keep {own['name']} out of it.")
                 return
             new.append((goal, self._clean_verify(st.get("verify")), chain, files, report))
             known.append({"id": None, "goal": goal})
@@ -689,7 +688,7 @@ class Orchestrator:
             o = web["options"].get(choice)
             if not o:
                 return
-            phones_ = ["Open it on Cloud phone"] + (["Open it on Cloud phone 2"] if "games" in self.jobs.virtuals else []) + \
+            phones_ = [f"Open it on {names.SHARED}"] + ([f"Open it on {names.SECOND}"] if "games" in self.jobs.virtuals else []) + \
                       [f"Open it on {b['name']}" for b in self.db.list_bots() if b["kind"] == "phone" and self.jobs.phones and self.jobs.phones.online(b["phone_id"])]
             self.make_item(bot_id, None, {"kind": "choice", "question": f"{o['name']}{'' if options.domain(o['url']) in o['name'].lower() else ' (' + options.domain(o['url']) + ')'}: what should I do? Nothing runs until you pick.",
                                           "options": ["Show me the link", *phones_[:3], "Cancel"], "web": {"stage": "action", "option": o, "game": web.get("game", "")}})
@@ -711,14 +710,14 @@ class Orchestrator:
             gamepolicy.mark_third_party(options.domain(url))  # from now on nothing is typed on that site for the owner
         game = web.get("game", "")
         self.post(bot_id, f"Opened {o.get('name')} on {target}. I won't type, sign in or play on it" + (f": {game} is a game whose publisher bans bot accounts, and my guard stops me from playing it there" if game else "") +
-                  ". Sign in yourself" + (" (use Take control in its Mobile panel)" if target in ("Cloud phone", "Cloud phone 2") else "") + ".")
+                  ". Sign in yourself" + (" (use Take control in its Mobile panel)" if target in (names.SHARED, names.SECOND) else "") + ".")
         self.make_item(bot_id, None, {"kind": "handoff", "question": f"Sign in yourself on {target}, then tell me when you're done."})
 
     def _open_for_owner(self, bot_id: str, target: str, url: str) -> None:
         """Open a link in the browser of one of the owner's phones (the only thing a web_options pick can do)."""
-        if target == "Cloud phone":
+        if target == names.SHARED:
             dev, lc = self.jobs.device, self.jobs.lifecycle
-        elif target == "Cloud phone 2":
+        elif target == names.SECOND:
             dev, lc = self.jobs.virtuals.get("games", (None, None))
         else:
             bot = next((b for b in self.db.list_bots() if b["kind"] == "phone" and b["name"] == target), None)
@@ -814,11 +813,14 @@ class Orchestrator:
         """A bot by name (exact, else unique prefix), or an error string for the model."""
         name = name.strip().lower()
         others = [b for b in self.db.list_bots() if b["id"] not in exclude]
-        hit = [b for b in others if b["name"].lower() == name] or [b for b in others if name and b["name"].lower().startswith(name)]
+        hit = [b for b in others if b["name"].lower() == name]
+        if not hit and names.alias_key(name) == names.KEY_SECOND:  # an older spelling of Phone 2 ("cloud phone 2", "games")
+            hit = [b for b in others if b["kind"] == "virtual" and b["phone_id"] == "games"]
+        hit = hit or [b for b in others if name and b["name"].lower().startswith(name)]
         if len(hit) == 1:
             return hit[0]
-        names = ", ".join(b["name"] for b in others) or "none"
-        return f"no unique bot named '{name}' that you can ask now; available: {names}"
+        names_ = ", ".join(b["name"] for b in others) or "none"
+        return f"no unique bot named '{name}' that you can ask now; available: {names_}"
 
     def _ask_bot(self, bot_id: str, act: dict, chain: tuple) -> str:
         """Ask another bot one question and get its answer back (it answers from its own persona and memory; no phone, no owner prompts).
@@ -878,7 +880,7 @@ class Orchestrator:
             self.post(bot_id, bad.replace("error: ", "I can't move it: "))
             return
         if any(k.startswith("phone:") for k in keys):  # a real phone installs from its own Play Store; copying APKs over a remote link is not offered
-            self.post(bot_id, "I can't move apps to or from your own phone: it installs from its own Play Store, so ask its bot to install it there as a normal task.")
+            self.post(bot_id, "I can't move apps to or from a phone paired through the app: it installs from its own Play Store, so ask its bot to install it there as a normal task.")
             return
         if keys[0] == keys[1]:
             self.post(bot_id, "That is the same phone twice: pick two different phones to move an app between.")
@@ -914,12 +916,12 @@ class Orchestrator:
             self._summarize.add(bot_id)
             text = f"Moved {name} from {slabel} to {dlabel} ({detail}). Only the app was copied, not its data or its sign-in."
             note = (f"move_app finished: {text} Next, if the owner wanted it used there, hand a short task to {dlabel}'s bot with delegate_task (open the app and report what you see; "
-                    "do not play unless they asked), or run it yourself if that phone is the emulator. Otherwise tell the owner in one sentence.")
+                    "do not play unless they asked), or run it yourself if that phone is Phone. Otherwise tell the owner in one sentence.")
         except Exception as e:
             reason = str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {str(e)[:150]}"
             text = f"I could not move {name} from {slabel} to {dlabel}: {reason}."
-            note = (f"move_app failed: {text} Tell the owner plainly what stopped it and offer only options that really exist (for example installing from the Play Store on the "
-                    "emulator first, or an APK for Cloud phone 2). Do not promise to retry.")
+            note = (f"move_app failed: {text} Tell the owner plainly what stopped it and offer only options that really exist (for example installing from the Play Store on "
+                    f"{names.SHARED} first, or an APK for {names.SECOND}). Do not promise to retry.")
         self.post(bot_id, text)
         self._turn_with(bot_id, note, "The move is finished; tell me what to do next.")
 
@@ -1012,9 +1014,9 @@ class Orchestrator:
             self.post(bot_id, "I can't find that file. Attach the APK again and ask me to check it.")
             return
         if (self.db.get_bot(bot_id) or {}).get("kind") == "phone":
-            self.post(bot_id, "I never put a file you are unsure about on your own phone. Ask the Assistant to check it: it uses a throwaway cloud phone.")
+            self.post(bot_id, f"I never put a file you are unsure about on {(self.db.get_bot(bot_id) or {}).get('name', 'this phone')}. Ask the Assistant to check it.")
             return
-        want = str(act.get("on") or "").lower()
+        want = names.alias_key(str(act.get("on") or "")) or ""
         choice = want if want in ("games", "emulator") else ("games" if "games" in self.jobs.virtuals else "emulator")
         target = self._resolve_phone(bot_id, choice)
         if isinstance(target, str):
@@ -1034,7 +1036,7 @@ class Orchestrator:
             dev = lc = label = None
             for cand in targets:  # the first cloud phone that does not already have this app
                 cdev, clc, clabel = cand
-                lane = "virtual:games" if clabel == "Cloud phone 2" else ""
+                lane = "virtual:games" if clabel == names.SECOND else ""
                 end = time.time() + 300
                 while self.jobs.busy(lane) and time.time() < end:  # the phone is mid-task: wait for it, never run over someone else's work
                     time.sleep(2)
@@ -1045,7 +1047,7 @@ class Orchestrator:
                 dev, lc, label = cdev, clc, clabel
                 break
             if dev is None:
-                raise ValueError(f"{info['package']} is already installed on the cloud phones I can use, and I never touch an app that was there before. Remove it from one of them first.")
+                raise ValueError(f"{info['package']} is already installed on the phones I can use for this, and I never touch an app that was there before. Remove it from one of them first.")
             notes = apkcheck.sandbox_run(dev, art, att["path"], info)
             checked = ["The manifest: package, version, permissions and what they allow", "The signing certificate", f"Installing it on {label} and launching it for {apkcheck.WATCH_S} seconds, watching for crashes"]
             not_checked = ["Network traffic and what the app sends out", "What it does after the first seconds or after signing in", "Its code (this is not a malware scanner)"]
@@ -1091,10 +1093,10 @@ class Orchestrator:
             return head + ("You already rerouted this request twice, so do NOT start anything else (it would be refused). Reply to the owner in one or two short sentences: "
                            "what was tried on which phone, why it cannot work, and the one thing that would unblock it. Be honest.")
         return head + ("Read the phone directory. If a different phone could really do this (the app is installed there, per phone_check with \"on\", or it is a Play Store install and "
-                       "the emulator can do it; never a phone already tried for this goal or listed as Known NOT to run it), start it there: delegate_task to that phone's bot, or "
-                       "mobile_task for the emulator, and tell the owner in one sentence that you moved it and why. An app that crashed on a phone is NOT yours to move: the system already tries the "
+                       "Phone can do it; never a phone already tried for this goal or listed as Known NOT to run it), start it there: delegate_task to that phone's bot, or "
+                       "mobile_task for Phone, and tell the owner in one sentence that you moved it and why. An app that crashed on a phone is NOT yours to move: the system already tries the "
                        "owner's other phones in order and posts the result itself. If no phone can, reply in one or two short sentences: what was tried "
-                       "on which phone, why it cannot work, and the one thing that would unblock it (an APK on Cloud phone 2, the Mobile Agent app connected on their own phone). "
+                       "on which phone, why it cannot work, and the one thing that would unblock it (an APK on Phone 2, the Mobile Agent app connected on another phone). "
                        "Be honest and do not promise anything you are not doing right now.")
 
     def _delegate(self, master_id: str, act: dict) -> None:
@@ -1106,7 +1108,7 @@ class Orchestrator:
         cloud_game = gamepolicy.cloud_play_request(goal)
         if cloud_game:
             self.post(master_id, f"I won't play {cloud_game} through a browser or a cloud-gaming site either: its publisher bans accounts that use bots, however the game is run. "
-                                 "I can open the site and tell you what it shows, or you can play it yourself (Take control on Cloud phone 2).")
+                                 f"I can open the site and tell you what it shows, or you can play it yourself (Take control on {names.SECOND}).")
             return
         target = self._find_bot(str(act.get("bot", "")), (master_id,))
         if isinstance(target, str):
@@ -1154,7 +1156,7 @@ class Orchestrator:
             if job["status"] == "done" and self.db.get_bot(master_id):  # the owner asked Master, so Master gives the answer in its own chat (not only a raw note from the other bot)
                 self._summarize.discard(master_id)
                 bot_name = (self.db.get_bot(bot_id) or {"name": "a bot"})["name"]
-                note = (f"The task you handed to {bot_name} finished. Goal: {job['goal']}. Worker report: {job['result']}\nTell the owner the final result in one or two short sentences: "
+                note = (f"The task you handed to {bot_name} finished. Goal: {job['goal']}. Worker report: {job['result']}\nTell the owner the final result in one or two short sentences (several items found: one short line, then one \"- \" bullet per item): "
                         "what ran on which phone and what the screen showed. Start nothing else unless the owner asked for it. Be honest and do not claim more than the report shows.")
                 threading.Thread(target=self._turn_with, args=(master_id, note, f"{bot_name} finished: {job['result'][:200]}"), daemon=True, name="summary").start()
             if policy and self.db.get_bot(master_id):
@@ -1202,19 +1204,20 @@ class Orchestrator:
                 "First decide whether the goal was REALLY achieved: the report has to show it, and 'done' alone is not proof. If it does not prove it "
                 "(for example an install that was only tapped, or a sign-in the worker did not confirm), check with phone_check (app_installed, account or foreground) "
                 "before you say so. Then tell the owner in one or two sentences using reply: plainly whether it worked, partly worked or failed. "
+                "If the report lists several items (notifications, apps, results), put them as a short intro line and one \"- \" bullet per item instead of one long sentence. "
                 "If it failed or is incomplete for a fixable reason you may start ONE retry with a clearer goal (mobile_task), and say that you are retrying.")
         if crashed:
             note += (" The app crashed on its own several times, so do NOT start a retry and do NOT promise to try again. Tell the owner plainly that this app "
-                     "crashes on the phone and why (see the report), and offer an alternative only if one really exists (for example running it on the owner's own phone). Do not invent one.")
+                     "crashes on the phone and why (see the report), and offer an alternative only if one really exists (for example running it on another phone). Do not invent one.")
         if status == "max_steps":
             note += (" The worker ran out of its step or time budget, so the task is probably only partly done (a long download or install may still be running on the phone). "
                      "Check the real state with phone_check, and if the goal is not met start ONE retry that continues from where the phone is now, saying that you are continuing.")
         own = self.db.get_bot(bot_id) or {}
         if status in ("failed", "max_steps") and own.get("kind") == "master" and not master_id:  # Master's own task on the emulator: look for another phone too
-            note += " " + self._reroute_note(bot_id, "yourself (the shared emulator)", job)
+            note += " " + self._reroute_note(bot_id, f"yourself ({names.SHARED})", job)
         elif status in ("failed", "max_steps"):
             note += (" If your phone could not do this but another phone in the directory could, say which one and tell the owner to ask Master (it can hand a task to any phone). "
-                     "Never offer or promise an install or action your own phone cannot do, and do not start anything you are not doing right now.")
+                     "Never offer or promise an install or action your phone cannot do, and do not start anything you are not doing right now.")
         if status != "done" and waiting:
             note += f" {len(waiting)} queued task(s) depended on this one and will be skipped; say so."
         elif queued:

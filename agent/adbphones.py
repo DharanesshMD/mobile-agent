@@ -34,7 +34,7 @@ def parse_adb_phones(spec: str | dict | None) -> tuple[dict[str, str], list[str]
         elif not SERIAL_RE.match(serial):
             problems.append(f"'{name}': '{serial}' is not an adb serial")
         elif serial.lower() in CLASHING_SERIALS or serial.lower().startswith("emulator-"):
-            problems.append(f"'{name}': {serial} clashes with the shared emulator or Cloud phone 2")
+            problems.append(f"'{name}': {serial} clashes with Phone or Phone 2")
         elif serial in out.values():
             problems.append(f"'{name}': {serial} is already used by another name")
         elif name in out:

@@ -338,23 +338,23 @@ def make_demo(dbfile: Path, runs: Path) -> str:
     msgs = [
         (0, "user", "text", "open the sample game and tell me what you see", {}),
         (2, "assistant", "text", "On it. I'll open the sample game and report back.", {}),
-        (62, "assistant", "text", "The sample game keeps stopping on the shared emulator (3 crashes), so I moved it to Cloud phone 2 and opened it there. It shows its start screen; I did not play it.", {}),
+        (62, "assistant", "text", "The sample game keeps stopping on Phone (3 crashes), so I moved it to Phone 2 and opened it there. It shows its start screen; I did not play it.", {}),
         (70, "user", "text", "now play it for me", {}),
         (73, "assistant", "text", "I won't play this one for you: automated play can get your account banned. I can keep it open, and you can use Take control to play it yourself.", {}),
-        (90, "assistant", "action_item", "Open the walkthrough site on the emulator?", {"item_id": "card01", "status": "answered", "kind": "choice", "question": "Open the walkthrough site on the emulator?"}),
+        (90, "assistant", "action_item", "Open the walkthrough site on Phone?", {"item_id": "card01", "status": "answered", "kind": "choice", "question": "Open the walkthrough site on Phone?"}),
     ]
     for t, role, kind, text, meta in msgs:
         conn.execute("insert into messages(bot_id,role,kind,content,meta,created,updated) values(?,?,?,?,?,?,?)", (bot, role, kind, text, json.dumps(meta), base + t, base + t))
-    conn.execute("insert into items values(?,?,?,?,?,?,?,?,?,?)", ("card01", bot, None, 6, "choice", json.dumps({"kind": "choice", "question": "Open the walkthrough site on the emulator?", "options": ["Open it", "Show me the link", "None, I'll decide later"]}),
+    conn.execute("insert into items values(?,?,?,?,?,?,?,?,?,?)", ("card01", bot, None, 6, "choice", json.dumps({"kind": "choice", "question": "Open the walkthrough site on Phone?", "options": ["Open it", "Show me the link", "None, I'll decide later"]}),
                                                                        "answered", "Show me the link", base + 90, base + 98))
     plans = [
-        ("job-emu", base + 3, base + 32, "failed", "", "Open the sample game on the emulator and report what it shows",
+        ("job-emu", base + 3, base + 32, "failed", "", "Open the sample game on Phone and report what it shows",
          [("Opening the app list to find the game.", {"type": "find_app", "query": "sample game"}, ("Home", ["Sample game", "Settings", "Clock"]), False),
           ("Found it, opening the app.", {"type": "open_app", "package": "example.samplegame"}, ("Sample game", ["Loading…"]), False),
           ("The app shows a crash dialog; closing it and trying once more.", {"type": "tap", "x": 300, "y": 740}, ("Sample game", ["Loading…"]), True),
           ("It crashed 3 times, so I'm stopping.", {"type": "fail", "reason": "App keeps crashing: example.samplegame crashed 3 times while opening"}, ("Home", ["Sample game"]), False)]),
-        ("job-games", base + 36, base + 60, "done", "virtual:games", "Open the sample game on Cloud phone 2 and report what it shows",
-         [("Opening the game on Cloud phone 2.", {"type": "open_app", "package": "example.samplegame"}, ("Home", ["Sample game"]), False),
+        ("job-games", base + 36, base + 60, "done", "virtual:games", "Open the sample game on Phone 2 and report what it shows",
+         [("Opening the game on Phone 2.", {"type": "open_app", "package": "example.samplegame"}, ("Home", ["Sample game"]), False),
           ("It stayed up and shows its start screen with a Play button.", {"type": "done", "answer": "The start screen with a Play button is showing; nothing was tapped."}, ("Sample game", ["Play", "Settings"]), False)]),
     ]
     for jid, start, end, status, target, goal, steps in plans:
@@ -378,7 +378,7 @@ def export_demo(out: Path, name: str | None = None) -> dict:
         tmp = Path(tmp)
         bot = make_demo(tmp / "demo.db", tmp / "runs")
         conn = sqlite3.connect(tmp / "demo.db")
-        manifest, files = build_session(conn, bot, tmp, title="Synthetic demo: an app that crashes on the emulator and runs on Cloud phone 2",
+        manifest, files = build_session(conn, bot, tmp, title="Synthetic demo: an app that crashes on Phone and runs on Phone 2",
                                         name=name or out.name, synthetic=True)
         conn.close()
         write_session(out, manifest, files)

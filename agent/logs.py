@@ -32,6 +32,7 @@ BACKUPS = 5
 FILES = ("app", "errors", "access", "jobs", "a2a", "audit")
 LOGGER_FILES = {"app": None, "errors": None, "access": ("agent.access",), "jobs": ("agent.jobs", "agent.orch"), "a2a": ("agent.a2a",), "audit": ("agent.audit",)}
 
+logging.getLogger("agent").addHandler(logging.NullHandler())  # until setup_logging runs (tests, the CLI) the app stays quiet instead of printing through the last-resort handler
 _ctx: contextvars.ContextVar[dict] = contextvars.ContextVar("log_ctx", default={})
 _state = {"dir": None}
 _lock = threading.Lock()

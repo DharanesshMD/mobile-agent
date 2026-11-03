@@ -176,7 +176,7 @@ class RemoteDevice:
         self._call("tap", x=int(x), y=int(y))
 
     def touch(self, kind: str, x: int, y: int) -> None:
-        raise NotImplementedError("live dragging is not available on a real phone")
+        raise NotImplementedError("live dragging is not available on this phone")
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, ms: int = 300) -> None:
         self._call("swipe", x1=int(x1), y1=int(y1), x2=int(x2), y2=int(y2), ms=int(ms))
@@ -197,7 +197,7 @@ class RemoteDevice:
         self._call("open_intent", action=action)
 
     def start_intent(self, args: list[str]) -> None:
-        raise ValueError("this action is not available on your own phone: use the app screens instead")
+        raise ValueError("this action is not available on this phone: use the app screens instead")
 
     def launcher_apps(self) -> list[str]:
         return list(self._call("launcher_apps"))

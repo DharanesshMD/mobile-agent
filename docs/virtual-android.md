@@ -28,22 +28,22 @@ The agent only needs an `adb` endpoint, so each virtual Android is a **phone** w
 - `emulator` (exists): `EmulatorBackend`, serial `emulator-5554`.
 - `redroid` (built): `LimaRedroidBackend` (Redroid in the Lima VM), serial `localhost:5565`, start/stop/pause/resume through `docker`, same `booted()`/`healthy()` contract.
 - `real phone` (built): the Mobile Agent app, one bot per phone.
-Per-bot phone assignment generalizes what the phone bot already does: a bot has a phone (shared emulator, Cloud phone 2, or a real phone), jobs follow the bot.
+Per-bot phone assignment generalizes what the phone bot already does: a bot has a phone (Phone, Phone 2, or a real phone), jobs follow the bot.
 The service passes an explicit serial per phone (one adb server, no "default device"). The Mobile panel shows the selected bot's phone.
 
 ## What is built (31 Oct 2026)
 - `agent/virtual.py` `LimaRedroidBackend`: the contract `Lifecycle` uses (`status` running/paused/stopped, `start`, `stop`, `pause`, `resume`, `booted`, `healthy`), through
   `scripts/virtual-android/redroid.sh`. Sleep is `docker pause` (about 0.2 s). Stop is `redroid.sh shutdown`: the container AND the Lima VM (frees 1-2 GB of the Mac's RAM; a cold
   start is about 15-22 s, against about 5 s when only the container was stopped). Start runs in the background and `Lifecycle` polls `booted()`.
-- Every adb call names its phone (`-s`): the shared emulator is `ANDROID_SERIAL` or `emulator-5554` (`default_serial`), Cloud phone 2 `localhost:5565`. Two devices on one adb server
+- Every adb call names its phone (`-s`): Phone is `ANDROID_SERIAL` or `emulator-5554` (`default_serial`), Phone 2 `localhost:5565`. Two devices on one adb server
   no longer break each other. No second adb server.
-- The Cloud phone 2 has its own bot (kind `virtual`, `phone_id` `games`, created at start-up only when Lima and the `rd` VM exist; `GAMES_PHONE=off` disables it). Its jobs always run on it
+- The Phone 2 has its own bot (kind `virtual`, `phone_id` `games`, created at start-up only when Lima and the `rd` VM exist; `GAMES_PHONE=off` disables it). Its jobs always run on it
   (`virtual:games`) and no other bot's job ever does. The first message states the limits plainly.
 - Each phone is its own lane in `JobManager` (emulator, `virtual:games`, `phone:<id>`): one running job per lane, lanes run in parallel, `after` works across lanes. The shared Mobile
-  panel shows the emulator lane; `?phone=games` shows Cloud phone 2 (state, wake, sleep, live view). Cloud phone 2 is watch only (no owner control).
-- `scripts/virtual-android/install-apk.sh <file.apk>`: installs on Cloud phone 2 (prints the sha256 first).
+  panel shows the emulator lane; `?phone=games` shows Phone 2 (state, wake, sleep, live view). Phone 2 is watch only (no owner control).
+- `scripts/virtual-android/install-apk.sh <file.apk>`: installs on Phone 2 (prints the sha256 first).
 
-## Getting free games onto Cloud phone 2
+## Getting free games onto Phone 2
 There is no Google Play on it, so apps are APK files. Use F-Droid's official repo (https://f-droid.org/repo/), which lists a sha256 for every APK in `index-v1.json`:
 ```bash
 curl -O https://f-droid.org/repo/com.shatteredpixel.shatteredpixeldungeon_922.apk
@@ -55,12 +55,12 @@ Tested: Shattered Pixel Dungeon (libGDX) and Mindustry. A game that refuses to r
 ## Plan
 - [x] Research (this file), reference study of the desktop agent
 - [x] Spike: Redroid in Lima, boot time, RAM, adb speed, pause/resume, a free game (scripts/virtual-android/, docs/virtual-android-spike.md)
-- [x] `LimaRedroidBackend`, a "Cloud phone 2" bot with its own phone and live view, one job lane per phone so lanes run in parallel
+- [x] `LimaRedroidBackend`, a "Phone 2" bot with its own phone and live view, one job lane per phone so lanes run in parallel
 - [x] Tune the worker for games (see docs/virtual-android-spike.md)
 - [x] Hybrid routing (31 Oct): phone directory in every bot's context, `phone_check` with `on`, Master reroutes a failed handover (max 2, no repeats), a phone without Play refuses Play links and is never offered a Play install
-- [x] `move_app` (Master): copy an installed app emulator <-> Cloud phone 2 without a store (APK files only, never data or sign-in); per-phone Google account fact; Google sign-in is a task on that phone's bot with the vault, never copied
-- [ ] If Cloud phone 2 is not good enough for a game: tune the official emulator or use the real-phone app for it
-- [ ] Demo: show the Mobile panel with Cloud phone 2 running a free game, state limits honestly
+- [x] `move_app` (Master): copy an installed app emulator <-> Phone 2 without a store (APK files only, never data or sign-in); per-phone Google account fact; Google sign-in is a task on that phone's bot with the vault, never copied
+- [ ] If Phone 2 is not good enough for a game: tune the official emulator or use the real-phone app for it
+- [ ] Demo: show the Mobile panel with Phone 2 running a free game, state limits honestly
 
 
 ## Hybrid routing and sharing between phones (31 Oct 2026)
@@ -70,11 +70,11 @@ Tested: Shattered Pixel Dungeon (libGDX) and Mindustry. A game that refuses to r
 - `move_app` (Master only): `pm path` -> `adb pull` each APK -> `adb install-multiple -r` on the other phone -> verified with the app_installed check -> temp files deleted. Only the app moves.
   Not for the owner's own phone (it installs from its own Play Store).
 - Google sign-in: never copied between phones. A phone that can have an account (the emulator, the owner's phone) gets a sign-in task on its own bot (type_secret from the vault, owner approves, handoff for 2-step).
-  Cloud phone 2 has no Google services and can never sign in.
+  Phone 2 has no Google services and can never sign in.
 
 ## Apps that refuse to run: the automatic chain (1 Nov 2026)
 When an app crashes (or will not stay up) on a phone, the agent tries the owner's other phones in order, in code (`agent/escalate.py`), with no question at each step:
-the phones where it already stayed up first, then the shared emulator, Cloud phone 2, the extra adb phones, and last the owner's own phone (only while its app is connected; it installs
+the phones where it already stayed up first, then Phone, Phone 2, the extra adb phones, and last the owner's own phone (only while its app is connected; it installs
 from its own Play Store through its bot). An app that is missing on an adb phone is copied from a phone that has it (`move_app`: only the app, never data or sign-in).
 - At most `CHAIN_MAX` (4) phones, never the same phone twice, never a phone where the app is known not to run (`launch_facts` and crashes seen in tasks).
 - After opening it the chain checks that the app is in front and has not crashed for 20 s, and describes the screen from a screenshot before saying it runs. It never taps, signs in or plays.
@@ -86,8 +86,8 @@ from its own Play Store through its bot). An app that is missing on an adb phone
 Any adb endpoint the owner manages: `ADB_PHONES="pixel=R5CN1234,cloud=10.0.0.5:5555"` (or `data/phones.json`: `{"pixel": "R5CN1234"}`). Each one that answers `adb -s <serial> get-state`
 gets its own bot ("Pixel phone", kind `virtual`), lane, live view (watch only) and directory entry (status, installed apps, Google Play detected with `pm list packages com.android.vending`).
 No power management: it is always on while adb reaches it, and a task on one that went offline fails honestly. The bot list re-checks them when it is polled. Serials that clash with the shared
-emulator (`emulator-*`) or Cloud phone 2 (`localhost:5565`) and reserved names (`games`, `emulator`, ...) are refused. BlueStacks with adb enabled, a USB phone or a cloud phone all fit.
+emulator (`emulator-*`) or Phone 2 (`localhost:5565`) and reserved names (`games`, `emulator`, ...) are refused. BlueStacks with adb enabled, a USB phone or a phone all fit.
 
 
 ## Game account safety
-The agent never plays games whose publishers ban bot accounts (Supercell, Niantic), on any phone; Cloud phone 2 and extra adb phones can be driven by the owner (Take control). See [game-safety.md](game-safety.md).
+The agent never plays games whose publishers ban bot accounts (Supercell, Niantic), on any phone; Phone 2 and extra adb phones can be driven by the owner (Take control). See [game-safety.md](game-safety.md).

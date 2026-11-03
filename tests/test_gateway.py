@@ -35,6 +35,20 @@ class FakeListener:
         FakeListener.stopped += 1
 
 
+class FakeDiscovery:
+    created = []
+
+    def __init__(self, port, active):
+        self.port, self.active, self.started, self.stopped = port, active, False, False
+        FakeDiscovery.created.append(self)
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+
 class FakePhones:
     def __init__(self, via=()):
         self.via = list(via)
@@ -66,7 +80,7 @@ def make_gateway(clock=None, apk: bytes | None = b"APK-BYTES", phones=None, pair
 
     gw = PhoneGateway(Store(), phones or FakePhones(), do_pair, issue_code, lambda dev: [{"id": "j1", "goal": "g"}],
                       lambda dev: calls["revoked"].append(dev["id"]), path, 8765, clock=clock or time.time,
-                      listener_factory=FakeListener, lan=lambda: "192.168.1.20")
+                      listener_factory=FakeListener, lan=lambda: "192.168.1.20", discovery_factory=FakeDiscovery)
     return gw, calls, TestClient(gw.app)
 
 
@@ -212,6 +226,145 @@ class Clocks(unittest.TestCase):
         self.assertEqual(c.get(f"/get/{token}").status_code, 404)
 
 
+class Discover(unittest.TestCase):
+    """The phone app finds the computer by itself: one fixed UDP question, one small answer, only while the pairing window is open."""
+
+    def ask(self, d, payload=gwmod.DISCOVERY_MAGIC, timeout=0.6):
+        import json
+        import socket
+        c = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        c.settimeout(timeout)
+        try:
+            c.sendto(payload, ("127.0.0.1", d.sock.getsockname()[1]))
+            return json.loads(c.recvfrom(512)[0])
+        except socket.timeout:
+            return None
+        finally:
+            c.close()
+
+    def start(self, active=lambda: True, **kw):
+        d = gwmod.Discovery(8765, active, udp_port=0, allow_loopback=True, **kw)
+        d.start()
+        self.addCleanup(d.stop)
+        self.assertIsNotNone(d.sock, d.error)
+        return d
+
+    def test_it_answers_the_question_with_port_and_name_and_nothing_secret(self):
+        d = self.start()
+        r = self.ask(d)
+        self.assertEqual((r["app"], r["v"], r["port"]), ("mobile-agent", 1, 8765))
+        self.assertEqual(set(r), {"app", "v", "port", "name"})  # no address, no code, no token
+        self.assertTrue(r["name"])
+
+    def test_other_questions_and_a_closed_window_get_no_answer(self):
+        d = self.start()
+        for junk in (b"hello", b"MOBILE_AGENT_DISCOVER v2", b"", b"x" * 200):
+            self.assertIsNone(self.ask(d, junk), junk[:20])
+        open_ = {"v": False}
+        d2 = self.start(active=lambda: open_["v"])
+        self.assertIsNone(self.ask(d2))  # the pairing window is closed
+        open_["v"] = True
+        self.assertIsNotNone(self.ask(d2))
+
+    def test_only_private_networks_and_a_few_answers_per_second(self):
+        d = gwmod.Discovery(8765, lambda: True)
+        self.assertTrue(d._ok_sender("192.168.1.9") and d._ok_sender("10.0.0.4"))
+        for ip in ("8.8.8.8", "127.0.0.1", "169.254.1.1", "nonsense", ""):
+            self.assertFalse(d._ok_sender(ip), ip)
+        answered = sum(d._rate_ok("192.168.1.9") for _ in range(50))
+        self.assertEqual(answered, gwmod.DISCOVERY_RATE)
+        self.assertTrue(d._rate_ok("192.168.1.10"))  # another phone is not affected
+
+    def test_a_busy_port_is_not_fatal(self):
+        import socket
+        busy = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        busy.bind(("0.0.0.0", 0))
+        self.addCleanup(busy.close)
+        d = gwmod.Discovery(8765, lambda: True, udp_port=busy.getsockname()[1])
+        d.start()  # SO_REUSEADDR may or may not allow it: either way no exception
+        d.stop()
+
+    def test_the_gateway_runs_it_only_while_the_door_is_open_and_serves_hello(self):
+        FakeDiscovery.created.clear()
+        gw, _, c = make_gateway()
+        gw.open()
+        d = FakeDiscovery.created[-1]
+        self.assertTrue(d.started and not d.stopped)
+        self.assertEqual(d.active(), True)  # asked live: the window
+        gw.open()
+        self.assertEqual(len(FakeDiscovery.created), 1)  # opening again does not start a second one
+        r = c.get("/api/hello").json()
+        self.assertEqual((r["app"], r["v"], r["port"]), ("mobile-agent", 1, 8765))
+        gw.close()
+        self.assertTrue(d.stopped)
+
+
+class Paired(unittest.TestCase):
+    """A phone that is already paired must always be able to come back: after a restart, a Wi-Fi change, a sleep."""
+
+    def make(self, devices):
+        clock = Clock()
+        gw, calls, c = make_gateway(clock)
+        gw.store.devices = lambda: list(devices)
+        FakeListener.started = FakeListener.stopped = 0
+        return gw, clock, c
+
+    def test_start_up_listens_again_without_opening_a_pairing_window(self):
+        gw, clock, c = self.make([{"id": "d1"}])
+        gw.restore()
+        self.assertTrue(gw.listening and not gw.window_open())
+        self.assertEqual(FakeListener.started, 1)
+        self.assertEqual(c.get("/get/anything").status_code, 404)  # no page, no app file, no code
+        gw.restore()
+        self.assertEqual(FakeListener.started, 1)  # once
+
+    def test_nothing_listens_at_start_up_when_no_phone_is_paired(self):
+        gw, _, _ = self.make([])
+        gw.restore()
+        self.assertFalse(gw.listening)
+
+    def test_the_listener_stays_on_for_hours_while_a_phone_is_paired_even_when_it_is_offline(self):
+        gw, clock, _ = self.make([{"id": "d1"}])
+        gw.open()
+        clock.t += gwmod.WINDOW_S + 1
+        gw.tick()
+        clock.t += 5 * 3600
+        gw.tick()
+        self.assertTrue(gw.listening and not gw.window_open())
+
+    def test_turn_off_ends_the_pairing_window_but_keeps_the_way_in_for_paired_phones(self):
+        gw, clock, c = self.make([{"id": "d1"}])
+        st = gw.open()
+        self.assertTrue(st["window"])
+        d = gw.discovery
+        st = gw.close()
+        self.assertTrue(st["listening"] and not st["window"] and not st["code"])
+        self.assertEqual(FakeListener.stopped, 0)
+        self.assertTrue(d.stopped)  # discovery answers only during the window
+
+    def test_with_no_paired_phone_turn_off_closes_everything_and_removing_the_last_phone_closes_the_door(self):
+        devices = [{"id": "d1"}]
+        gw, clock, _ = self.make(devices)
+        gw.restore()
+        devices.clear()  # the owner removed the phone
+        clock.t += gwmod.IDLE_S + 1
+        gw.tick()
+        clock.t += gwmod.IDLE_S + 1
+        gw.tick()
+        self.assertFalse(gw.listening)
+        gw.open()
+        gw.close()
+        self.assertFalse(gw.listening)
+
+    def test_the_switch_can_turn_the_behaviour_off(self):
+        import os
+        gw, _, _ = self.make([{"id": "d1"}])
+        os.environ["PHONE_GATEWAY_PERSIST"] = "off"
+        self.addCleanup(os.environ.pop, "PHONE_GATEWAY_PERSIST", None)
+        gw.restore()
+        self.assertFalse(gw.listening)
+
+
 class Helpers(unittest.TestCase):
     def test_lan_detection_accepts_only_a_private_address(self):
         for ip, want in (("192.168.1.20", "192.168.1.20"), ("10.0.0.5", "10.0.0.5"), ("8.8.8.8", None), ("127.0.0.1", None), ("169.254.3.4", None)):
@@ -248,7 +401,7 @@ class Integrated(unittest.TestCase):
         with g.websocket_connect(f"/api/phone/ws?token={token}") as ws:
             ws.send_json({"type": "hello", "name": "Pixel 8", "model": "Pixel 8", "sdk": 34, "size": [1080, 2400]})
             until(lambda: app.state.phones.online(did))
-            self.assertEqual(app.state.db.phone_bot(did)["name"], "Pixel 8")
+            self.assertEqual(app.state.db.phone_bot(did)["name"], "Phone 3")
             self.assertEqual(app.state.phones.listing()[0]["via"], "gateway")
             self.assertTrue(c.get("/api/gateway/state").json()["connected"])
             out = {}

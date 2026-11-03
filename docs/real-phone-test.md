@@ -20,7 +20,7 @@ Then continue at step 7 (first task) below. Route B (USB, nothing exposed to the
 # Route B: USB with `adb reverse` (the rest of this page)
 
 ## Before you start (10 min)
-- An Android phone, **Android 11 or newer**, unlocked, with a screen lock you can leave as is. Use your own phone. Do not test with banking or payment apps open, and do not point it at
+- An Android phone, **Android 11 or newer**, unlocked, with a screen lock you can leave as is. Use a phone you can spare for a test. Do not test with banking or payment apps open, and do not point it at
   Supercell or Niantic games (the agent refuses to play them anyway).
 - A USB cable that carries data. The phone and the Mac on any network (the app dials out through the cable).
 - The service running **once** on the Mac (the Claude app starts it from `.claude/launch.json` on port 8000; check with `pgrep -fl agent.service`, there must be exactly one line). Check http://127.0.0.1:8000 loads.
@@ -105,7 +105,7 @@ Do not touch the screen while it works (a touch can change what it sees). To sto
 | Apps do not open from the background | Turn on "Allow display over other apps" in the app |
 
 ## Safety note
-The agent acts on the **real screen** of your phone and taps what the task says. Stay near it, keep Stop within reach, and use only your own phone and low-risk tasks. It will not play Supercell or Niantic games and
+The agent acts on the **real screen** of your phone and taps what the task says. Stay near it, keep Stop within reach, and use a phone you control and low-risk tasks. It will not play Supercell or Niantic games and
 it asks before sending or paying, but it is a debug build: treat it like a developer tool.
 
 ## Undo everything afterwards
@@ -122,3 +122,26 @@ Also turn off USB debugging if you do not need it, and turn off Stay awake.
 Only if you cannot use a cable. This exposes the service to everyone on that network, so it needs a token and a trusted network:
 1. Stop the managed service (never run two copies), then start one yourself: `HOST=0.0.0.0 APP_TOKEN=$(openssl rand -hex 24) uv run python -m agent.service`. Keep the token; the web UI asks for it.
 2. Find the Mac's address (`ipconfig getifaddr en0`). On the phone use `http://<that address>:8000` as the server. The rest is the same. Stop the service and restart it on `127.0.0.1` when you are done.
+
+## If Play Protect blocks the install ("App blocked to protect your device")
+
+**What it is.** Google Play Protect blocks an app that declares sensitive permissions (Accessibility, notification access, SMS) when it is installed from an
+"internet-sideloading source": a browser download, a messaging app or a file manager. The dialog says "This app can request access to sensitive data" and has only
+an OK button. Google's developer guidance (developers.google.com/android/play-protect/warning-dev-guidance) says the protection is active only in select markets.
+Mobile Agent declares the Accessibility service (that is how it operates the screen), so a phone in such a market blocks the downloaded APK. It is not a finding about the app's code.
+
+**What commonly works** (Google does not document exemptions, so none of this is a guarantee):
+1. **Install from this computer** (recommended). In the web app: Connect a phone > "Phone says App blocked to protect your device?" > Install from this computer. It runs `adb install` on the listed phone,
+   which is not a download. Over USB: turn on Developer options and USB debugging, plug in, tap Allow on the phone. Without a cable: Developer options > Wireless debugging > Pair device with pairing code,
+   then type the address and 6 digits into the dialog (the phone and the computer on the same Wi-Fi). The dialog then tries to lift Android 13+ "restricted settings" for the app, hands it the pairing link
+   (switch "Allow phones on this Wi-Fi" on first) and opens the Accessibility settings screen. It never turns the service on: you do, and you tap Confirm in the app to pair.
+2. **Pause scanning for a minute.** Play Store > your profile icon > Play Protect > the gear > turn off "Scan apps with Play Protect". Install, then turn it back on. Some phones still hard-block.
+3. If the dialog shows **More details**, choose **Install anyway**.
+4. By hand: `adb install -r -d data/apk/mobile-agent.apk`.
+
+**Xiaomi / MIUI.** `adb install` can fail with `INSTALL_FAILED_USER_RESTRICTED`. Settings > Additional settings > Developer options > turn on **Install via USB** (it needs a Mi account signed in and mobile data once);
+if a confirm popup on the phone keeps cancelling the install, also turn off **MIUI optimization** there. Then Android 13+ may grey out the Accessibility switch: App info > three dots > Allow restricted settings.
+MIUI also stops background apps: set Battery saver to No restrictions and turn on Autostart for Mobile Agent so it stays connected.
+
+**Limits.** adb must be on this computer (`adb` in PATH, or ADB=/path/to/adb). Only the listed phones are touched (never the emulator or Phone 2), only our own APK is installed, and the pairing code is never logged.
+Not verified on a connected phone in this repository's tests (they use a scripted adb); the Xiaomi steps come from reports of other users, not from a run here.

@@ -193,7 +193,7 @@ class Device:
             self._run("emu", "screenrecord", "screenshot", d)
             shots = sorted(Path(d).glob("*.png"))
             if not shots:
-                raise RuntimeError("the emulator did not save a screenshot")
+                raise RuntimeError("the phone did not save a screenshot")
             img = Image.open(shots[-1])
             img.load()
             return img

@@ -250,6 +250,11 @@
   .msg { max-width: min(640px, 86%); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.6; }
   .msg.user { align-self: flex-end; background: var(--ink-3); border: 1px solid var(--line-2); padding: 8px 16px; border-radius: 14px 14px 4px 14px; }
   .msg.assistant { align-self: flex-start; padding: 0 4px; }
+  .msg.rich { white-space: normal; }
+  .msg.rich p { margin: 0 0 8px; } .msg.rich p:last-child, .msg.rich ul:last-child, .msg.rich ol:last-child { margin-bottom: 0; }
+  .msg.rich ul, .msg.rich ol { margin: 4px 0 10px; padding-left: 22px; } .msg.rich li { margin: 4px 0; padding-left: 2px; } .msg.rich li::marker { color: var(--text-3); }
+  .msg.rich strong { font-weight: 500; color: var(--text); }
+  .msg.rich code { font: 400 13px/1.4 var(--mono); background: var(--ink-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
   .msg a { color: inherit; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
   .status { align-self: flex-start; display: flex; align-items: center; gap: 12px; padding: 8px 12px; max-width: 86%; background: var(--ink-2); border: 1px solid var(--line-2); border-radius: 10px; font: 400 12px var(--mono); color: var(--text-2); }
   .status .lane { color: var(--text-3); white-space: nowrap; }
@@ -267,6 +272,16 @@
   .card .row input { flex: 1; min-width: 120px; }
   .card .row button.primary { background: var(--amber); border-color: var(--amber); color: var(--amber-ink); }
   .card .ans { color: var(--text-2); font-size: 13px; }
+  .card .relay { display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--text-2); }
+  .card .relay .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex: none; animation: lamp 1.2s ease-in-out infinite; }
+  .card .relay.off .dot, .card .relay.none .dot, .card .relay.unavailable .dot, .card .relay.redacted .dot, .card .relay.expired .dot { background: var(--text-3); animation: none; }
+  .card .relay.found { flex-wrap: wrap; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--ink-1); }
+  .card .relay .got { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .card .relay .masked { font: 500 20px/1 var(--mono); letter-spacing: .12em; color: var(--text); }
+  .card .relay .from { color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+  .card .relay.found button.primary { background: var(--amber); border-color: var(--amber); color: var(--amber-ink); }
+  .card .or { color: var(--text-3); font-size: 12px; }
+  @media (prefers-reduced-motion: reduce) { .card .relay .dot { animation: none; } }
   .alertcard { align-self: flex-start; max-width: min(560px, 90%); display: flex; gap: 12px; align-items: flex-start; background: var(--ink-2); border: 1px solid var(--amber-line); border-radius: 14px; padding: 12px 16px; font-size: 14px; }
   .alertcard b { color: var(--amber); font: 500 12px var(--mono); display: block; margin-bottom: 4px; } .alertcard button { margin-top: 8px; }
   .botnote { align-self: flex-start; max-width: min(640px, 90%); font: 400 12px/1.6 var(--mono); color: var(--text-3); }
@@ -354,6 +369,9 @@
   .thumb { position: relative; margin: 0 auto; width: 100%; max-width: 190px; aspect-ratio: 9 / 19.5; border-radius: 18px; overflow: hidden; background: #000; }
   .thumb.landscape { max-width: 100%; aspect-ratio: 16 / 9; }
   .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .thumb img, .overlay .screen img { visibility: hidden; }  /* a picture that has not loaded (or failed to) is never shown: no broken-image icon, no alt text */
+  .thumb img.ok, .overlay .screen img.ok { visibility: visible; }
+  .thumb:not(:has(img.ok))::after { content: "Waiting for the screen…"; position: absolute; left: 0; right: 0; top: 14px; text-align: center; color: var(--text-3); font-size: 12px; pointer-events: none; }
   .thumb .open { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #000b; color: #fff; border-color: #fff3; backdrop-filter: blur(6px); border-radius: 999px; padding: 6px 16px; font-weight: 400; }
   .mcap { text-align: center; color: var(--text-2); font-size: 13px; margin-top: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
   .mcap .chip { justify-content: center; } .mcap .sleepnote { justify-content: center; flex-wrap: wrap; }
@@ -433,6 +451,7 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
   }
+  img.broken { visibility: hidden !important; }  /* any picture that fails to load is hidden: never a broken-image icon or alt text */
 </style>
 </head>
 <body>
@@ -505,13 +524,16 @@
 
 <div class="overlay" id="overlay">
   <button class="ghost close" id="ovClose" aria-label="Close live view"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
-  <div class="screen" id="ovScreen" tabindex="0"><img id="ovImg" alt="Live view of the phone"><div class="asleep" id="ovAsleep"></div></div>
+  <div class="screen" id="ovScreen" tabindex="0"><img id="ovImg" alt=""><div class="asleep" id="ovAsleep"></div></div>
   <div class="dock" id="ovBar"></div>
   <div class="dock-hint" id="ovHint"></div>
 </div>
 <div class="lightbox" id="lightbox"><img id="lbImg" alt="Library item"></div>
 
 <script>
+// No picture on this page may ever show as a broken image: a failed load hides it, a later successful load shows it again (error and load do not bubble, so listen while capturing).
+document.addEventListener("error", (e) => { if (e.target && e.target.tagName === "IMG") e.target.classList.add("broken"); }, true);
+document.addEventListener("load", (e) => { if (e.target && e.target.tagName === "IMG") e.target.classList.remove("broken"); }, true);
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
 
@@ -594,8 +616,8 @@ function renderBots() {
     btn.onclick = () => { selectBot(b.id); $("app").classList.remove("show-side"); };
     const row = el("div", "botrow" + (b.kind === "master" ? " master" : "")), more = el("button", "more");
     if (b.kind === "master") row.append(el("span", "tag", "master"));
-    if (b.kind === "phone") { const up = phoneUp(b); row.append(el("span", "tag", up ? "phone" : "offline")); if (!up) row.classList.add("offline"); }  // a phone bot whose phone is not connected is quiet
-    if (b.kind === "virtual") row.append(el("span", "tag", b.phone_id === "games" ? "cloud 2" : "adb"));
+    if (b.kind === "phone") { const up = phoneUp(b); if (!up) { row.append(el("span", "tag", "offline")); row.classList.add("offline"); } }  // a phone bot whose phone is not connected is quiet
+    if (b.kind === "virtual" && b.phone_id !== "games") row.append(el("span", "tag", "extra"));
     if (row.querySelector(".tag")) row.classList.add("tagged");  // the name stops before the tag instead of running under it
     if (b.unread && !(S.bot && S.bot.id === b.id)) btn.append(el("span", "unread"));
     more.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></svg>';
@@ -731,7 +753,7 @@ function renderHeader() {
   $("pAv").replaceWith(Object.assign(avatar(b, "xl"), { id: "pAv" }));
   $("hName").textContent = $("pName").textContent = b.name;
   $("hSub").textContent = "Muse Spark 1.3 · worker Muse Wonder";
-  $("pKind").textContent = b.kind === "master" ? "master bot" : b.kind === "virtual" ? (b.phone_id === "games" ? "cloud phone 2 bot" : "adb phone bot") : b.kind === "phone" ? "your phone's bot" : "bot";
+  $("pKind").textContent = b.kind === "master" ? "master bot" : b.kind === "virtual" ? (b.phone_id === "games" ? "phone 2 bot" : "extra phone bot") : b.kind === "phone" ? "phone bot" : "bot";
 }
 // The feed is rebuilt on every event (the phone task posts a status update each step), so what the owner is typing into a card must survive it.
 S.drafts = new Map();
@@ -748,6 +770,31 @@ function linkified(node, text) {
     const a = el("a", "", m[0]); a.href = m[0]; a.target = "_blank"; a.rel = "noopener noreferrer"; node.append(a); last = m.index + m[0].length;
   }
   node.append(text.slice(last)); return node;
+}
+// The assistant's answers: a small, safe subset of Markdown (bullets, numbered steps, **bold**, `code`, links). DOM nodes only, never innerHTML, so nothing a model or a phone screen wrote can inject markup.
+function inlineRich(node, text) {
+  const re = /(\*\*[^*\n]+\*\*|`[^`\n]+`)/g; let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) linkified(node, text.slice(last, m.index));
+    node.append(m[0][0] === "`" ? el("code", "", m[0].slice(1, -1)) : el("strong", "", m[0].slice(2, -2))); last = m.index + m[0].length;
+  }
+  linkified(node, text.slice(last)); return node;
+}
+function richText(node, text) {
+  node.classList.add("rich");
+  let list = null, para = [];
+  const flush = () => { if (!para.length) return; const p = el("p"); para.forEach((ln, i) => { if (i) p.append(el("br")); inlineRich(p, ln); }); node.append(p); para = []; };
+  for (const line of String(text).replace(/\r/g, "").split("\n")) {
+    const b = line.match(/^\s*[-*\u2022]\s+(\S.*)$/), n = line.match(/^\s*(\d{1,2})[.)]\s+(\S.*)$/);
+    if (b || n) {
+      flush(); const tag = b ? "ul" : "ol";
+      if (!list || list.tagName.toLowerCase() !== tag) { list = el(tag); if (n && n[1] !== "1") list.start = +n[1]; node.append(list); }
+      list.append(inlineRich(el("li"), (b || n)[b ? 1 : 2].trim()));
+    } else if (!line.trim()) { flush(); list = null; }
+    else if (list && /^\s{2,}\S/.test(line)) list.lastChild.append(el("br"), line.trim());  // an indented line continues the item above
+    else { list = null; para.push(line.trim()); }
+  }
+  flush(); return node;
 }
 const VERDICT_TEXT = { harmful: "Looks harmful", suspicious: "Looks suspicious", nothing_found: "Nothing found in these checks" };
 const REPORT_KIND = { link: "Link check", apk: "App check", matrix: "Look and feel", guide: "Guide", plain: "Report" };
@@ -835,7 +882,7 @@ function renderFeed(jump) {
         }
         feed.append(row);
       }
-      if (!((atts.length && m.content === PIC_ONLY) || (apks.length && m.content.startsWith("APK: ")))) feed.append(linkified(el("div", "msg " + m.role), m.content));
+      if (!((atts.length && m.content === PIC_ONLY) || (apks.length && m.content.startsWith("APK: ")))) feed.append(m.role === "assistant" ? richText(el("div", "msg assistant"), m.content) : linkified(el("div", "msg " + m.role), m.content));
       if (m.meta && m.meta.sensitive) {
         const h = el("div", "hint", "Hidden before sending: " + m.meta.sensitive.join(", ") + ".");
         feed.append(h);
@@ -858,7 +905,7 @@ function emptyState() {
   const b = S.bot || { kind: "bot", name: "" }, box = el("div", "empty");
   const rack = '<svg class="rack" viewBox="0 0 112 40" aria-hidden="true"><rect x="2" y="4" width="22" height="32" rx="5"/><rect x="34" y="10" width="44" height="22" rx="5"/><rect x="88" y="4" width="22" height="32" rx="5"/><circle class="lit" cx="56" cy="37" r="2"/></svg>';
   const r = el("div"); r.innerHTML = rack; box.append(r.firstChild);
-  const line = { master: "Your overseer. It sees every bot and phone and hands each task to the one that can do it.", virtual: "A light virtual Android for games and heavy apps. It never plays games whose publishers ban bots.", phone: "Your own phone, driven in the background through the Mobile Agent app." }[b.kind] || "Ask for something. If it needs a phone, it is done in the background and shown on the right.";
+  const line = { master: "Your overseer. It sees every bot and phone and hands each task to the one that can do it.", virtual: "A second light Android for games and heavy apps. It never plays games whose publishers ban bots.", phone: "A phone connected through the Mobile Agent app, driven in the background." }[b.kind] || "Ask for something. If it needs a phone, it is done in the background and shown on the right.";
   box.append(el("h2", "", b.kind === "bot" ? "Hand it to a phone" : b.name), el("p", "", line));
   const tries = el("div", "try");
   for (const t of TRY[b.kind] || TRY.bot) { const x = el("button", "", t); x.onclick = () => { ta.value = t; ta.dispatchEvent(new Event("input")); ta.focus(); }; tries.append(x); }
@@ -874,6 +921,23 @@ function statusLine(m) {
 }
 
 // ---------- action cards ----------
+// A one-time code can come from a phone paired through the app (agent/otprelay.py). The card only ever gets a masked hint, never the code: "Use this code" asks the server to send it.
+const ago = (at) => { const s = Math.max(0, Math.round(Date.now() / 1000 - at)); return s < 60 ? `${s} s ago` : `${Math.floor(s / 60)} min ago`; };
+setInterval(() => { for (const n of document.querySelectorAll("[data-ago]")) n.textContent = "arrived " + ago(+n.dataset.ago); }, 1000);
+function relayBlock(meta, send) {
+  const r = meta.relay, box = el("div", "relay " + r.state); box.setAttribute("role", "status"); box.setAttribute("aria-live", "polite");
+  if (r.state === "found") {
+    const got = el("div", "got"), age = el("span", "from"); age.dataset.ago = r.at; age.textContent = "arrived " + ago(r.at);
+    const who = [r.source, r.title].filter(Boolean).join(" \u00b7 ");
+    got.append(el("span", "masked", r.hint), el("span", "from", (who ? "from " + who + " on " : "from ") + r.phone), age);
+    const use = el("button", "primary", "Use this code"); use.type = "button"; use.setAttribute("aria-label", "Use this code from " + r.phone);
+    use.onclick = () => { use.disabled = true; use.textContent = "Sending\u2026"; send({ approved: true, use_relay: true }).then(res => { if (!res) { use.disabled = false; use.textContent = "Use this code"; } else use.textContent = "Sent"; }); };
+    box.append(got, use);
+  } else {
+    box.append(el("span", "dot"), el("span", "", r.state === "watching" ? `Watching ${r.phone} for a code\u2026` : r.reason || ""));
+  }
+  return box;
+}
 const KIND = { confirm: "Needs your approval", choice: "Your choice", text: "Quick question", handoff: "Your turn on the phone", otp: "One-time code", secret: "Secure input" };
 function card(m) {
   const meta = m.meta, open = meta.status === "open";
@@ -904,6 +968,7 @@ function card(m) {
     const b = el("button", "primary", "Send code"), d = el("button", "danger", "Decline");
     const go = () => /^\d{4,8}$/.test(i.value.trim()) ? send({ code: i.value.trim() }) : toast("Enter the 4 to 8 digit code");
     b.onclick = go; d.onclick = () => send({ approved: false }); i.onkeydown = (e) => { if (e.key === "Enter") go(); }; row.append(i, b, d);
+    if (meta.relay) { c.append(relayBlock(meta, send)); if (meta.relay.state === "found") c.append(el("div", "or", "Or type it")); }
   }
   c.append(row); return c;
 }
@@ -955,7 +1020,7 @@ function addPictures(files) {
   }
   renderChips();
 }
-// An APK is not a picture: it goes to its own endpoint, is only stored (never opened on this computer), and the agent checks it on a throwaway cloud phone.
+// An APK is not a picture: it goes to its own endpoint, is only stored (never opened on this computer), and the agent checks it on a throwaway phone.
 function addApk(file) {
   if (!S.bot || !file) return;
   const list = picks();
@@ -1111,7 +1176,7 @@ const STATE_TEXT = { ready: "Ready", working: "Working", waiting: "Waiting for y
 const power = () => (S.mobile.phone && S.mobile.phone.power) || "on";
 const effState = () => power() === "on" ? S.mobile.state : power();
 const ICONS = { sleeping: '<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/>', off: '<path d="M12 3v8M6.5 6.8a8 8 0 1011 0"/>', waking: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>' };
-// Cloud phone 2 is a second virtual Android with its own bot: its Mobile tab shows that phone (watch only), so its calls name it.
+// Phone 2 is a second Android with its own bot: its Mobile tab shows that phone (watch only), so its calls name it.
 const phoneQ = () => S.phoneFocus != null ? (S.phoneFocus ? "phone=" + encodeURIComponent(S.phoneFocus) : "") : (S.bot && S.bot.kind === "virtual" ? "phone=" + encodeURIComponent(S.bot.phone_id || "games") : "");
 const phoneUrl = (path, extra) => path + "?" + [extra, phoneQ()].filter(Boolean).join("&");
 async function wakePhone() { try { S.mobile = await api(phoneUrl("/api/mobile/wake"), {}); } catch (e) { toast(e.message); } pollMobile(); }
@@ -1124,7 +1189,7 @@ function phoneCard() {
     const bar = el("div", "prog" + (p.expected ? "" : " ind")), fill = el("b"); if (p.expected) fill.style.width = Math.min(95, Math.round((p.elapsed || 0) / p.expected * 100)) + "%"; bar.append(fill); c.append(bar);
     c.append(el("div", "sub", p.expected && p.expected > 5 ? `${p.elapsed || 0}s of about ${p.expected}s` : "Just a moment"));
   } else if ((p.detail || "").startsWith("adb cannot")) {  // an extra adb phone: nothing to start, it is simply not reachable
-    c.append(el("div", "ttl", "The phone is not connected"), el("div", "sub", "adb cannot reach it. Plug it in, enable USB debugging (or start the emulator), and it appears here by itself."));
+    c.append(el("div", "ttl", "The phone is not connected"), el("div", "sub", "It cannot be reached. Check that it is connected and switched on, and it appears here by itself."));
   } else {
     c.append(el("div", "ttl", p.power === "sleeping" ? "The phone is asleep" : "The phone is off"));
     c.append(el("div", "sub", p.power === "sleeping" ? "It resumes in about a second. To save power it turns fully off after a while asleep." : (S.bot && S.bot.kind === "virtual" ? "Starting it takes about 15 seconds. Tasks start it for you." : "Starting it takes about a minute. Tasks start it for you.")));
@@ -1141,7 +1206,7 @@ function sleepNote() {
   const b = el("button", "ghost", "Sleep now"); b.onclick = async () => { try { S.mobile = await api(phoneUrl("/api/mobile/sleep"), {}); } catch (e) { toast(e.message); } pollMobile(); }; n.append(b); return n;
 }
 const openConnect = () => window.openConnectDialog ? window.openConnectDialog() : toast("The connect dialog did not load: reload the page.");
-// Under the big card: the other phones that are working right now (a chip selects the bot that owns it) and, until a physical phone is connected, the way to connect one.
+// Under the big card: the other phones that are working right now (a chip selects the bot that owns it) and, until a paired phone is connected, the way to connect one.
 const workingView = (d) => { const v = d.view; if (!v) return false; if (d.p.kind === "real") return !!v.up && (v.lamp === "on" || v.lamp === "wait"); return v.lamp === "on" || v.lamp === "wait" || (d.p.kind === "virtual" && v.power === "waking"); };
 const botOf = (p) => p.bot || S.bots.find(b => b.active && laneKey(b) === p.key) || S.bots.find(b => b.kind === "master");
 function paintWork() {
@@ -1169,18 +1234,18 @@ async function renderTab() {
     const PHONE = '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>';
     const cap = el("div", "mcap"), card = el("div", "mcard");
     cap.append(el("div", "", S.bot.kind === "master" ? "The shared phone" : vb || rb ? S.bot.name : S.bot.name + "'s phone"));
-    if (rb) {  // the owner's own phone: its state, not a picture (the app does not stream the screen)
+    if (rb) {  // a phone paired through the app: its state, not a picture (the app does not stream the screen)
       const main = (S.bench.get("") || {}).state, me = main && (main.phones || []).find(x => x.id === S.bot.phone_id);
-      if (me) note(card, PHONE, "Connected", me.model || me.name || "Your phone").append(el("div", "sub", "Screen not shared"));
-      else note(card, PHONE, "Not connected", "Open the Mobile Agent app on your phone.", pill("Connect a phone", openConnect));
+      if (me) note(card, PHONE, "Connected", S.bot.name).append(el("div", "sub", "Screen not shared"));
+      else note(card, PHONE, "Not connected", "Open the Mobile Agent app on this phone.", pill("Connect a phone", openConnect));
       t.append(card, cap);
     } else if (pw !== "on") {
       if (vb && (pd.detail || "").startsWith("adb cannot")) { note(card, ICONS.off, "Can't reach the screen", "adb cannot reach this phone.", pill("Try again", () => pollMobile())); t.append(card, cap); }
-      else if (vb && pw !== "waking" && !(pd.detail || "").startsWith("Could not")) t.append(el("div", "calm", "It starts by itself when you give it a task."), cap);  // Cloud phone 2 is not shown until it runs
+      else if (vb && pw !== "waking" && !(pd.detail || "").startsWith("Could not")) t.append(el("div", "calm", "It starts by itself when you give it a task."), cap);  // Phone 2 is not shown until it runs
       else { card.append(phoneCard()); t.append(card, cap); }
     } else {
       card.classList.add("live");
-      const th = el("div", "thumb"), img = el("img"); img.id = "thumbImg"; img.alt = "Live view of the phone"; th.append(img);
+      const th = el("div", "thumb"), img = el("img"); img.id = "thumbImg"; img.alt = ""; th.setAttribute("role", "group"); th.setAttribute("aria-label", "Live view of the phone"); th.append(img);
       const open = el("button", "open", "Open"); open.onclick = () => openOverlay({}); th.append(open);  // the full-screen view has Take control, rotate and the keys
       card.append(th);
       const chip = el("div", "chip " + effState()); chip.id = "stateChip"; chip.append(el("i"), el("span", "", STATE_TEXT[effState()] || effState()));
@@ -1230,7 +1295,7 @@ async function renderTab() {
     const ren = el("button", "", "Rename"), del = el("button", "danger", "Delete bot");
     ren.onclick = () => renameBot(S.bot); del.onclick = () => deleteBot(S.bot);
     acts.append(ren); if (S.bot.kind !== "master") acts.append(del); d.append(acts);
-    d.append(el("h4", "", "About"), el("p", "", S.bot.persona || (S.bot.kind === "master" ? "Your overseer. It sees all your bots, tells you what is missing or stuck, and can run a phone task itself or hand it to the bot that fits." : "A general assistant. Ask it anything; it uses the cloud phone when a task needs one.")),
+    d.append(el("h4", "", "About"), el("p", "", S.bot.persona || (S.bot.kind === "master" ? "Your overseer. It sees all your bots, tells you what is missing or stuck, and can run a phone task itself or hand it to the bot that fits." : "A general assistant. Ask it anything; it uses the phone when a task needs one.")),
       el("h4", "", "Models"), el("p", "", "Chat and planning: Muse Spark 1.3. Phone control (screen, taps, typing): Muse Wonder."),
       el("h4", "", "Routines"), el("p", "", "Routines are set by asking the bot in chat. A routine is a task this bot runs on a schedule. It messages you first with the result and asks when it needs you."));
     host.append(d);
@@ -1280,7 +1345,7 @@ async function refreshShot() {
   try {
     const r = await fetch(phoneUrl("/api/device/screenshot", "t=" + Date.now()), { headers: auth() });
     if (r.status === 409) { pollMobile(); shotBusy = false; return; }  // the phone is not on: show its state, not a picture
-    if (r.ok) { const u = URL.createObjectURL(await r.blob()), old = img.src; img.onload = () => { applyOrientation(img.naturalWidth > img.naturalHeight); const f = img.parentElement; if (f && img.naturalWidth) f.style.aspectRatio = img.naturalWidth + " / " + img.naturalHeight; }; img.src = u; if (old.startsWith("blob:")) URL.revokeObjectURL(old); }
+    if (r.ok) { const u = URL.createObjectURL(await r.blob()), old = img.src; img.onerror = () => img.classList.remove("ok"); img.onload = () => { img.classList.add("ok"); applyOrientation(img.naturalWidth > img.naturalHeight); const f = img.parentElement; if (f && img.naturalWidth) f.style.aspectRatio = img.naturalWidth + " / " + img.naturalHeight; }; img.src = u; if (old.startsWith("blob:")) URL.revokeObjectURL(old); }
   } catch {}
   shotBusy = false;
   if (shotAgain || S.dragging) { shotAgain = false; refreshShot(); }
@@ -1439,9 +1504,9 @@ S.bench = new Map();      // key -> { p, state, view }
 const laneKey = (b) => !b ? "" : b.kind === "virtual" ? (b.phone_id || "games") : b.kind === "phone" ? "phone:" + b.phone_id : "";
 const benchQ = (key, extra) => key && !key.startsWith("phone:") ? `?${extra ? extra + "&" : ""}phone=${encodeURIComponent(key)}` : (extra ? "?" + extra : "");
 function benchPhones() {
-  const out = [{ key: "", name: "Cloud phone", lane: "cloud phone", kind: "emulator" }];
-  for (const b of S.bots) if (b.kind === "virtual") out.push({ key: b.phone_id || "games", name: b.name, lane: (b.phone_id || "games") === "games" ? "cloud phone 2" : b.phone_id, kind: "virtual", bot: b });
-  for (const b of S.bots) if (b.kind === "phone") out.push({ key: "phone:" + b.phone_id, name: b.name, lane: "my phone", kind: "real", bot: b });
+  const out = [{ key: "", name: "Phone", lane: "phone", kind: "emulator" }];
+  for (const b of S.bots) if (b.kind === "virtual") out.push({ key: b.phone_id || "games", name: b.name, lane: (b.phone_id || "games") === "games" ? "phone 2" : b.name.toLowerCase(), kind: "virtual", bot: b });
+  for (const b of S.bots) if (b.kind === "phone") out.push({ key: "phone:" + b.phone_id, name: b.name, lane: b.name.toLowerCase(), kind: "real", bot: b });
   return out;
 }
 const LAMP_TEXT = { ready: "idle", working: "working", waiting: "waiting for you", control: "you're in control", sleeping: "asleep", off: "off", waking: "waking up" };

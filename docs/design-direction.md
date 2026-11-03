@@ -8,13 +8,13 @@ Nothing in `web/` or `agent/` was changed. No image was generated. The skill was
 Screens judged (real app at http://localhost:8000, dark theme; the browser pane scales its screenshots to 800 px wide, so fine detail was read from the CSS as well):
 `/private/tmp/claude-501/-Users-dharun-Personal-Projects/5a4fd9ad-aea1-4fb8-8ca6-7e677feb10a0/scratchpad/design/`
 - `01-desktop-master-chat.jpg` Master chat, long thread, Details tab (empty routines)
-- `02-desktop-games-phone-mobile-landscape.jpg` games phone live view in landscape (taken earlier in the session, before the frame fix)
-- `03-desktop-mobile-tab-asleep.jpg`, `10-desktop-games-phone-asleep.jpg` the asleep cards and the "Your own phone" card
+- `02-desktop-games-phone-mobile-landscape.jpg` Phone 2 live view in landscape (taken earlier in the session, before the frame fix)
+- `03-desktop-mobile-tab-asleep.jpg`, `10-desktop-games-phone-asleep.jpg` the asleep cards and the paired-phone card
 - `04-desktop-mobile-tab-live-emulator.jpg` live emulator view (portrait thumbnail)
 - `05-desktop-assistant-report-cards.jpg` Home assistant chat with two report cards and the partial-success reply
 - `06-desktop-library.jpg`, `07-desktop-report-opened.jpg` Library and an opened report page
 - `08-desktop-vault.jpg` Vault tab
-- `09-desktop-games-bot-first-run.jpg` a first-run-like chat (the Games phone bot's introduction)
+- `09-desktop-games-bot-first-run.jpg` a first-run-like chat (Phone 2's introduction)
 - `11-phone390-master-chat.jpg`, `12-phone390-details-panel.jpg`, `13-phone390-mobile-tab-asleep-and-own-phone-card.jpg`, `14-phone390-pairing-card.jpg` at 390x844
 Not captured, on purpose: the composer with image chips (it needs a real upload, which changes data) and an approval card (it needs a running job). Both were judged from the CSS and the earlier QA screenshots. `web/replay.html` is not served by the service (only by Pages), so it was judged from its source: it copies the same `:root` tokens.
 
@@ -47,7 +47,7 @@ What is already good and stays: the quiet hairlines, the honest copy (no hype wo
 All three use the same product line: **Mobile Agent hands tasks to real Android phones, in the background, and tells you what it did.** All are dark, quiet in the chrome, with one bright element, no generated images (an app screen needs none), nothing that needs a build step.
 
 ### A. Switchboard (the phones as lit devices on a bench)
-- **Product:** a chat where you hand work to your phones (shared emulator, games phone, your own phone) and watch each one do it.
+- **Product:** a chat where you hand work to your phones (Phone, Phone 2, Phone 3) and watch each one do it.
 - **Character:** exact, calm, tactile.
 - **World:** a telephone exchange and an operator's bench at night: lines, lamps, patch cords.
 - **Moments:** (1) the phone rack: each phone is a rendered device with its live screen, a lane lamp and the current step in one mono line; (2) a patch line that draws from the chat's task card to the phone doing it and re-routes when the agent moves an app to another phone.
@@ -62,7 +62,7 @@ All three use the same product line: **Mobile Agent hands tasks to real Android 
 | Mobile Agent |                                    |  +------+   +-----------+   +------+      |
 |              |  you: open clash of clans          |  | emul |   | games     |   | mine |      |
 | Master    *  |  agent: crashes on emulator (3/3)  |  | live |   | live      |   | off  |      |
-| Games phone  |    moving it to games...           |  | 9:20 |   | 16:9      |   |      |      |
+| Phone 2      |    moving it to games...           |  | 9:20 |   | 16:9      |   |      |      |
 | Home assist  |  [ task card ]---- patch line ---->|  +------+   +-----------+   +------+      |
 | My phone     |  [ approval slip, amber edge ]     |  * working   * idle   o not connected     |
 |              |  [ report: plates 2x3 ]            |  step 6  tap "Enter the Dungeon"          |
@@ -96,7 +96,7 @@ All three use the same product line: **Mobile Agent hands tasks to real Android 
 
 Why it reads in a 3-minute recording at 1080p:
 - **The eye lands on the phones.** Today the three phones are the least visible thing on screen. At 1920x1080 the bench takes the right 40 % (about 760 px): three device frames side by side (emulator portrait about 200x440, games phone landscape about 360x204, your phone about 200x430) with their live screens at a size where a viewer can read what the phone is doing, not a 230 px thumbnail.
-- **The story is visible without narration.** Hero A (the app crashes on the emulator, moves to the games phone): the emulator lamp goes amber, a mono counter ticks 1/3, 2/3, 3/3, the patch line redraws to the games device, that lamp lights and the game's own screen appears there. Hero B (picture + voice): image chips in the composer, then an approval slip with an amber edge, one primary button. Hero C: a routine message arrives first, the vault slip shows a label and never a value.
+- **The story is visible without narration.** Hero A (the app crashes on Phone, moves to Phone 2): the Phone lamp goes amber, a mono counter ticks 1/3, 2/3, 3/3, the patch line redraws to the games device, that lamp lights and the game's own screen appears there. Hero B (picture + voice): image chips in the composer, then an approval slip with an amber edge, one primary button. Hero C: a routine message arrives first, the vault slip shows a label and never a value.
 - **Approval cards become slips:** the one place the chat uses amber; because amber appears nowhere else in the chrome, a viewer knows instantly "this needs me".
 - **Reports become plate grids:** 2x3 screenshot plates with a one-line caption and the verdict label, replacing the raw-goal titles and the grey dashed blocks, so the report reads as a finished thing in 3 seconds.
 - **It passes the template check:** swap in another product's name and the bench, lane lamps and patch line no longer fit.

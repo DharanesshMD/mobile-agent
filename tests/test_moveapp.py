@@ -102,13 +102,13 @@ class MasterMove(unittest.TestCase):
         return c, app, emulator, games, bots
 
     def test_master_moves_an_app_with_a_progress_message_a_result_and_a_follow_up_turn(self):
-        spark = Spark(act(type="move_app", app="clash of clans", **{"from": "emulator", "to": "games"}), act(type="reply", text="It is on Cloud phone 2 now."))
+        spark = Spark(act(type="move_app", app="clash of clans", **{"from": "emulator", "to": "games"}), act(type="reply", text="It is on Phone 2 now."))
         c, app, emulator, games, bots = self.build(spark)
-        say(c, bots["Master"], "put clash of clans on Cloud phone 2")
-        until(lambda: "It is on Cloud phone 2 now." in texts(c, bots["Master"], "assistant"), timeout=30)
+        say(c, bots["Master"], "put clash of clans on Phone 2")
+        until(lambda: "It is on Phone 2 now." in texts(c, bots["Master"], "assistant"), timeout=30)
         said = texts(c, bots["Master"], "assistant")
-        self.assertTrue(any(t.startswith("Moving clash of clans from Cloud phone to Cloud phone 2") for t in said))
-        self.assertTrue(any("Moved clash of clans from Cloud phone to Cloud phone 2" in t and "not its data or its sign-in" in t for t in said))
+        self.assertTrue(any(t.startswith("Moving clash of clans from Phone to Phone 2") for t in said))
+        self.assertTrue(any("Moved clash of clans from Phone to Phone 2" in t and "not its data or its sign-in" in t for t in said))
         self.assertIn("move_app finished", spark.calls[1][1][-1]["content"])
         self.assertIn(PKG, games.packages())
         self.assertEqual(jobs_of(c, bots["Master"]), [])  # no phone task was needed
@@ -143,19 +143,19 @@ class MasterMove(unittest.TestCase):
         spark = Spark(act(type="mobile_task", goal="install clash of clans from the play store", verify={"kind": "app_installed", "query": "clash of clans"}, say="Installing."),
                       act(type="move_app", app="clash of clans", **{"from": "emulator", "to": "games", "say": "Moving it."}),
                       act(type="phone_check", kind="app_installed", query="clash of clans", on="games"),
-                      act(type="delegate_task", bot="Cloud phone 2", goal="open clash of clans and report what you see", say="Opening it there."),
-                      act(type="reply", text="It opens on Cloud phone 2."), act(type="reply", text="It opens on Cloud phone 2."))  # the games bot and Master's final answer
+                      act(type="delegate_task", bot="Phone 2", goal="open clash of clans and report what you see", say="Opening it there."),
+                      act(type="reply", text="It opens on Phone 2."), act(type="reply", text="It opens on Phone 2."))  # the games bot and Master's final answer
         worker = Worker(act(type="done", answer="installed"), act(type="done", answer="clash of clans is on the screen"))
         c, app, emulator, games, bots = self.build(spark, worker)
-        say(c, bots["Master"], "get clash of clans running on Cloud phone 2")
-        until(lambda: jobs_of(c, bots["Cloud phone 2"]) and jobs_of(c, bots["Cloud phone 2"])[0]["status"] == "done", timeout=60)
+        say(c, bots["Master"], "get clash of clans running on Phone 2")
+        until(lambda: jobs_of(c, bots["Phone 2"]) and jobs_of(c, bots["Phone 2"])[0]["status"] == "done", timeout=60)
         self.assertIn("finished with status 'done'", spark.calls[1][1][-1]["content"])  # 1: the install finished and was verified, only then
         self.assertIn("move_app finished", spark.calls[2][1][-1]["content"])  # 2: the move, only then
-        self.assertIn("[tool result for phone_check] yes (on Cloud phone 2)", spark.calls[3][1][-1]["content"])  # 3: checked on the destination, only then
-        self.assertEqual(jobs_of(c, bots["Cloud phone 2"])[0]["target"], "virtual:games")  # 4: opened by Cloud phone 2's own bot
+        self.assertIn("[tool result for phone_check] yes (on Phone 2)", spark.calls[3][1][-1]["content"])  # 3: checked on the destination, only then
+        self.assertEqual(jobs_of(c, bots["Phone 2"])[0]["target"], "virtual:games")  # 4: opened by Phone 2's own bot
         self.assertFalse(jobs_of(c, bots["Master"])[0]["target"])  # the install ran on the emulator lane
-        until(lambda: "It opens on Cloud phone 2." in texts(c, bots["Master"], "assistant"), timeout=20)  # a request that moved an app ends with Master's own answer
-        self.assertIn("The task you handed to Cloud phone 2 finished", json.dumps(spark.calls[5][1]) + json.dumps(spark.calls[4][1]))
+        until(lambda: "It opens on Phone 2." in texts(c, bots["Master"], "assistant"), timeout=20)  # a request that moved an app ends with Master's own answer
+        self.assertIn("The task you handed to Phone 2 finished", json.dumps(spark.calls[5][1]) + json.dumps(spark.calls[4][1]))
 
 
 class Accounts(unittest.TestCase):
@@ -168,7 +168,7 @@ class Accounts(unittest.TestCase):
         text = phones.render(list(rows.values()), None, master=True)
         self.assertIn("Google account: 1 Google account(s) signed in", text)
         self.assertNotIn("someone@gmail.com", text)
-        self.assertIn("Cloud phone 2 has no Google services and can never sign in", text)
+        self.assertIn("Phone 2 has no Google services and can never sign in", text)
         self.assertIn("never copied between phones", text)
 
     def test_a_sleeping_phone_is_not_asked_and_an_answer_is_reused_for_a_while(self):
@@ -197,9 +197,9 @@ class Accounts(unittest.TestCase):
             until(lambda: "done" in texts(c, bots["Assistant"], "assistant"), timeout=30)
         finally:
             ws.__exit__(None, None, None)
-        self.assertIn("yes (on Cloud phone): 1 Google account(s) signed in", spark.calls[1][1][-1]["content"])
+        self.assertIn("yes (on Phone): 1 Google account(s) signed in", spark.calls[1][1][-1]["content"])
         self.assertNotIn("someone@gmail.com", spark.calls[1][1][-1]["content"])
-        self.assertIn("no (on Cloud phone 2): it has no Google services", spark.calls[2][1][-1]["content"])
+        self.assertIn("no (on Phone 2): it has no Google services", spark.calls[2][1][-1]["content"])
         self.assertIn("no (on Pixel 8): this phone does not report its accounts: ask the owner", spark.calls[3][1][-1]["content"])
 
 

@@ -817,7 +817,7 @@ class Leaks(unittest.TestCase):
         ext = w.rpc("GetExtendedAgentCard")["result"]
         self.assertEqual(ext["metadata"]["client"], "Zed")
         self.assertEqual(ext["metadata"]["scopes"], ALL)
-        self.assertIn("Cloud phone", ext["metadata"]["phones"])
+        self.assertIn("Phone", ext["metadata"]["phones"])
         self.assertNotIn("emulator", json.dumps(ext).lower())
         self.assertEqual(w.d.post("/a2a", json={"jsonrpc": "2.0", "id": 1, "method": "GetExtendedAgentCard"}).status_code, 401)  # the extended card needs a token
         self.assertEqual(w.rpc("agent/getAuthenticatedExtendedCard", version="0.3")["result"]["protocolVersion"], "0.3.0")

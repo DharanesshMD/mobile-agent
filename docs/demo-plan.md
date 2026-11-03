@@ -36,11 +36,11 @@ Time left: about 76 hours from now to the deadline. Recommended submission: **We
 ## 2. The 3-minute video (shot list)
 | Time | Beat | On screen | Narration (draft) | Proves |
 |---|---|---|---|---|
-| 0:00-0:15 | Hook | Master chat, three phones tiles (emulator, Cloud phone 2, your phone) | "Some apps refuse to run on virtual phones. Agents that tap blindly can get your account banned. This agent has three phones and a conscience." | Impact |
-| 0:15-1:10 | **Hero A: it finds a way** | Type "open Clash of Clans" in the Assistant. The emulator crashes (counter 3/3), a message "moving it to Cloud phone 2", the app opens there (age screen). Then "gather my resources": it refuses (account protection), offers Take control; you tap once yourself. Cut to Shattered Pixel Dungeon: the agent plays a few moves **in parallel** with an emulator task | "It saw the crash, moved the app, opened it, and told me why it will not play for me." | Tech depth, safety, parallel lanes |
+| 0:00-0:15 | Hook | Master chat, three phones tiles (emulator, Phone 2, your phone) | "Some apps refuse to run on virtual phones. Agents that tap blindly can get your account banned. This agent has three phones and a conscience." | Impact |
+| 0:15-1:10 | **Hero A: it finds a way** | Type "open Clash of Clans" in the Assistant. The emulator crashes (counter 3/3), a message "moving it to Phone 2", the app opens there (age screen). Then "gather my resources": it refuses (account protection), offers Take control; you tap once yourself. Cut to Shattered Pixel Dungeon: the agent plays a few moves **in parallel** with an emulator task | "It saw the crash, moved the app, opened it, and told me why it will not play for me." | Tech depth, safety, parallel lanes |
 | 1:10-2:00 | **Hero B: see it, say it** | Paste a screenshot or a photo of an event flyer, say into the mic "put this in my calendar and remind me an hour before". Spark reads the picture, a confirm card appears, approve, Wonder fills the calendar on the phone, steer mid-run ("make it 6:30") | "Voice, a picture, then the phone does it, and it asks before it saves." | Meta tooling (3 models), approval |
 | 2:00-2:30 | **Hero C: proactive and safe** | The morning routine message arrives first (web-search brief); Master "what needs me?"; a sign-in with a vault secret: approval card, the agent never sees the value; an image with hidden instructions is ignored | "It messages first, asks before it sends, and never reads my passwords." | Impact, safety |
-| 2:30-2:50 | Architecture and numbers | One diagram: phones, lanes, guard, vault; the numbers: 434 tests, QA 10/12, 5 s boot of Cloud phone 2, 4.3 s per step | "Built on Muse Spark, Muse Wonder and Voice Transcribe" (+ "and the open-weight Spark on Baseten" if done) | Tech depth, Meta tooling |
+| 2:30-2:50 | Architecture and numbers | One diagram: phones, lanes, guard, vault; the numbers: 434 tests, QA 10/12, 5 s boot of Phone 2, 4.3 s per step | "Built on Muse Spark, Muse Wonder and Voice Transcribe" (+ "and the open-weight Spark on Baseten" if done) | Tech depth, Meta tooling |
 | 2:50-3:00 | Close | Repo and replay link on screen | "Free, open source, runs on your Mac." | Demo |
 
 Rules for the recording: one scenario per take, sped-up segments labelled "4x", captions on, no music without a licence, no real contacts/emails on screen (throwaway Google account only),
@@ -51,7 +51,7 @@ P0 = must be done before recording.
 
 | # | Work | Why | Effort |
 |---|---|---|---|
-| P0-1 | `scripts/demo_reset.py`: clean database, named bots (Master, Assistant, Cloud phone 2, "My phone"), one routine, one vault entry, calendar and Chrome empty, apps preinstalled, phones in a known state | Repeatable takes | 1.5 h |
+| P0-1 | `scripts/demo_reset.py`: clean database, named bots (Master, Assistant, Phone 2, "My phone"), one routine, one vault entry, calendar and Chrome empty, apps preinstalled, phones in a known state | Repeatable takes | 1.5 h |
 | P0-2 | QA leftovers: rename the `sdk_gphone64_arm64` bot to "My phone"; hide the Google address in job results and Library titles; show routine times in local time; the phone bot greets "connected" only when it is; clear the stale "needs attention" cards; the empty "Assistant has no focus yet" card | First impressions on camera | 3 h |
 | P0-3 | Rehearse Hero A, B, C five times each from a reset; log time and failures; fix the top failure each round (Hero B calendar flow and Hero C routine are not rehearsed yet) | The demo is 25 % of the score | 4-5 h |
 | P0-4 | README rewrite (it still says "Status: planning"), LICENSE (none today; suggest MIT), one architecture picture, a 5-minute quick start tested from a clean clone, docs index | Judges open the repo first | 2 h |
@@ -59,18 +59,18 @@ P0 = must be done before recording.
 | P0-6 | Video: script lock, record, edit, captions, export 1080p, upload, test the link while logged out | Required | 6-8 h |
 | P1-7 | **Open-weight path** (Spark Open on Baseten for the orchestrator behind `ORCHESTRATOR_BACKEND`), run 3 scenarios on it, 10 s in the video, README section. Go/no-go decision at 15:00 today; drop if tool-call JSON is unreliable | A $10K bonus prize and extra Meta-tooling credit | 3 h |
 | P1-8 | **Replay site** on GitHub Pages: exported sessions of Heroes A-C and one failure-and-recovery, same UI, read-only, no keys | Judges cannot run our phones | 3-4 h |
-| P1-9 | Real-phone check: install the APK on the owner's real Android phone, pair, run one task ("open Settings, tell me the battery") and, if it works, show it for 10 s in Hero A | "Your own phone" is the strongest Impact moment; unverified today | 1 h owner + 1 h me |
+| P1-9 | Paired-phone check: install the APK on the owner's Android phone, pair, run one task ("open Settings, tell me the battery") and, if it works, show it for 10 s in Hero A | "Your own phone" is the strongest Impact moment; unverified today | 1 h owner + 1 h me |
 | P2 | PWA install, Docker deploy, BlueStacks wrapper, more adb phones, the `push_file` op | Cut candidates | - |
 
 ## 4. Schedule (IST)
 | When | Plan |
 |---|---|
-| **Mon 2 Nov** 10:00-13:00 | P0-2, P0-1; owner: rotate the key, decide the hero set, charge the real phone |
+| **Mon 2 Nov** 10:00-13:00 | P0-2, P0-1; owner: rotate the key, decide the hero set, charge the phone |
 | 13:00-15:00 | P1-7 open-weight spike (go/no-go at 15:00) |
 | 15:00-19:00 | P0-3 rehearsal round 1, fix the top failures. **Feature freeze 19:00**: bug fixes only after that |
 | evening | P0-4 README + LICENSE, P1-8 replay recorder |
 | **Tue 3 Nov** 09:00 | Reset, rehearsal round 2 (full run with a stopwatch), reboot the Mac, close all other apps |
-| 11:00-17:00 | **Record** (3 takes per hero, then the voice-over), P1-9 real phone if it works |
+| 11:00-17:00 | **Record** (3 takes per hero, then the voice-over), P1-9 paired phone if it works |
 | 17:00-22:00 | Edit, captions, export, upload as unlisted, rough-cut review |
 | **Wed 4 Nov** 09:00-12:00 | Final edit, replay site live, README from a clean clone |
 | 12:00-15:00 | Security sweep again, key rotated, make the repo public, test every link logged out |
@@ -80,11 +80,11 @@ P0 = must be done before recording.
 | Risk | Answer |
 |---|---|
 | Live phone misbehaves on camera | Record each hero as its own take; keep the first clean take; the replay site and a screen-recorded backup of each hero exist |
-| Mac memory (swap was 4.8 of 5.1 GB) | Reboot before recording, close every other app, record the games-phone segment last, quit the Lima VM and BlueStacks afterwards |
+| Mac memory (swap was 4.8 of 5.1 GB) | Reboot before recording, close every other app, record the Phone 2 segment last, stop its background helper and BlueStacks afterwards |
 | Model rate limits or latency (429s) | Retries are built in (about 1 minute); record at a quiet hour; keep the speed-up cut ready |
 | The Clash of Clans story is misread as "bot for a game" | Show opening and the refusal only, say the account-protection rule out loud |
 | Privacy | Throwaway Google account; fake contacts; the Library and chat checked for the owner's address before every take |
-| Judges cannot run it | Replay site, a clear README, `scripts/demo_reset.py`, the honest limits section (local emulator today, a cloud phone is the deployment target) |
+| Judges cannot run it | Replay site, a clear README, `scripts/demo_reset.py`, the honest limits section (local emulator today, a phone is the deployment target) |
 | Brand use | Name the models as Meta writes them, no logos, no endorsement claims; check the official brand rules |
 
 ## 6. Cut list (in this order)
@@ -103,7 +103,7 @@ P2 items, PWA, the replay failure-and-recovery session, the real-phone moment, H
 ## 8. Decisions needed from the owner
 1. Hero set: A (it finds a way) + B (see it, say it) + C (proactive and safe), or drop one?
 2. Open-weight spike: go or no-go?
-3. Real-phone test on your own phone tomorrow morning: yes or no?
+3. Paired-phone test tomorrow morning: yes or no?
 4. Feature freeze at Mon 19:00 IST: ok?
 5. LICENSE: MIT ok?
 6. Who narrates and where is it hosted (YouTube unlisted)?

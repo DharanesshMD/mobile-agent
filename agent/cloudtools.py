@@ -75,7 +75,7 @@ SIZES = {"small": (540, 1200, 240), "normal": (720, 1600, 300), "big": (1080, 24
 def set_device(device, art: Artifacts, action: dict) -> str:
     """Change the phone's display for a look-and-feel check and register the undo. Only phones the agent owns have these methods (not the owner's real phone)."""
     if not hasattr(device, "set_night"):
-        raise ValueError("set_device is not available on this phone: it only works on the agent's own cloud phones, never on the owner's phone")
+        raise ValueError("set_device is not available on this phone: it only works on Phone and Phone 2")
     done = []
     if "dark_mode" in action:
         want = action["dark_mode"] in (True, "on", "yes", "true", "dark")

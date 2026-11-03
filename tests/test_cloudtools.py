@@ -148,7 +148,7 @@ class SetDevice(unittest.TestCase):
     def test_it_refuses_on_the_owners_own_phone(self):
         with self.assertRaises(ValueError) as cm:
             cloudtools.run(ctx(Phone()), {}, {"type": "set_device", "dark_mode": "on"})  # a device without the cloud methods, like the real-phone app's
-        self.assertIn("never on the owner's phone", str(cm.exception))
+        self.assertIn("only works on Phone and Phone 2", str(cm.exception))
 
     def test_bad_values_and_unsupported_languages_say_so(self):
         c = ctx(CloudPhone())
@@ -269,7 +269,7 @@ class InJobs(unittest.TestCase):
         c, phone, bot, app = setup(Spark(act(type="reply", text="ok")), Worker(act(type="done", answer="x")))
         app.state.jobs.submit(bot, "show settings in dark mode", report="matrix")  # the default test phone is like the real-phone app: no cloud methods
         until(lambda: c.get(f"/api/bots/{bot}/jobs").json() and c.get(f"/api/bots/{bot}/jobs").json()[0]["status"] == "failed", timeout=20)
-        self.assertIn("never on your own phone", c.get(f"/api/bots/{bot}/jobs").json()[0]["result"])
+        self.assertIn("never run on a phone paired through the app", c.get(f"/api/bots/{bot}/jobs").json()[0]["result"])
 
     def test_a_guide_keeps_every_capture_as_a_numbered_step_and_restores_the_phone(self):
         c, cloud, bot, app = self.setup(

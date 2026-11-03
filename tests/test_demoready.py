@@ -67,11 +67,11 @@ class Names(unittest.TestCase):
         self.assertEqual(phone_name({"name": "Pixel 8"}), "Pixel 8")
         self.assertEqual(phone_name({"name": "Dharun's Galaxy"}), "Dharun's Galaxy")
 
-    def test_a_second_phone_is_my_phone_2_and_the_greeting_does_not_claim_a_connection(self):
+    def test_a_second_phone_is_phone_4_and_the_greeting_does_not_claim_a_connection(self):
         db = Database(":memory:")
         a = ensure_phone_bot(db, None, "p1", {"name": "sdk_gphone64_arm64"})
         b = ensure_phone_bot(db, None, "p2", {"name": "sdk_gphone64_arm64"})
-        self.assertEqual((a["name"], b["name"]), ("My phone", "My phone 2"))
+        self.assertEqual((a["name"], b["name"]), ("Phone 3", "Phone 4"))
         first = db.messages(a["id"], 5)[0]["content"]
         self.assertIn("is paired", first)
         self.assertNotIn("connected", first)

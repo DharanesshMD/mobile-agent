@@ -9,7 +9,7 @@
    ],
    "steps": 6,
    "synthetic": true,
-   "title": "Synthetic demo: an app that crashes on the emulator and runs on Cloud phone 2"
+   "title": "Synthetic demo: an app that crashes on Phone and runs on Phone 2"
   }
  ],
  "version": 1

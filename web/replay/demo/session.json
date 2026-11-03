@@ -23,7 +23,7 @@
    "type": "message"
   },
   {
-   "goal": "Open the sample game on the emulator and report what it shows",
+   "goal": "Open the sample game on Phone and report what it shows",
    "job": "job-emu",
    "phone": "emulator",
    "status": "running",
@@ -79,7 +79,7 @@
    "type": "job"
   },
   {
-   "goal": "Open the sample game on Cloud phone 2 and report what it shows",
+   "goal": "Open the sample game on Phone 2 and report what it shows",
    "job": "job-games",
    "phone": "games",
    "status": "running",
@@ -93,7 +93,7 @@
    "phone": "games",
    "shot": "img/demo-job-games-01.jpg",
    "t": 33800,
-   "thought": "Opening the game on Cloud phone 2.",
+   "thought": "Opening the game on Phone 2.",
    "type": "step"
   },
   {
@@ -119,7 +119,7 @@
    "kind": "text",
    "role": "assistant",
    "t": 48000,
-   "text": "The sample game keeps stopping on the shared emulator (3 crashes), so I moved it to Cloud phone 2 and opened it there. It shows its start screen; I did not play it.",
+   "text": "The sample game keeps stopping on Phone (3 crashes), so I moved it to Phone 2 and opened it there. It shows its start screen; I did not play it.",
    "type": "message"
   },
   {
@@ -147,14 +147,14 @@
      "Show me the link",
      "None, I'll decide later"
     ],
-    "question": "Open the walkthrough site on the emulator?",
+    "question": "Open the walkthrough site on Phone?",
     "status": "open"
    },
    "id": 6,
    "kind": "action_item",
    "role": "assistant",
    "t": 67000,
-   "text": "Open the walkthrough site on the emulator?",
+   "text": "Open the walkthrough site on Phone?",
    "type": "message"
   },
   {
@@ -172,6 +172,6 @@
  ],
  "steps": 6,
  "synthetic": true,
- "title": "Synthetic demo: an app that crashes on the emulator and runs on Cloud phone 2",
+ "title": "Synthetic demo: an app that crashes on Phone and runs on Phone 2",
  "version": 1
 }

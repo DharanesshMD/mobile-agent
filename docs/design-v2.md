@@ -1,4 +1,4 @@
-# Design v2: chat-first agent with a background cloud phone
+# Design v2: chat-first agent with a background phone
 
 Date: 28 Oct 2026. Status: the original design (28 Oct). Milestones 1 to 4 are built and the Android client and voice since; the sections after 12 record later updates; see docs/README.md. Supersedes the "web chatbot beside a phone view" layout in plan.md sections 6 and 12.
 Items marked (verify) have not been tested.
@@ -14,7 +14,7 @@ The reference is a desktop chat app with a bot list. What it shows, and what we 
   This week / Older. Mobile: a small live thumbnail of the bot's screen with an Open button.
 - Open goes full screen with a banner "You're in control" and an "I'm done" button. The owner takes the mouse, then hands control back.
 
-What we change: the screen is an Android phone, not a desktop browser; and the cloud phone sleeps when nobody needs it.
+What we change: the screen is an Android phone, not a desktop browser; and the phone sleeps when nobody needs it.
 Originality note: use this as layout inspiration only. Use our own names, assets and code (hackathon new-work rule). The recording shows personal
 details (phone number, resume content); keep it and any screenshots of it out of the public repo and the demo.
 I could not transcribe the audio (Whisper is not installed), so this design is based on the visuals and your written description.
@@ -23,7 +23,7 @@ I could not transcribe the audio (Whisper is not installed), so this design is b
 
 1. The owner writes or speaks a request in a bot's chat (web or Android).
 2. The orchestrator (Muse Spark 1.3) answers directly if it can: reasoning, drafting, questions, memory lookups.
-3. If the task needs a phone, it calls the `mobile_task` tool. That creates a background job, wakes the cloud phone if it sleeps, and returns at once.
+3. If the task needs a phone, it calls the `mobile_task` tool. That creates a background job, wakes the phone if it sleeps, and returns at once.
    The chat shows "Working on it" and a live status line. The owner can keep chatting or leave.
 4. The Mobile Worker (Muse Wonder, the existing graph) drives the phone: observe, plan, act, verify. Only this worker uses Wonder.
 5. When the worker needs something it cannot get from the screen, it pauses and sends a typed request to the orchestrator. The chat shows it as an
@@ -69,7 +69,7 @@ a file picker, a code box for otp, a "Take control" button for handoff), and the
 
 Prompts live in `prompts/` as files: `orchestrator.md` (role, tools, when to delegate, when to ask, how to speak, never reveal or guess secrets, never claim a task
 is done until the worker confirms), `worker.md` (the existing phone system prompt), and a per-bot persona file. A bot is a persona, a tool allow-list and a memory
-namespace; all bots share the one cloud phone and queue for it (a lock with a fair queue).
+namespace; all bots share the one phone and queue for it (a lock with a fair queue).
 
 ## 5. Sensitive data: vault design
 
@@ -87,7 +87,7 @@ Threat model: the owner pastes passwords, ID numbers and card details into chat;
 - Policy (default, owner can change): each use of a secret needs a one-tap approval card that names the secret and the app. An optional "trust this secret for this app"
   switch removes the prompt. Passwords for Google sign-in may be stored, but the first sign-in still happens by the owner through the live view.
 - Deletion: the owner can delete any secret; deletion removes the row. Audit log records label, time, job and app, never the value.
-- Limits: the cloud phone itself will hold the typed value in the app, and a compromised host can read memory. This protects data at rest and from the models.
+- Limits: the phone itself will hold the typed value in the app, and a compromised host can read memory. This protects data at rest and from the models.
 
 Status: built. `agent/vault.py` (AES-256-GCM, id and owner as associated data, key from `VAULT_KEY` or an owner-only `data/vault.key`), `agent/sensitive.py`
 (card with Luhn, Aadhaar-like, PAN, "password is", tokens). Differences from the plan above: the server redacts pasted secrets before they are stored or sent to a model
@@ -103,7 +103,7 @@ Secrets are referenced by label; unknown labels are reported to the worker witho
 - Android client: the same panel as a native image view with touch mapping. No embedded browser.
 - Library: key screenshots are saved when the worker finishes a milestone (a form submitted, an app installed), with a one-line caption.
 
-## 7. Cloud phone sleep and wake
+## 7. Phone sleep and wake
 
 Goal: the container stays deployed, but the phone costs almost nothing when nobody is using it.
 
@@ -145,7 +145,7 @@ Cut line if time runs short: Android client and routines go first; the demo can 
 1. Secrets: may the agent type a stored secret after a one-tap approval (default), or should secrets never be typed by the agent?
 2. RAG: SQLite full-text search first (default), or add a local embedding model now?
 3. Sleep timers: pause after 5 idle minutes, stop after 60 more (default).
-4. One shared cloud phone for all bots with a queue (default), or one phone per bot (more cost, more setup)?
+4. One shared phone for all bots with a queue (default), or one phone per bot (more cost, more setup)?
 5. Which two demo scenarios (safe: no banking, medical or political content)?
 
 
@@ -236,7 +236,7 @@ The phone is shared and does one task at a time. What changed so a stuck or half
 - Limits and timeouts are in `agent/config.py` (`OWNER_WAIT_MIN`, `HOLD_IDLE_MIN`, `MAX_ACTIVE_PER_BOT`).
 
 ## Secure screens in the live view (30 Oct 2026)
-Password, purchase and some banking screens set `FLAG_SECURE`: Android returns a blank picture for any screenshot (the status and navigation bars still show). The owner needs to see the screen to type on it, so the live view (`/api/device/screenshot`) falls back to the emulator's own picture (`adb emu screenrecord screenshot`, about 0.1 s, `Device.host_frame`) when the normal frame is blank in the middle (`is_blank`). The agent's own screenshots do not use this path: on those screens the worker sees a blank picture on purpose, so it never sees what the owner types. A real phone has no host-side capture, so there the view stays blank on secure screens; a cloud phone would need its own equivalent.
+Password, purchase and some banking screens set `FLAG_SECURE`: Android returns a blank picture for any screenshot (the status and navigation bars still show). The owner needs to see the screen to type on it, so the live view (`/api/device/screenshot`) falls back to the emulator's own picture (`adb emu screenrecord screenshot`, about 0.1 s, `Device.host_frame`) when the normal frame is blank in the middle (`is_blank`). The agent's own screenshots do not use this path: on those screens the worker sees a blank picture on purpose, so it never sees what the owner types. A real phone has no host-side capture, so there the view stays blank on secure screens; a phone would need its own equivalent.
 
 ## Long waits, handoffs from chat, retry cap (30 Oct 2026)
 - **Waiting is free.** `{"type":"wait","seconds":30}` (1 to 60) waits in 0.25 s slices, so Stop works at once. Waits do not use the step budget (`state["waits"]`), only a hard cap of 4x the budget and a wall-clock limit of `MAX_JOB_MINUTES` (30) that does not count the time the owner spends on a handoff. A 573 MB game download had used up all 25 steps at 9% because every short wait cost a step and a model call.

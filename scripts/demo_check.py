@@ -61,9 +61,9 @@ def check_service() -> dict | None:
 
 def check_demo_state(bots: list[dict]) -> None:
     names = {b["name"] for b in bots}
-    want = {"Master", "Home assistant", "Cloud phone 2"}
+    want = {"Master", "Home assistant", "Phone 2"}
     add("green" if want <= names else "red", "demo bots", ", ".join(sorted(names)) if want <= names else f"missing {', '.join(sorted(want - names))}")
-    add("green" if "My phone" in names else "amber", "real-phone bot", "My phone" if "My phone" in names else "none (fine unless the real phone is filmed)")
+    add("green" if "My phone" in names else "amber", "real-phone bot", "My phone" if "My phone" in names else "none (fine unless a paired phone is filmed)")
     try:
         home = next(b for b in bots if b["name"] == "Home assistant")
         routines = get(f"/api/bots/{home['id']}/routines")
@@ -108,31 +108,31 @@ def check_phones() -> None:
         power = s["phone"]["power"]
         add("green" if power == "on" else "amber", "emulator", f"{power}" + ("" if power == "on" else " (it wakes in seconds when a task starts)"))
     except Exception as e:
-        add("red", "emulator state", type(e).__name__)
+        add("red", "Phone state", type(e).__name__)
     try:
         g = get("/api/mobile/state?phone=games")
         power = g["phone"]["power"]
-        add("green" if power == "on" else "amber", "Cloud phone 2", f"{power}" + ("" if power == "on" else " (starts in about 25 s when needed)"))
+        add("green" if power == "on" else "amber", "Phone 2", f"{power}" + ("" if power == "on" else " (starts in about 25 s when needed)"))
     except Exception:
-        add("amber", "Cloud phone 2", "no state (Lima VM not set up?)")
+        add("amber", "Phone 2", "no state (not set up?)")
     if adb(EMULATOR, "get-state").strip() == "device":
         pk = adb(EMULATOR, "shell", "pm", "list", "packages")
         for label, pkg in (("Chrome", "com.android.chrome"), ("Calendar", "com.google.android.calendar"), ("Clock", "com.google.android.deskclock")):
-            add("green" if f"package:{pkg}" in pk else "red", f"emulator app: {label}")
+            add("green" if f"package:{pkg}" in pk else "red", f"Phone app: {label}")
         tz = adb(EMULATOR, "shell", "getprop", "persist.sys.timezone").strip()
         from agent.device import local_timezone
         mac = local_timezone()
-        add("green" if tz == mac else "amber", "time zone", f"emulator {tz or '?'} / Mac {mac or '?'}")
+        add("green" if tz == mac else "amber", "time zone", f"Phone {tz or '?'} / Mac {mac or '?'}")
         size = adb(EMULATOR, "shell", "wm", "size")
         add("green" if "720x1600" in size else "amber", "screen profile", size.replace("\n", " ").strip()[:60])
     else:
-        add("amber", "emulator adb", "not reachable right now (asleep): app checks skipped")
+        add("amber", "Phone adb", "not reachable right now (asleep): app checks skipped")
     if adb(GAMES, "get-state", timeout=5).strip() == "device":
         pk = adb(GAMES, "shell", "pm", "list", "packages")
         for label, pkg in (("Shattered Pixel Dungeon", "com.shatteredpixel.shatteredpixeldungeon"), ("Clash of Clans", "com.supercell.clashofclans")):
-            add("green" if f"package:{pkg}" in pk else "red", f"Cloud phone 2 app: {label}")
+            add("green" if f"package:{pkg}" in pk else "red", f"Phone 2 app: {label}")
     else:
-        add("amber", "Cloud phone 2 apps", "phone is off: app check skipped")
+        add("amber", "Phone 2 apps", "phone is off: app check skipped")
 
 
 def check_machine() -> None:

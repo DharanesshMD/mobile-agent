@@ -60,7 +60,7 @@ class Answers(Base):
         out = json.dumps(t["artifacts"]) + json.dumps(t["status"])
         for bad in ("emulator", "games phone", "Redroid"):
             self.assertNotIn(bad, out)
-        self.assertIn("Cloud phone 2", out)
+        self.assertIn("Phone 2", out)
 
     def test_a_model_failure_is_a_failed_task_with_a_plain_reason(self):
         w = World(Spark())  # no scripted answer: the model call raises

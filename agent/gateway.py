@@ -18,6 +18,8 @@ import hmac
 import html
 import ipaddress
 import json
+import logging
+import os
 import re
 import secrets
 import socket
@@ -226,15 +228,93 @@ class Listener:
             self.thread.join(timeout=5)
 
 
+DISCOVERY_PORT = 8767
+DISCOVERY_MAGIC = b"MOBILE_AGENT_DISCOVER v1"
+DISCOVERY_RATE = 20  # answers per source address per 10 seconds
+
+
+def computer_name() -> str:
+    return re.sub(r"[^A-Za-z0-9 ._\-]", "", socket.gethostname().split(".")[0])[:40] or "this computer"
+
+
+class Discovery:
+    """Lets the phone app find this computer on the Wi-Fi so the owner types only the pairing code. A UDP socket answers one fixed question
+    (`MOBILE_AGENT_DISCOVER v1`) with {app, v, port, name}: no address (the phone uses the reply's source address), no code, no token.
+    It answers only while the pairing window is open (`active()`), only senders on a private network, and only a few times a second per sender."""
+    def __init__(self, port: int, active: Callable[[], bool], clock=time.time, udp_port: int = DISCOVERY_PORT, allow_loopback: bool = False):
+        self.port, self.active, self.clock, self.udp_port, self.allow_loopback = port, active, clock, udp_port, allow_loopback
+        self.sock: socket.socket | None = None
+        self.thread: threading.Thread | None = None
+        self.seen: dict[str, list[float]] = {}
+        self.error = ""
+
+    def start(self) -> None:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("0.0.0.0", self.udp_port))
+        except OSError as e:  # best effort: without it the phone falls back to scanning, or the owner types the address
+            s.close()
+            self.error = str(e)
+            logging.getLogger("agent.gateway").warning("discovery could not listen on UDP %d: %s", self.udp_port, e)
+            return
+        s.settimeout(0.5)
+        self.sock = s
+        self.thread = threading.Thread(target=self._loop, daemon=True, name="phone-discovery")
+        self.thread.start()
+
+    def _ok_sender(self, ip: str) -> bool:
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        return (a.is_private and not a.is_loopback and not a.is_link_local) or (self.allow_loopback and a.is_loopback)
+
+    def _rate_ok(self, ip: str) -> bool:
+        now = self.clock()
+        recent = [t for t in self.seen.get(ip, []) if now - t < 10] + [now]
+        self.seen[ip] = recent
+        if len(self.seen) > 500:
+            self.seen = {k: v for k, v in self.seen.items() if v and now - v[-1] < 10}
+        return len(recent) <= DISCOVERY_RATE
+
+    def _loop(self) -> None:
+        s = self.sock
+        while s is not None and self.sock is s:
+            try:
+                data, (ip, port) = s.recvfrom(256)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if data.strip() != DISCOVERY_MAGIC or not self.active() or not self._ok_sender(ip) or not self._rate_ok(ip):
+                continue
+            try:
+                s.sendto(json.dumps({"app": "mobile-agent", "v": 1, "port": self.port, "name": computer_name()}).encode(), (ip, port))
+            except OSError:
+                pass
+
+    def stop(self) -> None:
+        s, self.sock = self.sock, None
+        if s:
+            try:
+                s.close()
+            except OSError:
+                pass
+        if self.thread:
+            self.thread.join(timeout=2)
+
+
 class PhoneGateway:
     def __init__(self, store, phones, do_pair: Callable[[str, str], tuple[str, str]], issue_code: Callable[[], str],
                  history: Callable[[dict], list], revoke: Callable[[dict], None], apk_path: Path, port: int = 8765,
-                 host: str = "0.0.0.0", clock=time.time, listener_factory=Listener, lan: Callable[[], str | None] = lan_address):
+                 host: str = "0.0.0.0", clock=time.time, listener_factory=Listener, lan: Callable[[], str | None] = lan_address, discovery_factory=Discovery):
         self.store, self.phones, self.do_pair, self.issue_code, self.history, self.revoke = store, phones, do_pair, issue_code, history, revoke
         self.apk_path, self.port, self.host, self.clock, self.listener_factory, self.lan = Path(apk_path), port, host, clock, listener_factory, lan
         self.tokens, self.limiter = LinkTokens(clock), Limiter(clock)
         self.app = self._build()
         self.listener = None
+        self.discovery_factory, self.discovery = discovery_factory, None
         self.window_until = 0.0
         self.idle_since: float | None = None
         self.token = ""
@@ -267,6 +347,33 @@ class PhoneGateway:
                 "code": self.code if open_ else None, "error": self.error,
                 "paired": list(self.paired), "connected": [p for p in self.phones.listing() if p.get("via") == "gateway"]}
 
+    def keeps_listening(self) -> bool:
+        """A paired phone must always be able to come back (a restart of this app, a Wi-Fi change, a phone that slept): the listener stays on while any phone is paired.
+        Only the phone's own socket (device token) and its history answer then; the page, the app file and pairing need the owner's open window.
+        Off with PHONE_GATEWAY_PERSIST=off, or by removing the paired phones."""
+        if os.environ.get("PHONE_GATEWAY_PERSIST", "on").strip().lower() in ("off", "0", "no"):
+            return False
+        try:
+            return bool(self.store.devices())
+        except Exception:
+            return False
+
+    def restore(self) -> None:
+        """At start-up: listen again for the phones that are already paired (no pairing window, no link, no code)."""
+        with self._lock:
+            if self.listener is not None or not self.keeps_listening() or self.lan() is None:
+                return
+            try:
+                listener = self.listener_factory(self.app, self.host, self.port)
+                listener.start()
+            except OSError as e:
+                self.error = str(e) or f"could not listen on port {self.port}"
+                return
+            self.listener = listener
+            self.idle_since = None
+            self._start_ticker()
+        audit("phone door listening for paired phones", port=self.port)
+
     def open(self) -> dict:
         """Switch the door on: start listening if needed, open the pairing window, make a fresh link and code."""
         with self._lock:
@@ -282,6 +389,9 @@ class PhoneGateway:
                 except OSError as e:
                     self.error = str(e) or f"could not listen on port {self.port}"
                     return self.state()
+            if self.discovery is None:
+                self.discovery = self.discovery_factory(self.port, self.window_open)
+                self.discovery.start()
             self.tokens.clear()
             self.token = self.tokens.issue()
             self.code = self.issue_code()
@@ -293,12 +403,24 @@ class PhoneGateway:
         return self.state()
 
     def close(self) -> dict:
+        """'Turn off': the pairing window ends at once (link, code, app file, discovery). Phones that are already paired keep their way in; with none paired the door closes completely."""
         with self._lock:
-            self._stop()
+            if self.listener is not None and self.keeps_listening():
+                self.window_until = 0.0
+                self.token = self.code = ""
+                self.tokens.clear()
+                discovery, self.discovery = self.discovery, None
+                if discovery:
+                    discovery.stop()
+            else:
+                self._stop()
         audit("phone gateway closed")
         return self.state()
 
     def _stop(self) -> None:
+        discovery, self.discovery = self.discovery, None
+        if discovery:
+            discovery.stop()
         listener, self.listener = self.listener, None
         self.window_until = 0.0
         self.token = self.code = ""
@@ -330,7 +452,7 @@ class PhoneGateway:
                 self.window_until = 0.0
                 self.token = self.code = ""
                 self.tokens.clear()
-            if any(p.get("via") == "gateway" for p in self.phones.listing()):
+            if any(p.get("via") == "gateway" for p in self.phones.listing()) or self.keeps_listening():
                 self.idle_since = None
             elif not self.window_open():
                 self.idle_since = self.idle_since or now
@@ -392,6 +514,11 @@ class PhoneGateway:
                 return PlainTextResponse("", status_code=404)
             return FileResponse(gw.apk_path, media_type="application/vnd.android.package-archive", filename=APK_NAME, headers=headers())
 
+        @app.get("/api/hello")
+        async def hello(request: Request):  # what the phone app's scan looks for when broadcast is blocked: the same four fields discovery answers with
+            guard(request)
+            return {"app": "mobile-agent", "v": 1, "port": gw.port, "name": computer_name()}
+
         @app.post("/api/pair")
         async def pair(request: Request):
             guard(request)
@@ -449,13 +576,18 @@ def landing_page(token: str, address: str, code: str, apk: dict) -> str:
 h1{{font-size:24px;margin:0 0 6px}}h2{{font-size:16px;margin:28px 0 8px}}p,li{{color:var(--text-2)}}ol{{padding-left:20px}}li{{margin:6px 0}}
 .btn{{display:block;text-align:center;background:var(--text);color:var(--ink-1);font-weight:600;padding:14px;border-radius:10px;text-decoration:none;margin:14px 0 6px}}
 .btn.alt{{background:var(--ink-3);color:var(--text);border:1px solid var(--line)}}.mono{{font-family:ui-monospace,Menlo,monospace;word-break:break-all}}.small{{font-size:12px}}
-.card{{background:var(--ink-2);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}}.warn{{color:var(--amber)}}
+.card summary{{cursor:pointer}}.card{{background:var(--ink-2);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}}.warn{{color:var(--amber)}}
 </style></head><body>
 <h1>Mobile Agent</h1><p>Lets the assistant on your computer do tasks on this phone, in the background, when you ask it to.</p>
 <div class="card"><b>What it can see and do</b><p>It reads what is on the screen, taps, types and opens apps, and it can list the apps installed here. Nothing else: no files, no photos, no messages, no contacts, no location. A notification is always shown while it is connected, with a Stop button.</p></div>
 <h2>1. Get the app</h2>{download}
 <h2>2. Install it</h2><ol><li>Chrome may warn that the file "can't be downloaded securely" and "might be harmful": this is a plain-HTTP link to your own computer, and the SHA-256 above is the file's fingerprint. Tap <b>Keep</b>, then <b>Download anyway</b>.</li><li>Open the downloaded file. If Android asks, allow installs from this browser.</li><li>Open Mobile Agent. The server and pairing code are filled in for you: tap <b>Open in the app</b> below, then <b>Confirm</b>.</li></ol>
 <a class="btn alt" href="{e(deep)}">Open in the app</a>
+<details class="card"><summary><b>If your phone says "App blocked to protect your device"</b></summary>
+<p>That is Google Play Protect, not a virus warning about this app's code: in some countries it blocks any app that can operate the screen when it comes from a browser download. These ways commonly work (Google does not promise any of them):</p>
+<ol><li>On the computer, in the Connect a phone window, open <b>Install from this computer</b>: it installs over a USB cable or Wi-Fi debugging, which Play Protect does not treat as a download.</li>
+<li>Pause scanning for a minute: Play Store, your profile icon, Play Protect, the gear, turn off <b>Scan apps with Play Protect</b>. Install, then turn it back on.</li>
+<li>If the dialog shows <b>More details</b>, choose <b>Install anyway</b>.</li></ol></details>
 <h2>3. Let it work</h2><ol><li>In the app, open Accessibility settings and turn on <b>Mobile Agent</b>.</li><li>On Android 13 or newer, if the switch is grey: App info, the three dots, <b>Allow restricted settings</b>, then try again.</li><li>Allow background running when the app asks.</li></ol>
 <p class="small">This page and the download are only available on your local network for a few minutes. Server: <span class="mono">{e(server)}</span></p>
 </body></html>"""

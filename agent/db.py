@@ -77,6 +77,13 @@ class Database:
         with self.lock:
             return [_row(r) for r in self.conn.execute(sql, args).fetchall()]
 
+    def _x_count(self, sql: str, args=()) -> int:
+        """Run a write and return how many rows it changed."""
+        with self.lock:
+            cur = self.conn.execute(sql, args)
+            self.conn.commit()
+            return cur.rowcount
+
     def _one(self, sql: str, args=()) -> dict | None:
         rows = self._q(sql, args)
         return rows[0] if rows else None

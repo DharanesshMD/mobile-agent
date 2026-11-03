@@ -7,8 +7,10 @@ import re
 import threading
 import time
 
+from agent import names
 from agent.db import Database
 from agent.hub import Hub
+from agent.logs import audit
 
 WAITING_MIN = 10          # an unanswered card older than this is reported
 RECENT_FAILURE_H = 24     # failed tasks newer than this are reported
@@ -44,49 +46,78 @@ DEFAULT_ASSISTANT_PERSONA = "A general assistant. Ask it anything; it uses the s
 RAW_MODEL_NAME = re.compile(r"sdk_|gphone|generic|emulator|redroid|^[a-z0-9]+(_[a-z0-9]+)+$", re.I)
 
 
+def migrate_phone_names(db: Database, device_names: dict[str, str] | None = None) -> list[str]:
+    """One time per phone, at start-up: a phone bot still named after its device ("2107113SI", "My phone", a raw model string) becomes "Phone N", and Phone 2's bot
+    loses its old name. A name the owner chose is never touched, and a phone that was migrated once is not looked at again (the owner may rename it back).
+    `device_names` maps a paired phone's id to the name its app reported when it paired. Returns the new names."""
+    db._x("create table if not exists names_migrated(bot_id text primary key, at real)")
+    done = {r["bot_id"] for r in db._q("select bot_id from names_migrated")}
+    out = []
+    for b in db.list_bots():
+        if b["id"] in done:
+            continue
+        if b["kind"] == "virtual" and b["name"].strip().lower() in OLD_GAMES_NAMES:
+            db.rename_bot(b["id"], GAMES_NAME, GAMES_PERSONA)
+            out.append(GAMES_NAME)
+        elif b["kind"] == "phone" and not names._NUMBERED.match(b["name"].strip()):
+            reported = (device_names or {}).get(b["phone_id"] or "", "")
+            if names.looks_like_model_name(b["name"], reported, "My phone") or RAW_MODEL_NAME.search(b["name"]):
+                new = names.next_paired_name([x["name"] for x in db.list_bots()])
+                db.rename_bot(b["id"], new, PHONE_PERSONA)
+                out.append(new)
+        else:
+            continue
+        db._x("insert or ignore into names_migrated(bot_id, at) values(?,?)", (b["id"], time.time()))
+    for n in out:
+        audit("phone bot renamed", to=n)
+    relabeled = 0
+    for old, new in (("Cloud phone 2", names.SECOND), ("Cloud phone", names.SHARED)):  # labels the page shows from the library; the text of old chats and reports stays as it was
+        relabeled += db._x_count("update library set title=replace(title, ?, ?) where title like ?", (old, new, f"%{old}%"))
+    if relabeled:
+        audit("library labels renamed", count=relabeled)
+    return out
+
+
 def phone_name(info: dict) -> str:
     """A friendly bot name for a phone: the device name unless it is a raw model string (`sdk_gphone64_arm64`), then "My phone"."""
     name = str(info.get("name") or info.get("model") or "").strip()[:40]
     return "My phone" if not name or RAW_MODEL_NAME.search(name) else name
 
 
-PHONE_PERSONA = ("The bot of your own phone. It works on that phone in the background through the Mobile Agent app: every task you give it runs there, "
+PHONE_PERSONA = ("The bot of one connected phone. It works on that phone in the background through the Mobile Agent app: every task you give it runs there, "
                  "and nothing else uses that phone.")
 
 
 def ensure_phone_bot(db: Database, hub: Hub | None, phone_id: str, info: dict) -> dict:
-    """The persistent bot of a real phone, created the first time the phone connects and kept (with its chat and routines) across reconnects."""
+    """The persistent bot of a phone the owner paired, created the first time it connects and kept (with its chat and routines) across reconnects. It is named
+    "Phone 3", "Phone 4" ...: the next free number (1 and 2 are reserved), whatever the device calls itself."""
     bot = db.phone_bot(phone_id)
     if bot:
         return bot
-    name = phone_name(info)
-    taken = {b["name"] for b in db.list_bots()}
-    if name in taken:  # a second phone (or the same phone paired again) must not get a bot with the same name
-        n = 2
-        while f"{name} {n}" in taken:
-            n += 1
-        name = f"{name} {n}"
+    name = names.next_paired_name([b["name"] for b in db.list_bots()])
     bot = db.create_bot(name, PHONE_PERSONA, kind="phone", phone_id=phone_id)
-    msg = db.add_message(bot["id"], "assistant", "text", f"Your phone ({name}) is paired. Tell me what to do on it: I work on it in the background, and these tasks never touch the shared emulator.")
+    msg = db.add_message(bot["id"], "assistant", "text", f"{name} is paired. Tell me what to do on it: I work on it in the background, and these tasks run only on this phone.")
     if hub:
         hub.publish(bot["id"], {"type": "message", "message": msg})
     return bot
 
 
-GAMES_NAME = "Cloud phone 2"
-GAMES_PERSONA = ("The bot of Cloud phone 2: a second light Android (a container) for heavy apps and anything the shared Cloud phone cannot run. It runs only here, "
-                 "in the background, and never uses the shared Cloud phone.")
-GAMES_INTRO = ("This is Cloud phone 2: a second light Android for heavy apps and anything the shared Cloud phone cannot run. What to expect, honestly: there is no Google Play here, "
+GAMES_NAME = names.SECOND
+OLD_GAMES_NAMES = {"cloud phone 2", "games phone"}  # earlier display names: a bot still carrying one is renamed (an owner-chosen name is left alone)
+GAMES_PERSONA = ("The bot of Phone 2: a second light Android for heavy apps and anything Phone cannot run. It runs only there, "
+                 "in the background, and never uses Phone.")
+GAMES_INTRO = ("This is Phone 2: a second light Android for heavy apps and anything Phone cannot run. What to expect, honestly: there is no Google Play here, "
                "so apps are installed from APK files; graphics are software-rendered (low quality); apps that draw one picture, like games, have no readable screen, so I work from "
-               "screenshots and may need a few tries; and some apps refuse to run on virtual devices. For those, connect your own phone with the Mobile Agent app.")
+               "screenshots and may need a few tries; and some apps refuse to run here. For those, connect another phone with the Mobile Agent app.")
 
 
 def ensure_games_bot(db: Database, hub: Hub | None, phone_id: str = "games") -> dict:
-    """The persistent bot of Cloud phone 2, created at start-up when the phone exists on this computer."""
+    """The persistent bot of Phone 2, created at start-up when the phone exists on this computer."""
     bot = db.phone_bot(phone_id, "virtual")
     if bot:
-        if bot["name"] == "Games phone":  # the old display name: keep the bot and its history, give it the generic name
+        if bot["name"].strip().lower() in OLD_GAMES_NAMES:  # an old display name: keep the bot and its history, give it the current name
             bot = db.rename_bot(bot["id"], GAMES_NAME, GAMES_PERSONA) or bot
+            audit("phone bot renamed", to=GAMES_NAME)
         return bot
     bot = db.create_bot(GAMES_NAME, GAMES_PERSONA, kind="virtual", phone_id=phone_id)
     msg = db.add_message(bot["id"], "assistant", "text", GAMES_INTRO)
@@ -101,9 +132,9 @@ def ensure_adb_bot(db: Database, hub: Hub | None, name: str, serial: str, has_pl
     if bot:
         return bot
     play = "Google Play is installed here, so apps can be installed from the Play Store." if has_play else "There is no Google Play here, so apps come as APK files."
-    bot = db.create_bot(f"{name.title()} phone", f"The bot of the extra adb phone '{name}' ({serial}). It runs only on that phone, in the background, and never uses the shared emulator.",
+    bot = db.create_bot(f"{name.title()} phone", f"The bot of the extra phone '{name}'. It runs only on that phone, in the background, and never uses Phone.",
                         kind="virtual", phone_id=name)
-    msg = db.add_message(bot["id"], "assistant", "text", f"This is the extra phone '{name}', reached over adb ({serial}). {play} It is always on while adb can reach it; "
+    msg = db.add_message(bot["id"], "assistant", "text", f"This is the extra phone '{name}'. {play} It is always on while it stays reachable; "
                          "if it goes offline, my tasks fail and I say so instead of using another phone.")
     if hub:
         hub.publish(bot["id"], {"type": "message", "message": msg})

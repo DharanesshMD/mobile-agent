@@ -1,4 +1,4 @@
-"""Every phone is its own lane (emulator, Cloud phone 2, real phones), and Cloud phone 2 has its own bot, power and live view."""
+"""Every phone is its own lane (emulator, Phone 2, real phones), and Phone 2 has its own bot, power and live view."""
 import io
 import json
 import tempfile
@@ -18,7 +18,7 @@ from test_service import Phone, png
 
 
 class GamesDevice(Phone):
-    """Cloud phone 2: same fake screen as the emulator, with a screenshot that looks different and a record of what it was asked."""
+    """Phone 2: same fake screen as the emulator, with a screenshot that looks different and a record of what it was asked."""
     def screenshot(self):
         return png(150 + self.i % 40)
 
@@ -66,9 +66,9 @@ class GamesBot(unittest.TestCase):
     def test_the_games_phone_gets_its_own_honest_bot_once(self):
         c, app, *_ = make(Spark(act(type="reply", text="ok")), Routed({}))
         games = [b for b in c.get("/api/bots").json() if b["kind"] == "virtual"]
-        self.assertEqual([(b["name"], b["phone_id"]) for b in games], [("Cloud phone 2", "games")])
+        self.assertEqual([(b["name"], b["phone_id"]) for b in games], [("Phone 2", "games")])
         intro = c.get(f"/api/bots/{games[0]['id']}/state").json()["messages"][0]["content"]
-        for honest in ("no Google Play", "APK", "software-rendered", "refuse to run", "your own phone"):
+        for honest in ("no Google Play", "APK", "software-rendered", "refuse to run", "another phone"):
             self.assertIn(honest, intro)
         from agent.master import ensure_games_bot
         self.assertEqual(ensure_games_bot(app.state.db, None)["id"], games[0]["id"])  # created once, reused after
@@ -99,12 +99,12 @@ class GamesBot(unittest.TestCase):
         c, app, emulator, games, lc, backend, bots = make(spark, Routed({}))
         say(c, bots["virtual"], "hi")
         until(lambda: "ok" in texts(c, bots["virtual"], "assistant"))
-        self.assertIn("CLOUD PHONE 2", spark.calls[0][0])
+        self.assertIn("PHONE 2", spark.calls[0][0])
         self.assertIn("no UI tree", spark.calls[0][0])
-        self.assertIn("never on the shared Cloud phone", spark.calls[0][0])
+        self.assertIn("never on Phone", spark.calls[0][0])
         say(c, bots["bot"], "hi")
         until(lambda: "ok" in texts(c, bots["bot"], "assistant"))
-        self.assertIn("Cloud phone 2", spark.calls[1][0])
+        self.assertIn("Phone 2", spark.calls[1][0])
         self.assertIn("has its own bot", spark.calls[1][0])
 
     def test_a_sleeping_games_phone_wakes_for_its_task(self):
@@ -208,7 +208,7 @@ class LiveView(unittest.TestCase):
         shot = c.get("/api/device/screenshot", params={"phone": "games"})
         self.assertEqual((shot.status_code, shot.headers["content-type"]), (200, "image/jpeg"))
         self.assertNotEqual(shot.content, c.get("/api/device/screenshot").content)  # a different phone, a different picture
-        # sleep and wake Cloud phone 2 only
+        # sleep and wake Phone 2 only
         self.assertEqual(c.post("/api/mobile/sleep", params={"phone": "games"}).json()["phone"]["power"], "sleeping")
         self.assertEqual(c.get("/api/device/screenshot", params={"phone": "games"}).status_code, 409)  # watching never wakes it
         self.assertEqual(c.get("/api/device/screenshot").status_code, 200)  # the emulator is untouched

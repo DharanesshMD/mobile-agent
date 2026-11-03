@@ -12,6 +12,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from agent import names
 from agent import gamepolicy
 from agent import phones
 from agent.checks import _norm
@@ -163,11 +164,11 @@ class Escalator:
 
     def _label(self, key: str) -> str:
         if key == "emulator":
-            return "Cloud phone"
+            return names.SHARED
         if key.startswith("phone:"):
             b = next((x for x in self.orch.db.list_bots() if x["kind"] == "phone" and x["phone_id"] == key.split(":", 1)[1]), None)
-            return (b or {}).get("name") or "your phone"
-        return "Cloud phone 2" if key == "games" else f"the {key} phone"
+            return (b or {}).get("name") or "that phone"
+        return names.SECOND if key == "games" else f"the {key} phone"
 
     def _lane(self, key: str) -> str:
         return "" if key == "emulator" else key if key.startswith("phone:") else f"virtual:{key}"
@@ -296,7 +297,7 @@ class Escalator:
         real = [b for b in self.orch.db.list_bots() if b["kind"] == "phone"]
         tried = "; ".join(f"{t['label']}: {t['reason']}" for t in chain.tried) or "no other phone is set up"
         if not real:
-            unblock = "connect your own phone with the Mobile Agent app: it installs from its own Play Store, which is the one place left to try"
+            unblock = "connect another phone with the Mobile Agent app: it installs from its own Play Store, which is the one place left to try"
         elif any(t["key"].startswith("phone:") and not t["attempted"] for t in chain.tried):
             unblock = "open the Mobile Agent app on your phone (it is not connected right now) and ask again"
         else:

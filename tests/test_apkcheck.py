@@ -34,7 +34,7 @@ def fake_apk(path, manifest_present=True):
 
 
 class ApkPhone(CloudPhone):
-    """A cloud phone that can install, launch, show crashes and uninstall."""
+    """A phone that can install, launch, show crashes and uninstall."""
     def __init__(self):
         super().__init__()
         self.installed, self.crash_log, self.front, self.log = [], [], "", []
@@ -190,12 +190,12 @@ class InChat(unittest.TestCase):
         spark = Spark()
         c, _, bot, app = setup(spark)
         emu, games = ApkPhone(), ApkPhone()
-        games.installed.append("com.example.tool")  # Cloud phone 2 has it already
+        games.installed.append("com.example.tool")  # Phone 2 has it already
         app.state.jobs.device = emu
         app.state.jobs.virtuals["games"] = (games, None)
         with tempfile.TemporaryDirectory() as d:
             aid = self.upload(c, bot, fake_apk(Path(d, "y.apk")), "tool.apk").json()["id"]
-        spark.replies = [json.dumps({"thought": "t", "action": {"type": "check_apk", "attachment": aid}})]  # no "on": Cloud phone 2 is the default
+        spark.replies = [json.dumps({"thought": "t", "action": {"type": "check_apk", "attachment": aid}})]  # no "on": Phone 2 is the default
         info = {**apkcheck.parse_manifest(manifest(["INTERNET"])), "certs": ["ab" * 32], "size_mb": 0.1}
         with mock.patch.object(apkcheck, "analyze", return_value=info), mock.patch.object(apkcheck, "WATCH_S", 0.2):
             c.post(f"/api/bots/{bot}/messages", json={"text": "check it", "attachments": [aid]})
