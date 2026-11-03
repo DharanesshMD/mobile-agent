@@ -6,6 +6,7 @@ done (in any lane) and is skipped if it did not succeed. A job waiting for the o
 and a job that hits a dead phone restarts it and runs once more, so the queue cannot freeze on one stuck task or one dead emulator.
 """
 import json
+import logging
 import shutil
 import subprocess
 import threading
@@ -20,6 +21,8 @@ from agent.db import Database
 from agent.graph import build_graph, run as run_graph
 from agent.hub import Hub
 from agent.remote import RemoteDevice
+
+log = logging.getLogger("agent.jobs")
 from agent.vault import SecretUse, Vault
 
 ACTIVE = ("queued", "running", "waiting")
@@ -242,12 +245,14 @@ class JobManager:
             self._cv.notify_all()
         self._ensure_lane(jr.lane)
         self._announce_queue()
+        log.info("queued job=%s bot=%s lane=%s after=%s goal=%s", job["id"], bot_id, jr.lane or "shared", after or "-", goal[:120])
         return job
 
     def cancel(self, job_id: str) -> bool:
         jr = self.runs.get(job_id)
         if not jr:
             return False
+        log.info("cancel requested job=%s", job_id)
         jr.cancel.set()
         jr.resume_value = {"cancelled": True}
         jr.resume.set()
@@ -418,6 +423,7 @@ class JobManager:
 
     def _execute(self, jr: JobRun) -> None:
         self.db.update_job(jr.job_id, status="running")
+        log.info("started job=%s bot=%s lane=%s", jr.job_id, jr.bot_id, jr.lane or "shared")
         self._announce_queue()
         self._set_status(jr, "Starting…")
         if jr.after:  # a follow-up step starts from what the step before it found
@@ -493,6 +499,7 @@ class JobManager:
         if jr.timed_out:
             status, result = "failed", f"Timed out after {round(self.owner_wait_s / 60)} min waiting for the owner. The task was stopped and the phone released."
         job = self.db.update_job(jr.job_id, status=status, ended=time.time(), result=result, trace_dir=str(trace))
+        log.log(logging.INFO if status == "done" else logging.WARNING, "finished job=%s bot=%s status=%s in %.0fs result=%s", jr.job_id, jr.bot_id, status, (job or {}).get("ended", time.time()) - ((job or {}).get("started") or time.time()), (result or "")[:160])
         if jr.target != "phone" and not jr.target.startswith("phone:") and hasattr(device, "third_party_packages"):  # remember what is installed while the phone is awake
             try:
                 self.remember_apps("emulator" if not jr.target else jr.target.split(":", 1)[1], device.third_party_packages())
@@ -559,6 +566,9 @@ class JobManager:
     def _emit(self, jr: JobRun, event: dict) -> None:
         if event["type"] == "step":
             self._set_status(jr, f"Step {event['n']}: {event['thought'] or event['action']['type']}")
+            log.info("step job=%s n=%s action=%s thought=%s", jr.job_id, event["n"], event["action"].get("type"), (event["thought"] or "")[:100])  # the kind of action only: what it types is never logged
+        elif event["type"] == "result" and str(event.get("outcome", "")).lower().startswith(("failed", "error", "refused", "denied")):
+            log.warning("step job=%s n=%s outcome=%s", jr.job_id, event.get("n"), str(event["outcome"])[:120])
 
     def _handler(self, jr: JobRun, payload: dict) -> dict:
         kind = payload["kind"]

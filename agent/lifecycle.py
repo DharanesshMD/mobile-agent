@@ -7,6 +7,7 @@ stopped after STOP_AFTER_PAUSED_MIN more. Anything that needs the phone (a task,
 `EmulatorBackend` is for the local Android emulator on the Mac: sleep is SIGSTOP on the emulator process (no CPU, memory kept) and wake is
 SIGCONT; stop is `adb emu kill`; boot starts `scripts/emulator.sh`. A cloud backend (docker pause / stop / start) fits the same interface.
 """
+import logging
 import os
 import re
 import signal
@@ -134,6 +135,8 @@ class Lifecycle:
 
     # --- state ---------------------------------------------------------------------------------------------------
     def _set(self, power: str, detail: str = "") -> None:
+        if power != self.power:
+            logging.getLogger("agent.phone").info("%s: %s -> %s %s", type(self.backend).__name__, self.power, power, detail[:80])
         with self._lock:
             self.power, self.detail, self.since = power, detail, self.clock()
             if power == "on":

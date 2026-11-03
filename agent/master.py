@@ -140,9 +140,9 @@ def digest(db: Database, now: float | None = None) -> str:
         routines = db.routines(bid)
         if routines:
             lines.append("    routines: " + "; ".join(_describe(r) for r in routines))
-        facts = db._q("select text from memory where bot_id=? order by rowid desc limit 3", (bid,))
+        facts = db.memory_recent(bid, 3)
         if facts:
-            lines.append("    remembers: " + " | ".join(_clip(f["text"], 70) for f in facts))
+            lines.append("    remembers: " + " | ".join(_clip(f, 70) for f in facts))
         out.append("\n".join(lines))
     text = "\n".join(out) or "(no other bots yet)"
     return text if len(text) <= DIGEST_CHARS else text[:DIGEST_CHARS] + "\n…(digest truncated)"

@@ -4,6 +4,8 @@
 (function () {
   const CSS = `
   #connectDlg { width: min(520px, 94vw); max-height: 92vh; overflow: auto; }
+  #connectDlg .cdhead { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--ink-2); margin: -24px 0 0; padding: 24px 0 8px; }
+  #connectDlg .cdhead h3 { margin: 0; }
   #connectDlg .step { margin-top: 18px; }
   #connectDlg .step > b { display: flex; gap: 8px; align-items: center; font-weight: 500; }
   #connectDlg .num { font: 500 11px/1 var(--mono); color: var(--text-3); border: 1px solid var(--line-2); border-radius: 50%; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
@@ -59,7 +61,10 @@
     const s = st || {};
     const open = !!s.window, parts = [];
     const h = el("h3", "", "Connect a phone"); h.id = "cdTitle";
-    parts.push(h, el("div", "sub", "Scan a code with your Android phone, download the Mobile Agent app and pair it. The app asks for your approval to operate the screen, and shows a notification while it is connected."));
+    const x = el("button", "ghost icon cdx"); x.type = "button"; x.title = "Close"; x.setAttribute("aria-label", "Close");
+    x.innerHTML = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>'; x.onclick = () => dlg.close();  // static markup, no server text
+    const head = el("div", "cdhead"); head.append(h, x);
+    parts.push(head, el("div", "sub", "Scan a code with your Android phone, download the Mobile Agent app and pair it. The app asks for your approval to operate the screen, and shows a notification while it is connected."));
 
     const s1 = el("div", "step"); const b1 = el("b"); b1.append(el("span", "num", "1"), document.createTextNode(" Allow phones on this Wi-Fi"));
     s1.append(b1);

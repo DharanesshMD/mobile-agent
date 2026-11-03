@@ -171,10 +171,56 @@
   .conn .cacts .primary { background: var(--amber); border-color: var(--amber); color: var(--amber-ink); }
   .conn .cacts button:disabled { opacity: .6; cursor: default; }
   .conn .sure { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--text-2); }
+  .conn .cseg { display: flex; gap: 4px; margin: 12px 16px 0; padding: 3px; width: max-content; max-width: calc(100% - 32px); background: var(--ink-1); border: 1px solid var(--line); border-radius: 999px; flex: none; }
+  .conn .cseg button { padding: 5px 16px; border-radius: 999px; background: transparent; border: 1px solid transparent; color: var(--text-2); font-size: 13px; font-weight: 400; }
+  .conn .cseg button[aria-selected=true] { background: var(--ink-3); color: var(--text); border-color: var(--line-2); }
+  .agents { max-width: 680px; margin: 8px auto 0; display: flex; flex-direction: column; gap: 20px; }
+  .agents > p.lead { margin: 0; color: var(--text-2); font-size: 14px; }
+  .agents h4 { margin: 0 0 8px; font-size: 14px; font-weight: 500; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .agents h4 small { color: var(--text-3); font: 400 12px var(--mono); }
+  .agents .box { border: 1px solid var(--line); border-radius: 12px; background: var(--ink-1); padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .agents .arow { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .agents .arow .t { min-width: 0; flex: 1 1 220px; } .agents .arow .t b { font-weight: 500; display: block; }
+  .agents .arow .t span { color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+  .agents .lamp { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-3); vertical-align: 0; }
+  .agents .lamp.on { background: var(--ok); box-shadow: none; }
+  .agents .addr { display: flex; gap: 8px; align-items: center; }
+  .agents .addr label { flex: none; width: 82px; font-size: 12px; color: var(--text-3); }
+  .agents .addr code, .agents .tokfield { flex: 1; min-width: 0; font: 400 12px/1.5 var(--mono); color: var(--text-2); background: var(--ink-0); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; overflow-wrap: anywhere; }
+  .agents .btn { flex: none; font-size: 12px; padding: 4px 12px; border-radius: 8px; }
+  .agents a.btn { display: inline-block; text-decoration: none; border: 1px solid var(--line-2); background: var(--ink-3); color: var(--text); }
+  .agents .aclient { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; flex-wrap: wrap; }
+  .agents .aclient.gone { opacity: .55; }
+  .agents .aclient .ctxt { flex: 1 1 200px; min-width: 0; } .agents .aclient .n { font-weight: 500; overflow-wrap: anywhere; }
+  .agents .aclient .b { color: var(--text-3); font-size: 12px; }
+  .agents .sc { display: inline-block; font: 400 11px var(--mono); padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--text-2); margin: 4px 4px 0 0; }
+  .agents .sc.phone { color: var(--amber); border-color: var(--amber-line); }
+  .agents .aclient .acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .agents .field { display: flex; flex-direction: column; gap: 4px; } .agents .field label { font-size: 13px; color: var(--text-2); } .agents .field input[type=text], .agents .field input[type=number] { width: 100%; }
+  .agents .checks { display: flex; flex-direction: column; gap: 8px; }
+  .agents .checks label { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--text-2); }
+  .agents .checks input { margin-top: 3px; flex: none; } .agents .checks b { color: var(--text); font-weight: 500; }
+  .agents .tokbox { border-color: var(--amber-line); }
+  .agents .tokbox .tokfield { color: var(--text); user-select: all; }
+  .agents .cmd { font: 400 12px/1.5 var(--mono); }
+  .agents .atask { display: flex; width: 100%; gap: 10px; align-items: center; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--ink-1); text-align: left; font-weight: 400; flex-wrap: wrap; }
+  .agents .atask:hover { background: var(--ink-3); }
+  .agents .atask .who { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; } .agents .atask .when { color: var(--text-3); font: 400 11px var(--mono); }
+  .agents .atask .sk { color: var(--text-3); font: 400 11px var(--mono); }
+  .agents .tasks { display: flex; flex-direction: column; gap: 4px; }
+  .agents .spill { flex: none; font: 400 11px var(--mono); padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--text-3); }
+  .agents .spill.working, .agents .spill.submitted { color: var(--amber); border-color: var(--amber-line); }
+  .agents .spill.input_required, .agents .spill.auth_required { color: var(--amber); border: 2px solid var(--amber); }
+  .agents .spill.completed { color: var(--ok); border-color: #3ecf8e55; } .agents .spill.failed { color: var(--bad); border-color: #ef6a7066; }
+  .agents .adetail { margin: 0 0 4px; padding: 10px 12px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 10px 10px; background: var(--ink-0); display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+  .agents .adetail h5 { margin: 0; font-size: 11px; font-weight: 500; color: var(--text-3); text-transform: none; }
+  .agents .adetail p { margin: 0; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .agents .muted { color: var(--text-3); font-size: 12px; } .agents .warnnote { color: var(--amber); font-size: 12px; }
   @media (max-width: 600px) {
     dialog.conn { width: 100vw; height: 100dvh; max-width: none; max-height: none; border-radius: 0; border: 0; }
     .conn .grid { grid-template-columns: minmax(0, 1fr); }
     .conn .tools .td { display: none; }
+    .agents .addr { flex-wrap: wrap; } .agents .addr label { width: 100%; } .agents .addr code, .agents .addr .tokfield { flex: 1 1 160px; }
   }
   .menu { position: absolute; right: 8px; top: calc(50% + 20px); z-index: 20; min-width: 160px; background: var(--ink-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 4px; display: flex; flex-direction: column; gap: 0; box-shadow: 0 12px 32px #000a; }
   .menu button { background: transparent; border: 0; text-align: left; padding: 8px 12px; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 8px; font-weight: 400; }
@@ -672,6 +718,7 @@ function onEvent(ev) {
   } else if (ev.type === "message_delete") { S.msgs.delete(ev.id); renderFeed(); }
   else if (ev.type === "refresh" && ((ev.what === "routines" && S.tab === "details") || (ev.what === "vault" && S.tab === "vault") || (ev.what === "library" && S.tab === "library"))) renderTab();
   else if (ev.type === "refresh" && ev.what === "connectors") refreshConnectors();
+  else if (ev.type === "refresh" && ev.what === "a2a") { if (CONN.dlg && CONN.dlg.open && CONN.tab === "agents") refreshAgents(); }
   else if (ev.type === "refresh" && ev.what === "phone") { loadBots(); pollMobile().then(() => { if (S.tab === "mobile") renderTab(); }); }
   if (S.tab === "library") renderTab();
 }
@@ -1431,7 +1478,7 @@ async function pollBench() {
 setInterval(pollBench, 2500); document.addEventListener("visibilitychange", () => { if (!document.hidden) pollBench(); });
 
 // ---------- connectors: the apps the agent can use through MCP ----------
-const CONN = { data: null, view: "dir", cat: "All", q: "", pick: null, busy: false, ask: false, err: "", dlg: null, draft: null };
+const CONN = { tab: "apps", data: null, view: "dir", cat: "All", q: "", pick: null, busy: false, ask: false, err: "", dlg: null, draft: null };
 const PLUG = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.2a3.5 3.5 0 01-7 0zM8 11.2v2.3"/></svg>';
 function tileOf(name, big) {  // a coloured tile with the first letter: no logos are fetched from anywhere
   let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
@@ -1468,9 +1515,11 @@ function addRow() {
 function renderConn() {
   const dlg = CONN.dlg; if (!dlg) return;
   const body = dlg.querySelector(".cbody"), pills = dlg.querySelector(".pills"), foot = dlg.querySelector(".cfoot");
-  const dir = CONN.view === "dir";
-  dlg.querySelector(".sbox").hidden = !dir; dlg.querySelector(".back").hidden = dir; dlg.querySelector("h3").hidden = dir; pills.hidden = !dir; foot.hidden = !dir;
-  body.replaceChildren();
+  const dir = CONN.view === "dir", agt = dir && CONN.tab === "agents";
+  const seg = dlg.querySelector(".cseg"); seg.hidden = !dir; [...seg.children].forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === CONN.tab)));
+  dlg.querySelector(".sbox").hidden = !dir || agt; dlg.querySelector(".back").hidden = dir; dlg.querySelector("h3").hidden = dir && !agt; pills.hidden = !dir || agt; foot.hidden = !dir || agt;
+  const keep = body.scrollTop, fid = document.activeElement && body.contains(document.activeElement) ? document.activeElement.id : ""; body.replaceChildren();
+  if (agt) { renderAgents(body); body.scrollTop = keep; const f = fid && body.querySelector("#" + fid); if (f) f.focus(); return; }
   if (!CONN.data) { body.append(el("div", "cempty", "Loading…")); return; }
   if (CONN.view === "detail") return renderConnDetail(body);
   if (CONN.view === "custom") return renderConnCustom(body);
@@ -1604,6 +1653,176 @@ function renderConnCustom(body) {
   };
   d.append(f); body.append(d); name.focus();
 }
+// ---------- agent access: other AI agents (A2A) that hire this agent ----------
+const AGT = { data: null, token: null, draft: { name: "", scopes: ["ask"], rate: "" }, askRotate: "", askRemove: "", purge: false, open: "", detail: null, err: "", busy: false };
+const AGT_SCOPE = { ask: "Chat and shared notes, no phone", phone: "May use the phones", "context-write": "May add notes to the shared memory" };
+const AGT_STATE = { submitted: "Queued", working: "Working", input_required: "Waiting for you", completed: "Done", failed: "Failed", canceled: "Canceled", rejected: "Rejected", auth_required: "Needs sign-in" };
+function agoText(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 45) return "just now"; if (s < 3600) return Math.round(s / 60) + " min ago"; if (s < 86400) return Math.round(s / 3600) + " h ago"; return Math.round(s / 86400) + " d ago";
+}
+async function copyText(text, btn) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch {
+    const t = el("textarea"); t.value = text; t.setAttribute("readonly", ""); t.style.cssText = "position:fixed;opacity:0;left:-9999px"; (CONN.dlg || document.body).append(t); t.select();
+    try { ok = document.execCommand("copy"); } catch {} t.remove();
+  }
+  const old = btn.dataset.label || btn.textContent; btn.dataset.label = old; btn.textContent = ok ? "Copied" : "Copy failed"; setTimeout(() => { btn.textContent = old; }, 1500);
+}
+async function refreshAgents(force) {
+  if (AGT.busy && !force) return;
+  try { AGT.data = await api("/api/a2a"); } catch { return; }
+  if (AGT.open) { try { AGT.detail = await api("/api/a2a/tasks/" + encodeURIComponent(AGT.open)); } catch { AGT.detail = null; } }
+  const a = document.activeElement;
+  if (CONN.dlg && CONN.dlg.open && CONN.tab === "agents" && CONN.view === "dir" && !(a && CONN.dlg.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) renderConn();  // not while the owner is typing in a field
+}
+const agtBase = (d) => (d.urls.card || "").replace(/\/\.well-known\/agent-card\.json$/, "");
+function addrRow(label, url, open) {
+  const r = el("div", "addr"), l = el("label", "", label), c = el("code", "", url), b = el("button", "btn", "Copy"); b.type = "button"; b.onclick = () => copyText(url, b); b.setAttribute("aria-label", "Copy the " + label.toLowerCase());
+  r.append(l, c, b);
+  if (open) { const a = el("a", "btn", "Open"); a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer"; r.append(a); }
+  return r;
+}
+function partText(p) {
+  if (p.text !== undefined) return String(p.text);
+  if (p.data !== undefined) return "data: " + JSON.stringify(p.data);
+  return (p.filename || "file") + (p.mediaType ? " (" + p.mediaType + ")" : "");
+}
+const cut = (t, n) => { t = String(t); return t.length > n ? t.slice(0, n) + "…" : t; };
+function taskDetail(t, row) {
+  const d = el("div", "adetail"), task = t.task || {}, hist = task.history || [];
+  const ask = hist.find(m => m.role === "ROLE_USER"), req = ask ? (ask.parts || []).map(partText).join("\n") : "";
+  const sec = (h, node) => { const w = el("div"); w.append(el("h5", "", h), node); d.append(w); };
+  sec("Request", el("p", "", req ? cut(req, 500) : "(no text)"));
+  const msg = task.status && task.status.message ? (task.status.message.parts || []).map(partText).join("\n") : "";
+  if (msg) sec("Status", el("p", "", cut(msg, 500)));
+  const arts = task.artifacts || [];
+  if (arts.length) {
+    const box = el("div");
+    for (const a of arts) box.append(el("p", "", (a.name ? a.name + ": " : "") + cut((a.parts || []).map(partText).join(" · "), 300)));
+    sec("Answer and files", box);
+  }
+  if (t.error) sec("Error", el("p", "", cut(t.error, 300)));
+  if ((t.jobs || []).length) sec("Phone jobs", el("p", "", t.jobs.map(j => typeof j === "string" ? j : (j && j.id) || "?").join(", ")));
+  if (row.state === "input_required" && row.botId) {
+    const w = el("div", "arow"); w.append(el("span", "warnnote", `Answer the card in ${row.client}'s chat.`));
+    const go = el("button", "btn", "Open chat"); go.type = "button"; go.onclick = () => openAgentChat(row.botId); w.append(go); d.append(w);
+  }
+  return d;
+}
+function openAgentChat(botId) { if (CONN.dlg) CONN.dlg.close(); selectBot(botId); }
+function renderAgents(body) {
+  const D = AGT.data;
+  if (!D) { body.append(el("div", "cempty", "Loading…")); return; }
+  const root = el("div", "agents");
+  root.append(el("p", "lead", "Let other AI agents (A2A) hire this agent. They connect with a token you create here."));
+
+  // 1. the switch
+  const sw = el("div", "box"), row = el("div", "arow"), t = el("div", "t"), on = D.listening;
+  const b = el("b"); b.append(el("span", "lamp" + (on ? " on" : "")), document.createTextNode("Allow other agents to connect"));
+  t.append(b, el("span", "", on ? "Listening on " + (D.lan && D.lanAddress ? D.lanAddress + ":" + D.port : D.host + ":" + D.port) : D.enabled ? "On, but not listening" : "Off"));
+  const tog = el("button", on || D.enabled ? "" : "primary", on || D.enabled ? "Turn off" : "Turn on"); tog.type = "button"; tog.disabled = AGT.busy;
+  tog.onclick = async () => { AGT.busy = true; AGT.err = ""; renderConn(); try { AGT.data = await api(on || D.enabled ? "/api/a2a/disable" : "/api/a2a/enable", {}); } catch (x) { AGT.err = x.message; } AGT.busy = false; renderConn(); };
+  row.append(t, tog); sw.append(row);
+  if (D.error) { const e = el("div", "cerr", D.error); e.setAttribute("role", "alert"); sw.append(e); }
+  if (AGT.err) { const e = el("div", "cerr", AGT.err); e.setAttribute("role", "alert"); sw.append(e); }
+  if (on && !D.lan) sw.append(el("div", "muted", "Only this computer can reach it. To let agents on other machines in, start the app with A2A_HOST=0.0.0.0 (a token is always required)."));
+  if (!on && D.clients.length) sw.append(el("div", "muted", "While it is off, nothing can connect. Your agents and their tokens are kept."));
+  root.append(sw);
+
+  // 2. the addresses
+  if (on) {
+    const box = el("div", "box"); const u = D.urls, host = D.lan && D.lanAddress ? (x) => x.replace(/^(https?:\/\/)[^/:]+/, "$1" + D.lanAddress) : (x) => x;
+    box.append(addrRow("Agent card", host(u.card)), addrRow("Endpoint", host(u.rpc)), addrRow("Docs", host(u.docs), true)); root.append(box);
+  }
+
+  // 3. the one-time token
+  if (AGT.token) {
+    const T = AGT.token, box = el("div", "box tokbox"); box.setAttribute("role", "group"); box.setAttribute("aria-label", "New token");
+    box.append(el("b", "", `Copy this token now: ${T.client.name}`), el("div", "muted", "It is shown only once and stored only as a hash. If you lose it, make a new one."));
+    const tr = el("div", "addr"), tf = el("code", "tokfield", T.token), cb = el("button", "btn", "Copy"); cb.type = "button"; cb.onclick = () => copyText(T.token, cb); cb.setAttribute("aria-label", "Copy the token"); tr.append(tf, cb); box.append(tr);
+    const base = agtBase(D), cmd = `python scripts/a2a_client.py --url ${base} --token ${T.token} send "What can you do?"`;
+    const cr = el("div", "addr"), cc = el("code", "tokfield cmd", cmd), cb2 = el("button", "btn", "Copy"); cb2.type = "button"; cb2.onclick = () => copyText(cmd, cb2); cb2.setAttribute("aria-label", "Copy the example command"); cr.append(cc, cb2);
+    box.append(el("div", "muted", "Try it from the project folder:"), cr, addrRow("Agent card", D.urls.card), addrRow("Endpoint", D.urls.rpc));
+    const done = el("button", "primary", "I have copied it"); done.type = "button"; done.onclick = () => { AGT.token = null; renderConn(); }; const acts = el("div", "cacts"); acts.append(done); box.append(acts);
+    root.append(box);
+  }
+
+  // 4. the clients
+  const cs = el("section"); cs.append(el("h4", "", "Agents"));
+  const live = D.clients.filter(c => !c.revoked), gone = D.clients.filter(c => c.revoked);
+  if (!D.clients.length) cs.append(el("div", "cempty", "No agents yet. Add one to get a token."));
+  for (const c of [...live, ...gone]) cs.append(clientRow(c));
+  root.append(cs);
+
+  // 5. add one
+  const f = el("form", "box"); f.autocomplete = "off"; f.append(el("b", "", "Add an agent"));
+  const dr = AGT.draft, nf = el("div", "field"), nl = el("label", "", "Name"), ni = el("input"); ni.type = "text"; ni.id = "agtName"; ni.maxLength = 40; ni.required = true; ni.placeholder = "e.g. Research agent"; ni.value = dr.name; nl.htmlFor = "agtName"; nf.append(nl, ni);
+  ni.oninput = () => { dr.name = ni.value; };
+  const checks = el("div", "checks");
+  const SC = [["ask", "Ask", "Chat and shared notes. It can never use a phone."], ["phone", "Phone", "Lets it run tasks on your phones; you still approve anything that sends, pays or installs."], ["context-write", "Add notes", "Lets it add notes to the shared memory."]];
+  for (const [id, name, text] of SC) {
+    const l = el("label"), cb = el("input"); cb.type = "checkbox"; cb.checked = dr.scopes.includes(id);
+    cb.onchange = () => { dr.scopes = cb.checked ? [...new Set([...dr.scopes, id])] : dr.scopes.filter(x => x !== id); };
+    const tx = el("span"); tx.append(el("b", "", name), document.createTextNode(" " + text)); l.append(cb, tx); checks.append(l);
+  }
+  const rf = el("div", "field"), rl = el("label", "", "Requests per minute"), ri = el("input"); ri.type = "number"; ri.id = "agtRate"; ri.min = "1"; ri.max = "600"; ri.value = dr.rate || String(D.defaults.ratePerMin); rl.htmlFor = "agtRate"; rf.append(rl, ri);
+  ri.oninput = () => { dr.rate = ri.value; };
+  const err = el("div", "cerr", AGT.formErr || ""); err.setAttribute("role", "alert"); err.hidden = !AGT.formErr;
+  const go = el("button", "primary", AGT.busy ? "Creating…" : "Create"); go.type = "submit"; go.disabled = AGT.busy; const acts = el("div", "cacts"); acts.append(go);
+  f.append(nf, checks, rf, err, acts);
+  f.onsubmit = async (ev) => {
+    ev.preventDefault(); if (AGT.busy) return; if (!dr.name.trim()) { AGT.formErr = "Give the agent a name."; renderConn(); return; }
+    AGT.busy = true; AGT.formErr = ""; renderConn();
+    try {
+      const r = await api("/api/a2a/clients", { name: dr.name.trim(), scopes: dr.scopes.length ? dr.scopes : ["ask"], rate_per_min: Math.max(1, Math.min(600, parseInt(dr.rate || D.defaults.ratePerMin, 10) || D.defaults.ratePerMin)) });
+      AGT.token = { token: r.token, client: r.client }; AGT.draft = { name: "", scopes: ["ask"], rate: "" };
+    } catch (x) { AGT.formErr = x.message || "Could not create it"; }
+    AGT.busy = false; await refreshAgents(true); renderConn();
+  };
+  root.append(f);
+
+  // 6. recent tasks
+  const ts = el("section"), h = el("h4"); h.append(document.createTextNode("Recent tasks"), el("small", "", D.taskTotal ? D.taskTotal + " in all" : "")); ts.append(h);
+  const list = el("div", "tasks");
+  if (!D.tasks.length) list.append(el("div", "cempty", "Nothing yet. Tasks other agents send appear here."));
+  for (const k of D.tasks.slice(0, 15)) {
+    const open = AGT.open === k.id, b = el("button", "atask"); b.type = "button"; b.setAttribute("aria-expanded", String(open));
+    b.append(el("span", "spill " + k.state, AGT_STATE[k.state] || k.state), el("span", "who", k.client), el("span", "sk", k.skill), el("span", "when", agoText(k.updated || k.created)));
+    b.onclick = async () => { AGT.open = open ? "" : k.id; AGT.detail = null; renderConn(); if (!open) { try { AGT.detail = await api("/api/a2a/tasks/" + encodeURIComponent(k.id)); } catch {} renderConn(); } };
+    list.append(b);
+    if (open) list.append(AGT.detail && AGT.detail.id === k.id ? taskDetail(AGT.detail, k) : el("div", "adetail", "Loading…"));
+  }
+  ts.append(list); root.append(ts);
+  body.append(root);
+}
+function clientRow(c) {
+  const r = el("div", "aclient" + (c.revoked ? " gone" : "")), t = el("div", "ctxt");
+  const name = el("div", "n", c.name); t.append(name);
+  const sc = el("div"); for (const s of c.scopes) { const chip = el("span", "sc" + (s === "phone" ? " phone" : ""), s); chip.title = AGT_SCOPE[s] || s; sc.append(chip); } t.append(sc);
+  t.append(el("div", "b", c.revoked ? "Removed" : (c.lastSeen ? "last used " + agoText(c.lastSeen) : "never used") + (c.running ? " · " + c.running + " running" : "")));
+  r.append(tileOf(c.name), t);
+  if (c.revoked) return r;
+  const acts = el("div", "acts");
+  if (AGT.askRotate === c.id) {
+    const s = el("div", "sure"); s.append(el("span", "", "Make a new token? The old one stops working."));
+    const y = el("button", "primary btn", "New token"), n = el("button", "btn", "Keep"); y.type = n.type = "button";
+    y.onclick = async () => { try { const x = await api(`/api/a2a/clients/${c.id}/rotate`, {}); AGT.token = { token: x.token, client: x.client }; AGT.askRotate = ""; } catch (e) { AGT.err = e.message; AGT.askRotate = ""; } await refreshAgents(true); renderConn(); };
+    n.onclick = () => { AGT.askRotate = ""; renderConn(); }; s.append(y, n); acts.append(s);
+  } else if (AGT.askRemove === c.id) {
+    const s = el("div", "sure"), l = el("label"), cb = el("input"); cb.type = "checkbox"; cb.checked = AGT.purge; cb.onchange = () => { AGT.purge = cb.checked; };
+    l.append(cb, document.createTextNode(" Also delete everything stored for it")); const y = el("button", "danger solid btn", "Remove"), n = el("button", "btn", "Keep"); y.type = n.type = "button";
+    y.onclick = async () => { try { await api(`/api/a2a/clients/${c.id}` + (AGT.purge ? "?purge=true" : ""), undefined, "DELETE"); } catch (e) { AGT.err = e.message; } AGT.askRemove = ""; AGT.purge = false; await refreshAgents(true); loadBots(); renderConn(); };
+    n.onclick = () => { AGT.askRemove = ""; renderConn(); }; s.append(el("span", "", `Remove ${c.name}? Its token stops working.`), l, y, n); acts.append(s);
+  } else {
+    if (c.botId) { const o = el("button", "btn", "Open its chat"); o.type = "button"; o.onclick = () => openAgentChat(c.botId); acts.append(o); }
+    const a = el("button", "btn", "New token"); a.type = "button"; a.onclick = () => { AGT.askRotate = c.id; AGT.askRemove = ""; renderConn(); };
+    const d = el("button", "btn danger", "Remove"); d.type = "button"; d.onclick = () => { AGT.askRemove = c.id; AGT.askRotate = ""; AGT.purge = false; renderConn(); };
+    acts.append(a, d);
+  }
+  r.append(acts); return r;
+}
 function openConnectors() {
   if (!CONN.dlg) {
     const dlg = el("dialog", "conn"); dlg.setAttribute("aria-labelledby", "connTitle");
@@ -1615,18 +1834,26 @@ function openConnectors() {
     const h3 = el("h3", "", "Connectors"); h3.id = "connTitle";
     const close = el("button", "ghost", ""); close.type = "button"; close.setAttribute("aria-label", "Close"); close.innerHTML = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>'; close.onclick = () => dlg.close();
     head.append(back, sbox, h3, close);
+    const seg = el("div", "cseg"); seg.setAttribute("role", "tablist"); seg.setAttribute("aria-label", "Connectors");
+    for (const [tab, label] of [["apps", "Apps"], ["agents", "Agent access"]]) {
+      const b = el("button", "", label); b.type = "button"; b.dataset.tab = tab; b.setAttribute("role", "tab"); b.id = "cseg-" + tab;
+      b.onclick = () => { CONN.tab = tab; if (tab === "agents") refreshAgents(true); renderConn(); };
+      b.onkeydown = (e) => { if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); const o = seg.children[tab === "apps" ? 1 : 0]; o.click(); o.focus(); } };
+      seg.append(b);
+    }
     const pills = el("div", "pills"); pills.setAttribute("role", "group"); pills.setAttribute("aria-label", "Categories");
     const body = el("div", "cbody"), foot = el("div", "cfoot", "Sign-in with a key or token. Browser sign-in (OAuth) is not supported yet.");
-    dlg.append(head, pills, body, foot);
+    dlg.append(head, seg, pills, body, foot);
     dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });  // a click on the backdrop
-    dlg.addEventListener("close", () => { CONN.busy = false; $("connBtn").focus(); });
+    dlg.addEventListener("close", () => { CONN.busy = false; AGT.token = null; AGT.open = ""; AGT.detail = null; AGT.askRotate = AGT.askRemove = ""; $("connBtn").focus(); });  // a new token never outlives the dialog
     document.body.append(dlg); CONN.dlg = dlg;
   }
-  CONN.view = "dir"; CONN.q = ""; CONN.cat = "All"; CONN.err = ""; CONN.ask = false; CONN.draft = null; CONN.dlg.querySelector("input[type=search]").value = "";
+  CONN.view = "dir"; CONN.tab = "apps"; CONN.q = ""; CONN.cat = "All"; CONN.err = ""; CONN.ask = false; CONN.draft = null; CONN.dlg.querySelector("input[type=search]").value = "";
   closeSide(); CONN.dlg.showModal(); renderConn(); refreshConnectors().then(renderConn);
   CONN.dlg.querySelector("input[type=search]").focus();
 }
 $("connBtn").onclick = openConnectors;
+setInterval(() => { if (!document.hidden && CONN.dlg && CONN.dlg.open && CONN.tab === "agents" && CONN.view === "dir" && !AGT.askRemove && !AGT.askRotate) refreshAgents(); }, 5000);  // task states move on their own
 refreshConnectors();
 loadBots(); pollMobile(); setInterval(loadBots, 6000);
 </script>

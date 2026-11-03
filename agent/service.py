@@ -3,6 +3,7 @@ import asyncio
 import hmac
 import io
 import json
+import logging
 import os
 import re
 import secrets
@@ -16,6 +17,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from agent.logs import AccessLog, audit, setup_logging
 from agent.graph import Result, build_graph, run as run_graph
 from agent.chat_api import register_chat
 from agent.vault import Vault, load_key
@@ -26,6 +28,8 @@ from agent.privacy import AccountMasker
 from agent.gateway import PhoneGateway, phone_history
 from agent.remote import PhoneHub
 from agent.jobs import JobManager
+from agent.a2a_rpc import Service as A2AService
+from agent.a2a_server import Manager as A2AManager, register_management as register_a2a
 from agent.connectors import Connectors
 from agent.orchestrator import Orchestrator
 from agent.master import DEFAULT_ASSISTANT_PERSONA, Watcher, ensure_adb_bot, ensure_games_bot, ensure_master, ensure_phone_bot
@@ -38,6 +42,9 @@ PAIR_TTL = 600
 EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,255}$")
 TERMINAL = {"done", "failed", "denied", "cancelled", "max_steps", "error"}
 WEB = Path(__file__).resolve().parent.parent / "web"
+
+
+log = logging.getLogger("agent.service")
 
 
 class Run:
@@ -141,6 +148,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
                start_scheduler: bool = False, master: bool = False, lifecycle=None, virtuals: dict | None = None, adb_phones=None) -> FastAPI:
     """`virtuals` maps a name ("games") to the (Device, Lifecycle) of a virtual phone, each with its own bot, lane and live view."""
     app = FastAPI(title="Mobile Agent")
+    app.add_middleware(AccessLog, listener="main")
     store = store or Store(None)
     runs: dict[str, Run] = {}
     codes: dict[str, float] = {}
@@ -627,6 +635,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
 
     @app.post("/api/gateway/open", dependencies=[Depends(auth)])
     def gateway_open():
+        audit("phone gateway opened")
         return gateway.open()
 
     @app.post("/api/gateway/close", dependencies=[Depends(auth)])
@@ -636,6 +645,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     jobs = JobManager(db, hub, device, model_factory, data_dir=data_dir, settle=settle, external_busy=lambda: bool(active()), vault=vault)
     orch = Orchestrator(db, hub, model_factory, jobs, vault)
     orch.connectors = Connectors(db, vault)
+    app.state.knowledge = orch.knowledge = db.knowledge  # the shared notes: bots and (through the A2A service) outside agents retrieve from it
     jobs.orch = orch
     jobs.phones = phones
     for name, (vdev, vlc) in (virtuals or {}).items():
@@ -675,8 +685,14 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         ensure_master(db, hub)
     register_chat(app, auth, db, hub, jobs, orch, vault, scheduler)
     app.state.db, app.state.jobs, app.state.orch, app.state.vault, app.state.scheduler, app.state.hub, app.state.watcher = db, jobs, orch, vault, scheduler, hub, watcher
+    a2a_service = A2AService(db, orch, hub, jobs, data_dir)  # other agents hire this one over A2A (its own door, switched on by the owner)
+    a2a_service.on_change = lambda: [hub.publish(b["id"], {"type": "refresh", "what": "a2a"}) for b in db.list_bots()]
+    a2a_manager = A2AManager(a2a_service)
+    register_a2a(app, auth, a2a_service, a2a_manager)
+    app.state.a2a, app.state.a2a_manager = a2a_service, a2a_manager
     jobs.start()
     if start_scheduler:
+        a2a_manager.restore()
         scheduler.start()
         watcher.start()
         if lifecycle:
@@ -706,6 +722,7 @@ def default_serial(env_serial: str | None, emulator_available: bool) -> str | No
 
 
 def create_default_app() -> FastAPI:
+    setup_logging()  # data/logs: the files in agent/logs.py
     from agent.device import Device
     from agent.lifecycle import EmulatorBackend, Lifecycle
     from agent.virtual import GAMES, LimaRedroidBackend, SERIAL as GAMES_SERIAL
@@ -728,11 +745,11 @@ def create_default_app() -> FastAPI:
             if device.is_emulator():
                 prepare_with_retries(device)
         except Exception as e:  # a phone that is still settling must not stop the server from starting
-            print(f"Could not apply the light profile yet ({type(e).__name__}); continuing.", flush=True)
+            log.warning("could not apply the light profile yet (%s); continuing", type(e).__name__)
     from agent.adbphones import AdbPhones, load_adb_phones
     extra, problems = load_adb_phones()
     for p in problems:
-        print(f"ADB_PHONES: {p}", flush=True)
+        log.warning("ADB_PHONES: %s", p)
     adb_phones = AdbPhones(extra) if extra else None
     virtuals = {}
     if os.environ.get("GAMES_PHONE", "on") != "off" and LimaRedroidBackend.available():  # Cloud phone 2 exists on this computer; nothing is started yet
@@ -752,7 +769,8 @@ def create_default_app() -> FastAPI:
                      db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True,
                      lifecycle=lifecycle, virtuals=virtuals, adb_phones=adb_phones)
     app.state.orch.web_in_chain = True  # when no phone can run an app, the last step is a web search for other ways (a card; nothing runs until the owner picks)
-    print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)
+    log.info("ready: shared phone %s, Cloud phone 2 %s, extra adb phones %d", "yes" if lifecycle else "no sleep control", "yes" if virtuals else "no", len(extra))
+    print(f"Pairing code (valid {PAIR_TTL // 60} min): {app.state.issue_pair_code()}", flush=True)  # the console only: a code never goes into a file
     return app
 
 
@@ -762,4 +780,4 @@ if __name__ == "__main__":
     load = create_default_app()
     if host not in ("127.0.0.1", "localhost") and not os.environ.get("APP_TOKEN"):
         raise SystemExit("Refusing to listen on a public address without APP_TOKEN set")
-    uvicorn.run(load, host=host, port=int(os.environ.get("PORT", "8000")))
+    uvicorn.run(load, host=host, port=int(os.environ.get("PORT", "8000")), log_config=None, access_log=False)  # the app's own log files and request lines replace uvicorn's

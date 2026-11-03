@@ -5,6 +5,7 @@ Everything a server returns is untrusted data. See docs/connectors.md for the ru
 """
 import atexit
 import json
+import logging
 import os
 import re
 import threading
@@ -14,6 +15,7 @@ from agent import mcp
 from agent.db import Database
 from agent.vault import HIDDEN, Vault
 
+log = logging.getLogger("agent.connectors")
 CALL_RESULT_CAP = 8000
 IDLE_S = 120  # a local server that nobody used for this long is stopped
 FAIL_LIMIT = 3
@@ -254,6 +256,7 @@ class Connectors:
         if not isinstance(args, dict):
             raise ConnectorError("arguments must be an object")
         client, lock = self._take(cid)
+        t0 = time.time()
         with lock:
             try:
                 client = client or self.opener(self._spec(row, self._secret(row)))
@@ -265,9 +268,11 @@ class Connectors:
                 fails = row["fails"] + 1
                 down = fails >= FAIL_LIMIT
                 self.db._x("update connectors set fails=?, status=?, error=?, updated=? where id=?", (fails, "error" if down else "connected", str(e)[:200] if down else "", time.time(), cid))
+                log.warning("%s/%s failed in %.1fs (%d in a row): %s", cid, name, time.time() - t0, fails, str(e)[:160])
                 raise ConnectorError(f"{row['name']} failed: {e}") from None
         if row["fails"]:
             self.db._x("update connectors set fails=0 where id=?", (cid,))
+        log.info("%s/%s ok in %.1fs (argument names: %s)", cid, name, time.time() - t0, ",".join(sorted(args))[:80])
         return mcp.render(result, CALL_RESULT_CAP)
 
     def close_all(self) -> None:

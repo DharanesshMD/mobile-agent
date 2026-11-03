@@ -13,7 +13,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent import apkcheck, images, sensitive
+from agent import apkcheck, images, logs, sensitive
+from agent.logs import audit
 from agent.config import TRANSCRIBE_MODEL
 from agent.connectors import ConnectorError
 from agent.master import DEFAULT_ASSISTANT_PERSONA
@@ -83,6 +84,7 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     @app.post("/api/bots", dependencies=[Depends(auth)])
     def create_bot(body: NewBot):
         bot = db.create_bot(body.name, body.persona)
+        audit("bot created", bot=bot["id"], name=body.name)
         if body.greet:
             focus = f"The owner described its focus as: {bot['persona']}" if bot["persona"] else "The owner gave it no particular focus."
             note = (f"You were just created as the bot '{bot['name']}'. {focus} Open the conversation yourself: in two or three short sentences say what you can do "
@@ -129,6 +131,8 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
             shutil.rmtree(Path(jobs.data_dir) / "runs" / jid, ignore_errors=True)
         if erase_secrets and orch.connectors:
             orch.connectors.erase_all()  # their keys are in the vault: they go with it
+        if erase_secrets:
+            db.knowledge.erase_all()  # the shared notes go too: this is the "wipe everything" path
         erased = vault.erase_all() if erase_secrets else 0
         fresh = db.create_bot("Assistant", DEFAULT_ASSISTANT_PERSONA) if last else None
         return {"ok": True, "bot": fresh, "erased_secrets": erased}
@@ -385,6 +389,7 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     def cancel_job(job_id: str):
         if not jobs.cancel(job_id):
             raise HTTPException(404, "job is not running")
+        audit("job stopped by the owner", job=job_id)
         return {"ok": True}
 
     @app.get("/api/bots/{bot_id}/library", dependencies=[Depends(auth)])
@@ -448,6 +453,19 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         jobs.take_control(lane) if body.action == "take" else jobs.release_control(lane)
         return jobs.state(lane)
 
+    @app.get("/api/knowledge", dependencies=[Depends(auth)])
+    def knowledge_list(q: str = Query(default="", max_length=500), kind: str | None = Query(default=None, max_length=40), limit: int = Query(default=20, ge=1, le=20)):
+        """The owner sees every stored note: the best matches for `q`, or the newest when there is no query."""
+        viewer = ("owner", None)
+        hits = db.knowledge.search(q, viewer=viewer, kinds=kind, limit=limit) if q.strip() else db.knowledge.recent(viewer, kinds=kind, limit=limit)
+        return {"hits": hits, "stats": db.knowledge.stats()}
+
+    @app.delete("/api/knowledge/{kid}", dependencies=[Depends(auth)])
+    def knowledge_delete(kid: int):
+        if not db.knowledge.delete(kid):
+            raise HTTPException(404, "unknown note")
+        return {"ok": True}
+
     @app.get("/api/vault", dependencies=[Depends(auth)])
     def vault_list():
         return vault.entries()
@@ -456,6 +474,7 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     def vault_delete(secret_id: str):
         if not vault.delete(secret_id):
             raise HTTPException(404, "unknown secret")
+        audit("vault secret deleted", id=secret_id)
         return {"ok": True}
 
     def connectors_changed():
@@ -472,6 +491,7 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
             row = orch.connectors.connect(body.id, body.custom, body.secret)
         except ConnectorError as e:
             raise HTTPException(422, str(e)) from None
+        audit("connector connected", id=row["id"], transport=row["transport"])
         connectors_changed()
         return row
 
@@ -488,8 +508,20 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
     def connectors_delete(cid: str):
         if not orch.connectors.disconnect(cid):
             raise HTTPException(404, "unknown connector")
+        audit("connector disconnected", id=cid)
         connectors_changed()
         return {"ok": True}
+
+    @app.get("/api/logs", dependencies=[Depends(auth)])
+    def logs_list():
+        return {"dir": str(logs.log_dir() or ""), "files": logs.files()}
+
+    @app.get("/api/logs/{name}", dependencies=[Depends(auth)])
+    def logs_tail(name: str, lines: int = Query(default=200, ge=1, le=2000), level: str | None = Query(default=None, max_length=10), q: str | None = Query(default=None, max_length=100)):
+        """The newest records of one log file (already redacted), optionally one level and up, or only those containing a word."""
+        if name not in logs.FILES:
+            raise HTTPException(404, "unknown log")
+        return {"name": name, "lines": logs.tail(name, lines, level, q)}
 
     @app.get("/api/vault/audit", dependencies=[Depends(auth)])
     def vault_audit():

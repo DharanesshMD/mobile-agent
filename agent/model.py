@@ -2,11 +2,14 @@
 import base64
 import http.client
 import json
+import logging
 import os
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+log = logging.getLogger("agent.model")
 
 
 def load_env(path: str | Path = ".env") -> None:
@@ -49,14 +52,19 @@ class MetaClient:
                                      {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"})
         for attempt in range(len(RETRY_DELAYS) + 1):
             last = attempt == len(RETRY_DELAYS)
+            t0 = time.time()
             try:
-                return json.load(urllib.request.urlopen(req, timeout=120))
+                data = json.load(urllib.request.urlopen(req, timeout=120))
+                log.info("%s %s ok in %.1fs (attempt %d)", self.model, path, time.time() - t0, attempt + 1)
+                return data
             except urllib.error.HTTPError as e:
+                log.warning("%s %s HTTP %s after %.1fs (attempt %d%s)", self.model, path, e.code, time.time() - t0, attempt + 1, ", giving up" if last or e.code not in (429, 500, 502, 503) else ", retrying")
                 if e.code in (429, 500, 502, 503) and not last:
                     time.sleep(RETRY_DELAYS[attempt])
                     continue
                 raise ModelError(f"HTTP {e.code}: {e.read()[:300].decode(errors='replace')}") from e
             except (OSError, http.client.HTTPException, json.JSONDecodeError) as e:  # dropped connection, DNS failure, timeout, bad body
+                log.warning("%s %s %s after %.1fs (attempt %d%s)", self.model, path, type(e).__name__, time.time() - t0, attempt + 1, ", giving up" if last else ", retrying")
                 if not last:  # a Wi-Fi blip or a DNS hiccup lasts seconds: an unattended task must ride it out (about a minute) instead of dying
                     time.sleep(RETRY_DELAYS[attempt])
                     continue

@@ -1,4 +1,4 @@
-"""SQLite storage: bots, messages, jobs, action items, library and searchable memory (FTS5)."""
+"""SQLite storage: bots, messages, jobs, action items, library and the shared knowledge store (agent/knowledge.py, FTS5)."""
 import json
 import re
 import sqlite3
@@ -70,6 +70,8 @@ class Database:
                     if col not in have:
                         self.conn.execute(f"alter table {table} add column {col} text")
                         self.conn.commit()
+        from agent.knowledge import Knowledge  # here, not at the top: knowledge.py is built on this class
+        self.knowledge = Knowledge(self)  # what the bots remember and share, and what outside agents may retrieve
 
     def _q(self, sql: str, args=()) -> list[dict]:
         with self.lock:
@@ -131,7 +133,7 @@ class Database:
         one = lambda sql: self._one(sql, (bot_id,))["n"]
         return {"messages": one("select count(*) n from messages where bot_id=? and kind in ('text','result')"),
                 "tasks": one("select count(*) n from jobs where bot_id=?"), "routines": one("select count(*) n from routines where bot_id=?"),
-                "memories": one("select count(*) n from memory where bot_id=?"), "screenshots": one("select count(*) n from library where bot_id=?")}
+                "memories": one("select count(*) n from knowledge where visibility='private' and bot_id=?"), "screenshots": one("select count(*) n from library where bot_id=?")}
 
     def job_ids(self, bot_id: str) -> list[str]:
         return [r["id"] for r in self._q("select id from jobs where bot_id=?", (bot_id,))]
@@ -145,6 +147,7 @@ class Database:
                 self.conn.execute(f"delete from {table} where bot_id=?", (bot_id,))
             self.conn.execute("delete from bots where id=?", (bot_id,))
             self.conn.commit()
+        self.knowledge.delete_for_bot(bot_id)  # its private notes go; what it shared with the other bots stays
         return paths
 
     # attachments: pictures the owner shared in chat (agent/images.py). An upload belongs to a bot and has no message until the message is sent.
@@ -291,16 +294,15 @@ class Database:
     def library(self, bot_id: str) -> list[dict]:
         return self._q("select * from library where bot_id=? order by created desc", (bot_id,))
 
-    # memory (full-text search, no embeddings)
+    # memory: a bot's own private notes, kept in the knowledge store (agent/knowledge.py)
     def memory_add(self, bot_id: str, text: str) -> None:
-        self._x("insert into memory(text, bot_id, created) values(?,?,?)", (text.strip()[:2000], bot_id, time.time()))
+        self.knowledge.add(text.strip()[:2000], kind="memory", visibility="private", bot_id=bot_id)
 
     def memory_search(self, bot_id: str, query: str, limit: int = 5) -> list[str]:
-        q = fts_query(query)
-        if not q:
-            return []
-        rows = self._q("select text from memory where memory match ? and bot_id=? order by bm25(memory) limit ?", (q, bot_id, limit))
-        return [r["text"] for r in rows]
+        return [h["text"] for h in self.knowledge.search(query, viewer=("bot", bot_id), visibilities=("private",), limit=limit)]
+
+    def memory_recent(self, bot_id: str, limit: int = 3) -> list[str]:
+        return [h["text"] for h in self.knowledge.recent(("bot", bot_id), kinds=("memory",), visibilities=("private",), limit=limit)]
 
     # routines
     def routine_add(self, bot_id: str, name: str, prompt: str, schedule: dict, next_run: float) -> dict:

@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket
+
+from agent.logs import AccessLog, audit
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
 TOKEN_TTL_S = 600
@@ -200,7 +202,7 @@ class Listener:
 
     def start(self) -> None:
         import uvicorn
-        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level="warning", access_log=False, lifespan="off")
+        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level="warning", access_log=False, lifespan="off", log_config=None)  # log_config=None: uvicorn must not replace the app's log files
         self.server = uvicorn.Server(config)
         self.thread = threading.Thread(target=self._run, daemon=True, name="phone-gateway")
         self.thread.start()
@@ -293,6 +295,7 @@ class PhoneGateway:
     def close(self) -> dict:
         with self._lock:
             self._stop()
+        audit("phone gateway closed")
         return self.state()
 
     def _stop(self) -> None:
@@ -339,6 +342,7 @@ class PhoneGateway:
     def _paired(self, name: str) -> None:
         """A phone paired through the door: the window closes soon, the links stop working."""
         self.paired.append({"name": name, "at": self.clock()})
+        audit("phone paired through the gateway", name=name)
         self.window_until = min(self.window_until, self.clock() + AFTER_PAIR_S)
         self.tokens.clear()
         self.token = self.code = ""  # the link and the code are spent: the dialog must not show a dead QR
@@ -346,6 +350,7 @@ class PhoneGateway:
     # --- the allow-listed app --------------------------------------------------------------------------------------
     def _build(self) -> FastAPI:
         app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+        app.add_middleware(AccessLog, listener="gateway")
         gw = self
 
         def who(request: Request) -> str:

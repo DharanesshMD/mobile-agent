@@ -87,6 +87,7 @@ Details: [docs/design-v2.md](docs/design-v2.md), [docs/phone-client.md](docs/pho
 - Supercell and Niantic games are never played by the agent, on any phone.
 - Connectors sign in with a key or token only. Browser sign-in (OAuth) is not built, so Gmail, Calendar and servers that offer only OAuth are not available as connectors; the phone remains the way to use those apps.
 - Phone control is local today (a Mac with the emulator). A hosted cloud phone is the deployment target; `docs/phone-client.md` and `docs/virtual-android.md` explain the options and what is not verified.
+- Logs are local files in `data/logs/` (redacted, rotated); see [docs/logging.md](docs/logging.md).
 - Tested on macOS (Apple Silicon). Linux is untested.
 
 ## Connect your phone
