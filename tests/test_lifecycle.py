@@ -118,6 +118,30 @@ class IdlePolicy(unittest.TestCase):
 
 
 class Waking(unittest.TestCase):
+    def test_a_paused_phone_that_is_still_online_is_not_reconnected(self):
+        l, b, clock = life("paused")
+        b.network_ok = lambda: True
+        clock.t += 400
+        l.wake()
+        settled(l, "on")
+        self.assertEqual(b.calls, ["resume"])  # nothing to repair: no Wi-Fi toggle, no "Reconnecting" wait
+
+    def test_a_stale_connection_is_still_repaired(self):
+        l, b, clock = life("paused")
+        b.network_ok = lambda: False
+        clock.t += 400
+        l.wake()
+        settled(l, "on")
+        self.assertEqual(b.calls, ["resume", "kick_network"])
+
+    def test_the_progress_estimate_for_a_resume_is_seconds_not_the_boot_minute(self):
+        l, b, clock = life("paused")
+        l.power, l.boot_started, l.waking_cold = "waking", clock(), False  # a resume in progress
+        self.assertEqual(l.info()["expected"], round(l.last_resume_s))
+        self.assertLess(l.info()["expected"], 15)
+        l.waking_cold = True  # a boot keeps the long estimate
+        self.assertEqual(l.info()["expected"], round(l.last_boot_s))
+
     def test_resume_from_sleep_is_quick_and_reconnects_after_a_long_nap(self):
         ready = []
         l, b, clock = life("paused", on_ready=lambda cold: ready.append(cold))

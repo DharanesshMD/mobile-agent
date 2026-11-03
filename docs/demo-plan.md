@@ -108,3 +108,17 @@ P2 items, PWA, the replay failure-and-recovery session, the real-phone moment, H
 5. LICENSE: MIT ok?
 6. Who narrates and where is it hosted (YouTube unlisted)?
 7. Paste the official rubric and submission requirements, or the page link, so the checklist uses the real wording.
+
+
+## 9. Decided use cases and proposed cut (3 Nov, late)
+Decided as video material: heroes A, B, C (section 2) and the use cases below. The order and the exact cut are still the owner's call.
+| Beat | Use case | Built and verified |
+|---|---|---|
+| A | It finds a way (an app that will not run moves to the phone that works) | yes (QA run) |
+| 1 | "Is this link safe?" (#1), APK check (#2), "Show me" (#11) | yes; the link check has a first raw take |
+| 10 | A verification code from the owner's own phone, approved per code (#10) | server and card yes; the phone-side capture is unfinished |
+| C | Approval pinned above the chat, the vault secret, nothing risky without a yes | yes |
+| 12 | Another AI agent hires this one over A2A (#12): command in a terminal on the left, the owner's page on the right, verdict and report come back; Master recalls it | yes, run live (35 s) |
+| - | Connectors (Fetch) and the Agents page, as a 10 s montage | yes |
+Proposed timing for 3:00: A 0:40, link/APK/show-me 0:40, code relay 0:30, C 0:30, A2A 0:30, montage and close 0:10. Cut for time: #3, #4, #7, #8, #9 (not built).
+Recording note for the A2A beat: the recorder is a headless Chrome, so the terminal is a styled panel fed by the real command's output (unbuffered, with its own timestamps), placed beside the app in one 1920x1080 frame.

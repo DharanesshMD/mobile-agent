@@ -116,7 +116,7 @@ class PhoneBot(unittest.TestCase):
         ws, phone = connect(c, app)
         try:
             pb = app.state.db.phone_bot("local")
-            self.assertEqual((pb["kind"], pb["name"], pb["phone_id"]), ("phone", "Phone 3", "local"))  # named by number, whatever the device calls itself
+            self.assertEqual((pb["kind"], pb["name"], pb["phone_id"]), ("phone", "Pixel 8", "local"))  # named after the device
             self.assertTrue(any("is paired" in m["content"] for m in c.get(f"/api/bots/{pb['id']}/state").json()["messages"]))
         finally:
             ws.__exit__(None, None, None)
@@ -128,13 +128,13 @@ class PhoneBot(unittest.TestCase):
         finally:
             ws2.__exit__(None, None, None)
 
-    def test_each_paired_phone_gets_the_next_free_number(self):
+    def test_two_phones_with_one_device_name_get_a_number_added(self):
         from agent.master import ensure_phone_bot
         c, _, bot, app = setup(Spark(act(type="reply", text="ok")))
         db = app.state.db
         a = ensure_phone_bot(db, None, "p1", {"name": "Pixel 8"})
         b = ensure_phone_bot(db, None, "p2", {"name": "Pixel 8"})
-        self.assertEqual((a["name"], b["name"]), ("Phone 3", "Phone 4"))
+        self.assertEqual((a["name"], b["name"]), ("Pixel 8", "Pixel 8 2"))
         self.assertEqual(ensure_phone_bot(db, None, "p2", {"name": "Pixel 8"})["id"], b["id"])  # reconnecting reuses it
 
     def test_a_task_of_the_phone_bot_runs_on_the_phone_and_never_touches_the_emulator(self):
@@ -189,7 +189,7 @@ class PhoneBot(unittest.TestCase):
             pb = app.state.db.phone_bot("local")["id"]
             say(c, pb, "open clash of clans and collect my resources")
             until(lambda: jobs_of(c, pb) and jobs_of(c, pb)[0]["status"] == "done", timeout=30)
-            self.assertIn("You are the bot of Phone 3, a phone paired through the Mobile Agent app", spark.calls[0][0])
+            self.assertIn("You are the bot of Pixel 8, a phone paired through the Mobile Agent app", spark.calls[0][0])
             self.assertIn("The phone is connected now", spark.calls[0][0])
             self.assertTrue(phone.log)
             self.assertEqual(emulator.taps, [])

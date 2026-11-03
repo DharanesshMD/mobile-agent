@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from agent.nudge import Nudger
 from agent.logs import AccessLog, audit, setup_logging
 from agent.graph import Result, build_graph, run as run_graph
 from agent.chat_api import register_chat
@@ -147,7 +148,7 @@ class Swipe(BaseModel):
 
 def create_app(device, model_factory, token: str | None = None, settle: float = 0.4, store: Store | None = None,
                db: Database | None = None, data_dir: str = "data", vault_key: bytes | None = None,
-               start_scheduler: bool = False, master: bool = False, lifecycle=None, virtuals: dict | None = None, adb_phones=None) -> FastAPI:
+               start_scheduler: bool = False, master: bool = False, lifecycle=None, virtuals: dict | None = None, adb_phones=None, default_assistant: bool = True) -> FastAPI:
     """`virtuals` maps a name ("games") to the (Device, Lifecycle) of a virtual phone, each with its own bot, lane and live view."""
     app = FastAPI(title="Mobile Agent")
     app.add_middleware(AccessLog, listener="main")
@@ -659,6 +660,12 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     jobs = JobManager(db, hub, device, model_factory, data_dir=data_dir, settle=settle, external_busy=lambda: bool(active()), vault=vault)
     orch = Orchestrator(db, hub, model_factory, jobs, vault)
     orch.connectors = Connectors(db, vault)
+
+    def unpair_device(device_id: str) -> bool:  # a phone paired through the app: its token stops working and its connection is dropped
+        gone = store.revoke(device_id)
+        phones.kick(device_id)
+        return gone
+    orch.unpair_device = unpair_device
     app.state.knowledge = orch.knowledge = db.knowledge  # the shared notes: bots and (through the A2A service) outside agents retrieve from it
     jobs.orch = orch
     jobs.phones = phones
@@ -694,9 +701,11 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     orch.routines = scheduler
     scheduler.on_change = lambda bot_id: hub.publish(bot_id, {"type": "refresh", "what": "routines"})
     vault.on_change = lambda: [hub.publish(b["id"], {"type": "refresh", "what": "vault"}) for b in db.list_bots()]
-    if not [b for b in db.list_bots() if b["kind"] == "bot"]:  # the master and the phones' bots do not count: there is always an ordinary assistant
+    if default_assistant and not [b for b in db.list_bots() if b["kind"] == "bot"]:  # the real app starts with the master bot alone (default_assistant=False): the owner creates the others
         db.create_bot("Assistant", DEFAULT_ASSISTANT_PERSONA)
     watcher = Watcher(db, hub)
+    nudger = Nudger(db, hub)
+    app.state.nudger = nudger
     if master:
         ensure_master(db, hub)
     register_chat(app, auth, db, hub, jobs, orch, vault, scheduler)
@@ -711,6 +720,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
         a2a_manager.restore()
         scheduler.start()
         watcher.start()
+        nudger.start()
         if lifecycle:
             lifecycle.start()
         for _, vlc in (virtuals or {}).values():
@@ -782,7 +792,7 @@ def create_default_app() -> FastAPI:
         virtuals[GAMES] = (games, glc)
     app = create_app(device, make_model_factory(),
                      token=os.environ.get("APP_TOKEN") or None, store=Store(os.environ.get("STATE_FILE", "data/state.json")),
-                     db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True,
+                     db=Database(os.environ.get("DB_FILE", "data/app.db")), vault_key=load_key(), start_scheduler=True, master=True, default_assistant=False,
                      lifecycle=lifecycle, virtuals=virtuals, adb_phones=adb_phones)
     app.state.gateway.restore()  # phones paired earlier can reconnect without the owner opening the pairing window again
     app.state.orch.web_in_chain = True  # when no phone can run an app, the last step is a web search for other ways (a card; nothing runs until the owner picks)

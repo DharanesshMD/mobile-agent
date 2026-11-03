@@ -50,8 +50,24 @@
   .lamp.asleep { background: var(--ink-3); box-shadow: inset 0 0 0 1px var(--text-3); }
   .lamp.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-3); }
   @keyframes lamp { 50% { opacity: .4; } }
-  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); animation: lamp 2s var(--ease) infinite; flex: none; }
-  .pulse.wait { animation: none; background: transparent; box-shadow: inset 0 0 0 2px var(--amber); }
+  /* A bot that is working (or waiting for the owner) has a glow flowing around its box; its text is left alone. */
+  @property --glow-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  @keyframes glowflow { to { --glow-angle: 360deg; } }
+  .bot.working, .bot.awaiting { --glow: rgba(238, 240, 245, .85); position: relative; }
+  .bot.awaiting { --glow: var(--amber); }
+  .bot.working::before, .bot.awaiting::before, .bot.working::after, .bot.awaiting::after {
+    content: ""; position: absolute; inset: -1px; border-radius: 11px; pointer-events: none;
+    background: conic-gradient(from var(--glow-angle), transparent 0 55%, color-mix(in srgb, var(--glow) 30%, transparent) 72%, var(--glow) 88%, transparent 100%);
+    animation: glowflow 2.6s linear infinite;
+  }
+  .bot.working::before, .bot.awaiting::before {  /* the crisp line: the gradient shows only in a 1.5px ring around the box */
+    padding: 1.5px; -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  }
+  .bot.working::after, .bot.awaiting::after { filter: blur(9px); opacity: .45; z-index: -1; }  /* the soft light spilling outside it */
+  @media (prefers-reduced-motion: reduce) {  /* no movement: a steady ring says the same thing */
+    .bot.working::before, .bot.awaiting::before { animation: none; background: var(--glow); opacity: .55; }
+    .bot.working::after, .bot.awaiting::after { display: none; }
+  }
 
   /* sidebar */
   .side { background: var(--ink-0); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
@@ -83,7 +99,7 @@
   .botrow .more svg { width: 16px; height: 16px; fill: currentColor; }
   .botrow:hover .more, .botrow .more.open, .botrow .more:focus-visible { opacity: 1; }
   .botrow .more:hover:not(:disabled), .botrow .more.open { background: var(--ink-3); color: var(--text); border-color: transparent; }
-  .botrow:hover .pulse, .botrow:hover .unread { visibility: hidden; }
+  .botrow:hover .unread { visibility: hidden; }
   .unread { min-width: 8px; height: 8px; border-radius: 50%; background: var(--text); flex: none; }
   .side footer { padding: 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
   /* The account row: a round avatar with a lamp for the phones, the name, and one quiet status line. */
@@ -237,6 +253,15 @@
   .menu-btn { display: none !important; }
   .scrim, .drawer-close { display: none; }
   .feed { flex: 1; overflow-y: auto; padding: 24px max(20px, calc((100% - 720px) / 2)) 8px; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; }
+  .needs { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--amber); border-radius: 12px; background: color-mix(in srgb, var(--amber) 9%, var(--ink-1)); }
+  .needs[hidden] { display: none; }
+  .card.flash { animation: cardflash 1.4s ease-out; }
+  @keyframes cardflash { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 70%, transparent); } 30% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--amber) 45%, transparent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { .card.flash { animation: none; outline: 2px solid var(--amber); } }
+  .needs .nq { flex: 1 1 220px; min-width: 0; font-size: 13px; line-height: 1.45; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .needs .nq b { color: var(--amber); font-weight: 500; }
+  .needs .na { display: flex; gap: 8px; flex-wrap: wrap; }
+  .needs .na button { font-size: 13px; padding: 6px 12px; }
   .earlier { align-self: center; flex: none; font-size: 12px; color: var(--text-3); padding: 6px 14px; border: 1px solid var(--line-2); border-radius: 999px; }
   .earlier:hover { color: var(--text); }
   .empty { margin: auto; max-width: 460px; display: flex; flex-direction: column; gap: 12px; padding: 24px 0; }
@@ -347,6 +372,12 @@
   .panel-close:hover:not(:disabled) { background: var(--ink-3); color: var(--text); border-color: var(--line-2); }
   .panelwho { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 56px 20px 0; text-align: center; }
   .panelwho .nm { font-size: 20px; font-weight: 400; line-height: 1.2; }
+  .editable { cursor: text; border-radius: 8px; transition: background .12s; }
+  .editable:hover { background: var(--ink-2); box-shadow: 0 0 0 4px var(--ink-2); }
+  .editable:focus-visible { outline: 2px solid var(--text-3); outline-offset: 3px; }
+  .editable.editing { background: none; box-shadow: none; cursor: auto; }
+  .inline-edit { font: inherit; color: var(--text); background: var(--ink-2); border: 1px solid var(--line-2); border-radius: 8px; padding: 2px 8px; width: 100%; min-width: 120px; max-width: 320px; text-align: inherit; line-height: inherit; resize: vertical; }
+  textarea.inline-edit { max-width: 100%; padding: 8px 10px; line-height: 1.5; font-size: 14px; }
   .panelwho .kindline { font: 400 12px var(--mono); color: var(--text-3); margin-top: -6px; }
   .av.xl { width: 64px; height: 64px; border-radius: 50%; font-size: 26px; } .av.xl .ico { width: 28px; height: 28px; }
   .tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; padding: 20px 20px 16px; }
@@ -490,6 +521,7 @@
     </header>
     <div class="feed" id="feed" aria-live="polite"></div>
     <div class="composer" id="composer">
+      <div class="needs" id="needs" role="region" aria-label="Waiting for you" hidden></div>
       <div class="chips" id="chips" hidden aria-label="Pictures to send"></div>
       <div class="attmenu" id="attMenu" role="menu" aria-label="Attach" hidden>
         <button type="button" role="menuitem" id="miPick">Choose pictures&hellip;</button>
@@ -584,7 +616,7 @@ function avatar(bot, cls) {
 
 // Unread badges and notifications: remember the last message the owner has seen in each bot (per browser).
 try { S.seen = JSON.parse(localStorage.getItem("seen") || "{}"); } catch { S.seen = {}; }
-S.notified = {};
+S.notified = {}; S.waitNotified = {};
 const saveSeen = () => { try { localStorage.setItem("seen", JSON.stringify(S.seen)); } catch {} };
 function markSeen(bot, lastId) { if (!bot || lastId === undefined || (S.seen[bot] || 0) >= lastId) return; S.seen[bot] = lastId; saveSeen(); }
 document.addEventListener("click", () => { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {}); }, { once: true });
@@ -601,7 +633,17 @@ async function loadBots() {
       if (b.kind === "master" && "Notification" in window && Notification.permission === "granted") { try { new Notification("Master bot", { body: b.last, tag: "master" }); } catch {} }
     }
   }
-  saveSeen(); document.title = (unread ? `(${unread}) ` : "") + "Mobile Agent";
+  const waitingBots = S.bots.filter(b => b.active === "waiting");
+  for (const b of waitingBots) {  // a task is waiting for the owner: tell them even when this tab is in the background
+    if (!S.waitNotified[b.id]) {
+      S.waitNotified[b.id] = true;
+      if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+        try { const n = new Notification("Waiting for you: " + b.name, { body: b.last || "A task needs your answer", tag: "wait-" + b.id }); n.onclick = () => { window.focus(); selectBot(b.id); n.close(); }; } catch {}
+      }
+    }
+  }
+  for (const id of Object.keys(S.waitNotified)) if (!waitingBots.some(b => b.id === id)) delete S.waitNotified[id];
+  saveSeen(); document.title = (waitingBots.length ? "\u25CF Needs you \u00B7 " : unread ? `(${unread}) ` : "") + "Mobile Agent";
   renderBots(); renderBench(); pollBench();
   if (!S.bot && S.bots.length) selectBot(S.bots[0].id);
 }
@@ -612,7 +654,7 @@ function renderBots() {
     const btn = el("button", "bot" + (S.bot && S.bot.id === b.id ? " sel" : ""));
     btn.append(avatar(b));
     const t = el("div", "t"); t.append(el("div", "n", b.name), el("div", "p", b.last || "No messages yet")); btn.append(t);
-    if (b.active) btn.append(el("span", "pulse" + (b.active === "waiting" ? " wait" : "")));
+    if (b.active) { btn.classList.add(b.active === "waiting" ? "awaiting" : "working"); btn.title = b.active === "waiting" ? "Waiting for you" : "Working"; }
     btn.onclick = () => { selectBot(b.id); $("app").classList.remove("show-side"); };
     const row = el("div", "botrow" + (b.kind === "master" ? " master" : "")), more = el("button", "more");
     if (b.kind === "master") row.append(el("span", "tag", "master"));
@@ -641,6 +683,36 @@ function openMenu(row, more, bot) {
   del.innerHTML = '<svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>Delete';
   m.setAttribute("role", "menu"); ren.onclick = () => renameBot(bot); del.onclick = () => deleteBot(bot);
   m.append(ren); if (bot.kind !== "master") m.append(del); row.append(m);
+}
+// Click a name (or the About text) to edit it in place: Enter or leaving the field saves, Escape cancels. No separate Rename button.
+async function saveBot(fields) {
+  const bot = S.bot; if (!bot) return;
+  try {
+    const nb = await api(`/api/bots/${bot.id}`, { name: bot.name, ...fields }, "PATCH");
+    if (S.bot && S.bot.id === bot.id) { S.bot = nb; renderHeader(); if (S.tab === "details") renderTab(); }
+    await loadBots();
+  } catch (e) { toast(e.message); }
+}
+function editable(node, o) {
+  node.classList.add("editable"); node.tabIndex = 0; node.setAttribute("role", "button"); node.title = "Click to edit";
+  if (o.label) node.setAttribute("aria-label", o.label);
+  const start = () => {
+    if (node.classList.contains("editing")) return;
+    const before = o.get(), box = el(o.multiline ? "textarea" : "input", "inline-edit");
+    box.value = before; box.maxLength = o.max || 60; box.setAttribute("aria-label", o.label || "Edit"); if (o.placeholder) box.placeholder = o.placeholder; if (o.multiline) box.rows = 4;
+    node.classList.add("editing"); node.replaceChildren(box); box.focus(); box.select();
+    let done = false;
+    const finish = async (commit) => {
+      if (done) return; done = true; node.classList.remove("editing");
+      const v = box.value.trim();
+      if (commit && v !== before.trim() && (v || o.multiline)) await o.save(v); else o.restore ? o.restore() : (node.textContent = before || o.fallback || "");
+      if (node.classList.contains("editing")) return;
+      if (typeof renderHeader === "function") renderHeader();
+    };
+    box.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") { e.preventDefault(); finish(false); } else if (e.key === "Enter" && (!o.multiline || e.metaKey || e.ctrlKey)) { e.preventDefault(); finish(true); } };
+    box.onblur = () => finish(true);
+  };
+  node.onclick = start; node.onkeydown = (e) => { if ((e.key === "Enter" || e.key === " " || e.key === "F2") && e.target === node) { e.preventDefault(); start(); } };
 }
 async function renameBot(bot) {
   const v = await botForm("Rename bot", bot.name, bot.persona, "Save"); if (!v) return;
@@ -735,7 +807,7 @@ function onEvent(ev) {
   if (ev.type === "message") {
     const m = ev.message;
     if (m.role === "assistant" && m.kind !== "status") S.thinking = false;
-    S.msgs.set(m.id, m); renderFeed(); if (m.kind === "text" || m.kind === "result") loadBotsSoon();
+    S.msgs.set(m.id, m); renderFeed(m.kind === "action_item" && m.meta && m.meta.status === "open"); if (m.kind === "text" || m.kind === "result") loadBotsSoon();  // a card that needs the owner scrolls into view even if the chat was scrolled up
     if (m.kind === "action_item" && m.meta.status === "open") pollMobile();
   } else if (ev.type === "message_delete") { S.msgs.delete(ev.id); renderFeed(); }
   else if (ev.type === "refresh" && ((ev.what === "routines" && S.tab === "details") || (ev.what === "vault" && S.tab === "vault") || (ev.what === "library" && S.tab === "library"))) renderTab();
@@ -747,11 +819,12 @@ function onEvent(ev) {
 let botsTimer; function loadBotsSoon() { clearTimeout(botsTimer); botsTimer = setTimeout(loadBots, 400); }
 
 // ---------- header / feed ----------
+for (const n of [$("hName"), $("pName")]) editable(n, { get: () => (S.bot ? S.bot.name : ""), max: 60, label: "Rename this bot", save: (v) => saveBot({ name: v }), restore: () => renderHeader() });
 function renderHeader() {
   const b = S.bot; if (!b) return;
   $("hAv").replaceWith(Object.assign(avatar(b, "sm"), { id: "hAv" }));
   $("pAv").replaceWith(Object.assign(avatar(b, "xl"), { id: "pAv" }));
-  $("hName").textContent = $("pName").textContent = b.name;
+  for (const n of [$("hName"), $("pName")]) if (!n.classList.contains("editing")) n.textContent = b.name;
   $("hSub").textContent = "Muse Spark 1.3 · worker Muse Wonder";
   $("pKind").textContent = b.kind === "master" ? "master bot" : b.kind === "virtual" ? (b.phone_id === "games" ? "phone 2 bot" : "extra phone bot") : b.kind === "phone" ? "phone bot" : "bot";
 }
@@ -892,6 +965,7 @@ function renderFeed(jump) {
   $("text").placeholder = S.thinking || list.some(m => m.kind === "status") ? "Working. Type to add or change something" : "Ask, or hand it a task";
   if (S.thinking && !list.some(m => m.kind === "status")) { const s = el("div", "status"); s.append(dots(), el("span", "", "Thinking")); feed.append(s); }
   if (jump || nearBottom) feed.scrollTop = feed.scrollHeight;
+  renderNeeds();
   if (focusKey) { const i = [...feed.querySelectorAll("[data-draft]")].find(x => x.dataset.draft === focusKey); if (i) { i.focus({ preventScroll: true }); try { i.setSelectionRange(...caret); } catch {} } }
 }
 // First-run and empty chats: say what this bot is for and offer real things to try, one click each.
@@ -939,9 +1013,33 @@ function relayBlock(meta, send) {
   return box;
 }
 const KIND = { confirm: "Needs your approval", choice: "Your choice", text: "Quick question", handoff: "Your turn on the phone", otp: "One-time code", secret: "Secure input" };
+// The first card that needs an answer stays pinned above the composer with its quick buttons, wherever the chat is scrolled.
+function renderNeeds() {
+  const bar = $("needs"); if (!bar) return;
+  const open = [...S.msgs.values()].filter(m => m.kind === "action_item" && m.meta && m.meta.status === "open").sort((a, b) => a.id - b.id);
+  if (!open.length) { if (!bar.hidden) { bar.hidden = true; bar.replaceChildren(); } return; }
+  const m = open[0], meta = m.meta, q = String(meta.question || "").replace(/\s+/g, " ").trim().slice(0, 220);
+  const send = (body) => api(`/api/items/${meta.item_id}/answer`, body).catch(e => toast(e.message));
+  const where = el("button", "ghost", "Show"); where.onclick = () => {
+    const c = $("feed").querySelector(`[data-mid="${m.id}"]`); if (!c) return;
+    c.scrollIntoView({ block: "center", behavior: "smooth" });
+    c.classList.remove("flash"); void c.offsetWidth; c.classList.add("flash");  // a visible pulse, also when the card was already on screen
+    const first = c.querySelector("button, input, textarea"); if (first) first.focus({ preventScroll: true });
+  };
+  const acts = el("div", "na");
+  if (meta.kind === "confirm") {
+    const y = el("button", "primary", "Approve"), n = el("button", "danger", "Decline"); y.onclick = () => send({ approved: true }); n.onclick = () => send({ approved: false }); acts.append(y, n, where);
+  } else if (meta.kind === "choice" && (meta.options || []).length <= 3) {
+    for (const o of meta.options) { const b = el("button", "", o); b.onclick = () => send({ choice: o }); acts.append(b); }
+    acts.append(where);
+  } else { where.className = "primary"; where.textContent = "Answer"; acts.append(where); }  // a code, a secret, a typed answer or a hand-over is done on the card itself
+  const text = el("div", "nq"); text.append(el("b", "", "Waiting for you "), document.createTextNode(q + (open.length > 1 ? `  (+${open.length - 1} more)` : "")));
+  bar.hidden = false; bar.replaceChildren(text, acts);
+}
 function card(m) {
   const meta = m.meta, open = meta.status === "open";
   const c = el("div", "card" + (meta.status === "answered" ? " done" : (meta.status === "cancelled" || meta.status === "expired") ? " cancelled" : ""));
+  c.dataset.mid = m.id;
   c.append(el("div", "k", open ? KIND[meta.kind] || "Action needed" : meta.status === "answered" ? "Answered" : meta.status === "expired" ? "Expired: no answer in time, the task was stopped" : "No longer needed"), el("div", "q", m.content));
   if (!open) { if (meta.status === "answered" && meta.answer) c.append(el("div", "ans", meta.answer)); return c; }
   const send = (body) => api(`/api/items/${meta.item_id}/answer`, body).catch(e => toast(e.message));
@@ -1292,10 +1390,11 @@ async function renderTab() {
   } else {
     t.replaceChildren(); const host = el("div", "pcard"); t.append(host); const d = el("div", "details");
     const acts = el("div", "row"); acts.style.cssText = "display:flex;gap:8px;margin-bottom:6px";
-    const ren = el("button", "", "Rename"), del = el("button", "danger", "Delete bot");
-    ren.onclick = () => renameBot(S.bot); del.onclick = () => deleteBot(S.bot);
-    acts.append(ren); if (S.bot.kind !== "master") acts.append(del); d.append(acts);
-    d.append(el("h4", "", "About"), el("p", "", S.bot.persona || (S.bot.kind === "master" ? "Your overseer. It sees all your bots, tells you what is missing or stuck, and can run a phone task itself or hand it to the bot that fits." : "A general assistant. Ask it anything; it uses the phone when a task needs one.")),
+    const del = el("button", "danger", "Delete bot"); del.onclick = () => deleteBot(S.bot);
+    if (S.bot.kind !== "master") { acts.append(del); d.append(acts); }
+    const about = el("p", "", S.bot.persona || (S.bot.kind === "master" ? "Your overseer. It sees all your bots, tells you what is missing or stuck, and can run a phone task itself or hand it to the bot that fits." : "A general assistant. Ask it anything; it uses the phone when a task needs one."));
+    if (S.bot.kind !== "master") editable(about, { get: () => S.bot.persona || "", max: 4000, multiline: true, placeholder: "What should this bot focus on?", label: "Edit what this bot is for", save: (v) => saveBot({ persona: v }), restore: () => renderTab() });
+    d.append(el("h4", "", "About"), about,
       el("h4", "", "Models"), el("p", "", "Chat and planning: Muse Spark 1.3. Phone control (screen, taps, typing): Muse Wonder."),
       el("h4", "", "Routines"), el("p", "", "Routines are set by asking the bot in chat. A routine is a task this bot runs on a schedule. It messages you first with the result and asks when it needs you."));
     host.append(d);
@@ -1353,6 +1452,9 @@ async function refreshShot() {
 // After the owner acts on the phone, look again quickly a few times while the screen animates to its new state.
 const burst = () => [60, 250, 600, 1100].forEach(ms => setTimeout(refreshShot, ms));
 setInterval(pollMobile, 2000);
+// While the owner is looking at the page the shared phone stays awake, and it is brought back at once when they arrive, so it is ready before the first request.
+const present = () => { if (!document.hidden) api("/api/mobile/present", {}).catch(() => {}); };
+setInterval(present, 40000); present(); document.addEventListener("visibilitychange", present);
 (function frames() {
   const on = $("overlay").classList.contains("on");
   if (S.tab === "mobile" || on) refreshShot();
@@ -1501,6 +1603,7 @@ document.addEventListener("paste", (e) => {
 
 // ---------- the phones: the state of each lane, for the sidebar chips ----------
 S.bench = new Map();      // key -> { p, state, view }
+S.jobDevice = new Map();  // job id -> the phone it runs on (the status line says which phone)
 const laneKey = (b) => !b ? "" : b.kind === "virtual" ? (b.phone_id || "games") : b.kind === "phone" ? "phone:" + b.phone_id : "";
 const benchQ = (key, extra) => key && !key.startsWith("phone:") ? `?${extra ? extra + "&" : ""}phone=${encodeURIComponent(key)}` : (extra ? "?" + extra : "");
 function benchPhones() {

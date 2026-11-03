@@ -16,7 +16,8 @@ WAITING_MIN = 10          # an unanswered card older than this is reported
 RECENT_FAILURE_H = 24     # failed tasks newer than this are reported
 CHECK_SECONDS = 60
 DIGEST_CHARS = 4500
-INTRO = ("I'm your master bot. I can see all your other bots, so ask me what any of them is doing, what is missing, or who is waiting on you. "
+INTRO = ("I'm your master bot. Tell me what you need and I'll do it, on a phone if it takes one. "
+         "When a topic deserves its own chat, make another bot with the + button and I'll keep an eye on it: ask me what any bot is doing, what is missing, or who is waiting on you. "
          "I'll also post here when a bot is stuck, a question has been waiting too long, or a task failed.")
 
 
@@ -59,15 +60,21 @@ def migrate_phone_names(db: Database, device_names: dict[str, str] | None = None
         if b["kind"] == "virtual" and b["name"].strip().lower() in OLD_GAMES_NAMES:
             db.rename_bot(b["id"], GAMES_NAME, GAMES_PERSONA)
             out.append(GAMES_NAME)
-        elif b["kind"] == "phone" and not names._NUMBERED.match(b["name"].strip()):
-            reported = (device_names or {}).get(b["phone_id"] or "", "")
-            if names.looks_like_model_name(b["name"], reported, "My phone") or RAW_MODEL_NAME.search(b["name"]):
-                new = names.next_paired_name([x["name"] for x in db.list_bots()])
-                db.rename_bot(b["id"], new, PHONE_PERSONA)
-                out.append(new)
         else:
             continue
         db._x("insert or ignore into names_migrated(bot_id, at) values(?,?)", (b["id"], time.time()))
+    # A phone the owner connected is named after the device ("2107113SI"), as it always was. An earlier version numbered them "Phone 3": put the device name back, once.
+    db._x("create table if not exists names_reverted(bot_id text primary key, at real)")
+    reverted = {r["bot_id"] for r in db._q("select bot_id from names_reverted")}
+    for b in db.list_bots():
+        m = names._NUMBERED.match(b["name"].strip())
+        reported = (device_names or {}).get(b["phone_id"] or "", "")
+        if b["kind"] != "phone" or b["id"] in reverted or not m or int(m.group(1)) < names.FIRST_PAIRED or not reported:
+            continue
+        new = unique_phone_name(db, phone_name({"name": reported}), b["id"])
+        db.rename_bot(b["id"], new, PHONE_PERSONA)
+        db._x("insert or ignore into names_reverted(bot_id, at) values(?,?)", (b["id"], time.time()))
+        out.append(new)
     for n in out:
         audit("phone bot renamed", to=n)
     relabeled = 0
@@ -76,6 +83,17 @@ def migrate_phone_names(db: Database, device_names: dict[str, str] | None = None
     if relabeled:
         audit("library labels renamed", count=relabeled)
     return out
+
+
+def unique_phone_name(db: Database, name: str, own_id: str = "") -> str:
+    """`name`, or `name 2`, `name 3` ... when another bot already has it (or it is one of the two fixed phone names)."""
+    taken = {b["name"].strip().lower() for b in db.list_bots() if b["id"] != own_id} | {names.SHARED.lower(), names.SECOND.lower()}
+    if name.lower() not in taken:
+        return name
+    n = 2
+    while f"{name} {n}".lower() in taken:
+        n += 1
+    return f"{name} {n}"
 
 
 def phone_name(info: dict) -> str:
@@ -90,11 +108,11 @@ PHONE_PERSONA = ("The bot of one connected phone. It works on that phone in the 
 
 def ensure_phone_bot(db: Database, hub: Hub | None, phone_id: str, info: dict) -> dict:
     """The persistent bot of a phone the owner paired, created the first time it connects and kept (with its chat and routines) across reconnects. It is named
-    "Phone 3", "Phone 4" ...: the next free number (1 and 2 are reserved), whatever the device calls itself."""
+    after the device ("2107113SI"; a raw model string like sdk_gphone64_arm64 becomes "My phone"), with a number added if two phones would share a name."""
     bot = db.phone_bot(phone_id)
     if bot:
         return bot
-    name = names.next_paired_name([b["name"] for b in db.list_bots()])
+    name = unique_phone_name(db, phone_name(info))
     bot = db.create_bot(name, PHONE_PERSONA, kind="phone", phone_id=phone_id)
     msg = db.add_message(bot["id"], "assistant", "text", f"{name} is paired. Tell me what to do on it: I work on it in the background, and these tasks run only on this phone.")
     if hub:

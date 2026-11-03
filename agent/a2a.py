@@ -471,7 +471,7 @@ SKILL_BY_ID = {s["id"]: s for s in SKILLS}
 def card(base: str, v: str = "1.0", extended: dict | None = None) -> dict:
     """The Agent Card. `extended` (the caller's own details) is added for GetExtendedAgentCard."""
     skills = [{k: s[k] for k in ("id", "name", "description", "tags", "examples", "inputModes", "outputModes")} for s in SKILLS]
-    desc = ("A personal assistant that operates real Android phones in the cloud. Ask it to do things on a phone, check a link or an APK file, explain something with a picture, "
+    desc = ("A personal assistant that operates Android phones. Ask it to do things on a phone, check a link or an APK file, explain something with a picture, "
             "answer from its shared memory, or search and add to that memory. It asks its owner before anything is sent, paid, installed or signed in.")
     if extended:
         desc += f" You are connected as '{extended['client']}' with permissions: {', '.join(extended['scopes'])}."

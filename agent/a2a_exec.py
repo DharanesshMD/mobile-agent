@@ -2,6 +2,7 @@
 and keeps the task's state, artifacts and the shared knowledge up to date. Skills that need no model (retrieve-context, store-context) are answered in code.
 """
 import json
+import re
 import threading
 import time
 import uuid
@@ -23,7 +24,7 @@ STATUS_EVERY_S = 3.0
 MAX_SCREENSHOTS = 3
 
 PHONE_ACTIONS = {"mobile_task", "mobile_plan", "delegate_task", "check_apk", "move_app", "phone_check", "steer_task", "stop_task", "resume_task"}
-NEVER_FOR_OUTSIDE = {"ask_bot", "request_secret", "vault_check", "routine_create", "routine_list", "routine_delete", "connector_call", "web_options"}
+NEVER_FOR_OUTSIDE = {"unpair_phone", "ask_bot", "request_secret", "vault_check", "routine_create", "routine_list", "routine_delete", "connector_call", "web_options"}
 LEFT = {"games": names.SECOND, "emulator": names.SHARED}
 
 
@@ -240,9 +241,9 @@ class Executor:
             self._post_user(bot, w, tid, task["context_id"])
             expect = None
             if w.skill == "link-check":
-                url = str(w.fields.get("url", "")).strip()
+                url = str(w.fields.get("url", "")).strip() or (re.search(r"https?://[^\s<>\"')\]]+", w.body or "") or [""])[0]  # a data part {"url": ...}, else the first address in the text
                 if not url.lower().startswith(("http://", "https://")) or len(url) > 2000:
-                    self.svc.set_state(tid, FAILED, "link-check needs a data part with an http(s) url.")
+                    self.svc.set_state(tid, FAILED, "link-check needs an http(s) url: in a data part {\"url\": ...} or in the text.")
                     return
                 self.orch._queue_tasks(bot, {"type": "mobile_task", "goal": f"check this link: {url}", "report": "link", "say": f"Checking the link on {names.SHARED}."}, "mobile_task")
             elif w.skill == "apk-check":

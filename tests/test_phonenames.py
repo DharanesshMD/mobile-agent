@@ -11,7 +11,7 @@ from agent.db import Database
 from test_chat import Spark, act, say, setup, until
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-FORBIDDEN = re.compile(r"cloud phone|emulator|virtual|container|redroid|\blima\b|\bown phone|\breal phone|physical|games phone|cloud mobile", re.I)
+FORBIDDEN = re.compile(r"in the cloud|real android|cloud phone|emulator|virtual|container|redroid|\blima\b|\bown phone|\breal phone|physical|games phone|cloud mobile", re.I)
 # literals that are internal identifiers, not words anyone reads
 INTERNAL = re.compile(r"^(cloud phone 2|cloud phone|games phone|emulator|virtual|virtual:|virtual:games|emulator-|emulator-5554|redroid\.sh|virtual-android|virtual-android\.log|emulator\.sh|emulator\.log|\.lima|virtuals|is_emulator|cloudemulator)$"
                       r"|virtual table|emulator-5554|Physical (size|density)|sdk_\|gphone|redroid\.sh|virtual-android|emulator\.|\\bredroid|\\b\(\?:|games\[ -\]phone|cloud phone 2\|cloud phone", re.I)
@@ -70,8 +70,11 @@ class Sweep(unittest.TestCase):
         master.ensure_games_bot(db, None)
         one = master.ensure_phone_bot(db, None, "p1", {"name": "2107113SI", "model": "2107113SI"})
         two = master.ensure_phone_bot(db, None, "p2", {"name": "Pixel 8"})
-        self.assertEqual((one["name"], two["name"]), ("Phone 3", "Phone 4"))  # whatever the device calls itself; 1 and 2 are reserved
-        self.assertEqual(master.ensure_phone_bot(db, None, "p1", {})["name"], "Phone 3")  # once per phone
+        self.assertEqual((one["name"], two["name"]), ("2107113SI", "Pixel 8"))  # a connected phone is named after the device
+        self.assertEqual(master.ensure_phone_bot(db, None, "p1", {})["name"], "2107113SI")  # once per phone
+        three = master.ensure_phone_bot(db, None, "p3", {"name": "Pixel 8"})
+        self.assertEqual(three["name"], "Pixel 8 2")  # two phones never share a name
+        self.assertEqual(master.ensure_phone_bot(db, None, "p4", {"name": "Phone 2"})["name"], "Phone 2 2")  # and never take the fixed names
         text = phones.render([{"key": "emulator", "label": names.SHARED, "bot": "x", "status": "ready", "can": phones.EMULATOR, "known_bad": [], "runs": []}], None, master=True)
         self.assertIsNone(FORBIDDEN.search(text.replace("Phone 2", "")) , text[:200])
 
@@ -109,20 +112,21 @@ class Aliases(unittest.TestCase):
 
 
 class Migration(unittest.TestCase):
-    def test_an_install_with_old_names_is_renamed_once_and_the_owner_can_rename_back(self):
+    def test_the_second_phone_loses_its_old_name_and_numbered_phones_get_their_device_name_back_once(self):
         db = Database(":memory:")
         games = db.create_bot("Cloud phone 2", "old persona", kind="virtual", phone_id="games")
-        model = db.create_bot("2107113SI", "p", kind="phone", phone_id="d1")
+        numbered = db.create_bot("Phone 3", "p", kind="phone", phone_id="d1")  # an earlier version numbered connected phones
         mine = db.create_bot("Dad's phone", "p", kind="phone", phone_id="d2")  # chosen by the owner
-        raw = db.create_bot("My phone", "p", kind="phone", phone_id="d3")
-        out = master.migrate_phone_names(db, {"d1": "2107113SI", "d2": "Pixel 7", "d3": "My phone"})
-        self.assertEqual(sorted(out), ["Phone 2", "Phone 3", "Phone 4"])
+        model = db.create_bot("2107113SI", "p", kind="phone", phone_id="d3")  # already right
+        out = master.migrate_phone_names(db, {"d1": "2107113SI", "d2": "Pixel 7", "d3": "2107113SI"})
+        self.assertEqual(sorted(out), ["2107113SI 2", "Phone 2"])  # d3 already carries the name, so d1 gets the next free one
         self.assertEqual(db.get_bot(games["id"])["name"], "Phone 2")
-        self.assertEqual({db.get_bot(model["id"])["name"], db.get_bot(raw["id"])["name"]}, {"Phone 3", "Phone 4"})
-        self.assertEqual(db.get_bot(mine["id"])["name"], "Dad's phone")
-        self.assertEqual(master.migrate_phone_names(db, {"d1": "2107113SI"}), [])  # idempotent
-        db.rename_bot(model["id"], "2107113SI")  # the owner chooses that name later
+        self.assertEqual(db.get_bot(numbered["id"])["name"], "2107113SI 2")
+        self.assertEqual((db.get_bot(mine["id"])["name"], db.get_bot(model["id"])["name"]), ("Dad's phone", "2107113SI"))
+        self.assertEqual(master.migrate_phone_names(db, {"d1": "2107113SI"}), [])  # once
+        db.rename_bot(numbered["id"], "Phone 3")  # the owner chooses that name later
         self.assertEqual(master.migrate_phone_names(db, {"d1": "2107113SI"}), [])  # and it stays
+        self.assertEqual(db.get_bot(numbered["id"])["name"], "Phone 3")
 
     def test_library_labels_are_renamed_and_chat_history_is_left_alone(self):
         db = Database(":memory:")

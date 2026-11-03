@@ -88,3 +88,16 @@ Generated and edited pictures look convincing, so each one says AI-generated or 
 - The edit endpoint answers WEBP whatever the input: never trust the format, decode and re-encode every result and drop its metadata.
 - Cap what costs money per day in the database (counted on the chat messages), so a restart does not reset it.
 
+
+## 18. Check which agent an id belongs to before sending it a message
+The discovery requirement went to the installer agent instead of the Android agent because the two ids were swapped in my head. Name every agent by its job when launching it, and read the job back before using an id.
+
+## 19. A rename must cover the model-facing text too
+Renaming phones left "a real Android phone in the cloud" in the first line of the orchestrator prompt. After a naming change, grep prompts/ and agent/loop.py for the old words, not only the UI.
+- The owner wanted a connected phone named after its device model ("2107113SI"), not "Phone 3": ask which names are fixed (Phone, Phone 2) and which come from the device before numbering them.
+
+## 20. A phone that cannot reconnect is not a feature
+The pairing door closed with the last phone and after every restart, so a paired phone could never come back. Anything the owner pairs once must be reachable again after a restart, a Wi-Fi change and a sleep.
+
+## 21. Do not commit work an agent is still writing
+Commit only finished pieces: leave the files of a running agent out, and say so.

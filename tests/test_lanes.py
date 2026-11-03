@@ -243,5 +243,19 @@ class Serial(unittest.TestCase):
         self.assertEqual(EmulatorBackend(d.base).adb[:2], ["adb", "-s"])
 
 
+class Presence(unittest.TestCase):
+    def test_an_owner_who_is_looking_keeps_the_phone_awake_and_brings_a_sleeping_one_back(self):
+        c, app, emulator, games, lc, backend, bots = make(Spark(act(type="reply", text="ok")), Routed({}))
+        lc.sleep()
+        self.assertEqual(lc.power, "sleeping")
+        self.assertEqual(c.post("/api/mobile/present", params={"phone": "games"}).status_code, 200)
+        until(lambda: lc.power == "on")  # woken before any task asked for it
+        lc.last_activity -= 600
+        old = lc.last_activity
+        c.post("/api/mobile/present", params={"phone": "games"})
+        self.assertGreater(lc.last_activity, old)  # and a phone that is on is kept from pausing
+        self.assertEqual(c.post("/api/mobile/present", params={"phone": "nope"}).status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

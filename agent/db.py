@@ -193,6 +193,10 @@ class Database:
     def attachment_notice_sent(self, bot_id: str) -> bool:
         return bool(self._q("select 1 from messages where bot_id=? and kind='bot_note' and meta like '%image-privacy%' limit 1", (bot_id,)))
 
+    def has_activity(self, bot_id: str) -> bool:
+        """Has the owner (or a task) ever used this bot: a message from the owner or a phone job. A greeting does not count."""
+        return bool(self._one("select 1 x from jobs where bot_id=? limit 1", (bot_id,)) or self._one("select 1 x from messages where bot_id=? and role='user' limit 1", (bot_id,)))
+
     def list_bots(self) -> list[dict]:
         bots = self._q("select * from bots order by created")
         for b in bots:

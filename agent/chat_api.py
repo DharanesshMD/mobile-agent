@@ -71,12 +71,21 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
             raise HTTPException(404, "unknown bot")
         return b
 
+    def bot_listed(b: dict) -> bool:
+        """The sidebar starts with the master bot alone. A phone's bot appears when its phone is working or connected (or once it has been used); the owner makes every other bot."""
+        if b["kind"] == "phone":
+            return bool(jobs.phones and jobs.phones.online(b["phone_id"])) or db.has_activity(b["id"])
+        if b["kind"] == "virtual" and b["phone_id"] == "games":
+            pair = (getattr(jobs, "virtuals", None) or {}).get("games")
+            return bool(pair and pair[1].power in ("on", "waking")) or db.has_activity(b["id"])
+        return True
+
     @app.get("/api/bots", dependencies=[Depends(auth)])
-    def list_bots():
+    def list_bots(all: bool = Query(default=False)):
         sync = getattr(app.state, "sync_adb", None)
         if sync and getattr(jobs, "adb_phones", None) is not None:  # extra adb phones: look again, in the background, so the list never waits for adb
             threading.Thread(target=sync, daemon=True, name="adb-sync").start()
-        bots = db.list_bots()
+        bots = [b for b in db.list_bots() if all or bot_listed(b)]
         for b in bots:
             a = jobs.active_for(b["id"])
             b["active"] = a["status"] if a else None
@@ -108,15 +117,8 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         return {**db.bot_counts(bot_id), "secrets": len(vault.entries()), "last": len([b for b in db.list_bots() if b["kind"] != "master"]) < 2,
                 "running": bool(jobs.active_for(bot_id))}
 
-    @app.delete("/api/bots/{bot_id}", dependencies=[Depends(auth)])
-    def delete_bot(bot_id: str, erase_secrets: bool = Query(default=False)):
-        """Removes the bot's chat, tasks (with their screenshots and traces), routines, memory and library. Saved secrets belong to the owner and are
-        shared by all bots, so they stay, unless this is the last bot and the owner asks to erase them too. Deleting the last bot leaves a fresh Assistant."""
-        if bot_or_404(bot_id)["kind"] == "master":
-            raise HTTPException(409, "The master bot cannot be deleted")
-        last = len([b for b in db.list_bots() if b["kind"] != "master"]) < 2
-        if erase_secrets and not last:
-            raise HTTPException(409, "Secrets are shared with your other bots; erase them when deleting the last bot")
+    def remove_bot_data(bot_id: str) -> None:
+        """Stop the bot's running task, then remove its chat, tasks (with screenshots and traces), routines, memory and library."""
         active = jobs.active_for(bot_id)
         if active:  # stop the phone task and let it finish before its data is removed
             jobs.cancel(active["id"])
@@ -130,12 +132,25 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
             Path(path).with_suffix(".md").unlink(missing_ok=True)  # a report is an HTML page with a Markdown twin
         for jid in job_ids:  # screenshots and prompts of its tasks
             shutil.rmtree(Path(jobs.data_dir) / "runs" / jid, ignore_errors=True)
+
+    orch.remove_bot = remove_bot_data
+
+    @app.delete("/api/bots/{bot_id}", dependencies=[Depends(auth)])
+    def delete_bot(bot_id: str, erase_secrets: bool = Query(default=False)):
+        """Removes the bot's chat, tasks (with their screenshots and traces), routines, memory and library. Saved secrets belong to the owner and are
+        shared by all bots, so they stay, unless this is the last bot and the owner asks to erase them too. Deleting the last bot leaves a fresh Assistant."""
+        if bot_or_404(bot_id)["kind"] == "master":
+            raise HTTPException(409, "The master bot cannot be deleted")
+        last = len([b for b in db.list_bots() if b["kind"] != "master"]) < 2
+        if erase_secrets and not last:
+            raise HTTPException(409, "Secrets are shared with your other bots; erase them when deleting the last bot")
+        remove_bot_data(bot_id)
         if erase_secrets and orch.connectors:
             orch.connectors.erase_all()  # their keys are in the vault: they go with it
         if erase_secrets:
             db.knowledge.erase_all()  # the shared notes go too: this is the "wipe everything" path
         erased = vault.erase_all() if erase_secrets else 0
-        fresh = db.create_bot("Assistant", DEFAULT_ASSISTANT_PERSONA) if last else None
+        fresh = db.create_bot("Assistant", DEFAULT_ASSISTANT_PERSONA) if last and not db.master_bot() else None  # with a master bot the list can be just that
         return {"ok": True, "bot": fresh, "erased_secrets": erased}
 
     def own_lane(bot_id: str) -> str:
@@ -380,7 +395,9 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         if not item["job_id"] and user_text:
             msg = db.add_message(item["bot_id"], "user", "text", user_text)
             hub.publish(item["bot_id"], {"type": "message", "message": msg})
-            if payload.get("connector"):  # an app's tool the owner was asked to allow: run (or skip) in code, then the bot reports
+            if payload.get("unpair"):  # the owner chose what to do with a paired phone: carried out in code, never decided by a model turn
+                threading.Thread(target=orch.unpair_decided, args=(item, user_text), daemon=True).start()
+            elif payload.get("connector"):  # an app's tool the owner was asked to allow: run (or skip) in code, then the bot reports
                 threading.Thread(target=orch.connector_decided, args=(item, bool(body.approved)), daemon=True).start()
             elif payload.get("web"):  # a "other ways" card: the pick is carried out in code (open a link, show it, or nothing), never decided by a model turn
                 threading.Thread(target=orch.web_pick, args=(item, user_text), daemon=True).start()
@@ -443,6 +460,17 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         lifecycle = jobs.pair(lane)[1]
         if lifecycle:
             lifecycle.wake()
+        return jobs.state(lane)
+
+    @app.post("/api/mobile/present", dependencies=[Depends(auth)])
+    def mobile_present(phone: str | None = Query(default=None)):
+        """The owner is looking at the page: keep the phone from pausing and, if it is paused or stopped, bring it back now so it is ready before the first request."""
+        lane = phone_lane(phone)
+        lifecycle = jobs.pair(lane)[1]
+        if lifecycle:
+            lifecycle.touch()
+            if lifecycle.power in ("sleeping", "off"):
+                lifecycle.wake()
         return jobs.state(lane)
 
     @app.post("/api/mobile/sleep", dependencies=[Depends(auth)])

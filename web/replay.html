@@ -115,7 +115,7 @@
 const root = document.getElementById("root");
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const SAFE = /^(?!\.)[A-Za-z0-9._-]+$/, SAFE_IMG = /^img\/[A-Za-z0-9._-]+\.jpg$/;
-const PHONE_NAMES = { emulator: "Phone", games: "Phone 2", phone: "Phone 3" };
+const PHONE_NAMES = { emulator: "Phone", games: "Phone 2", phone: "My phone" };
 const phoneName = (t) => PHONE_NAMES[t] || String(t || "phone");
 const fmt = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
 const params = new URLSearchParams(location.search), wanted = params.get("s");

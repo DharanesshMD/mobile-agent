@@ -59,6 +59,8 @@ class Orchestrator:
         self.delegated: dict[str, str] = {}  # job id -> the master bot that handed it over
         self.vault, self.routines = vault, None  # routines (the scheduler) is attached by the app
         self.connectors = None  # the connected MCP servers, attached by the app
+        self.unpair_device = None  # (device id) -> bool: revoke a paired phone and drop its connection; attached by the app
+        self.remove_bot = None  # (bot id) -> None: delete a bot with all its data; attached by the app
         self.action_gate = None  # (bot id, action kind, action) -> None to go on, or a text the model reads instead; the A2A service sets it for the bots that serve outside agents
         self.db, self.hub, self.model_factory, self.jobs = db, hub, model_factory, jobs
         self._locks: dict[str, threading.Lock] = {}
@@ -99,6 +101,8 @@ class Orchestrator:
         payload = {"kind": kind, "question": str(spec.get("question", ""))[:3000 if web else 500], "options": options, "field": spec.get("field")}
         if web:
             payload["web"] = web
+        if kind == "choice" and isinstance(spec.get("unpair"), dict):
+            payload["unpair"] = spec["unpair"]  # carried out in code when the owner answers
         if kind == "confirm" and isinstance(spec.get("connector"), dict):
             payload["connector"] = spec["connector"]  # a tool call waiting for the owner's yes: carried out in code when they answer, never decided by a model turn
         if kind == "secret":
@@ -384,6 +388,12 @@ class Orchestrator:
             if kind == "web_options":
                 self.web_options(bot_id, str(act.get("query", "")), str(act.get("goal", "")))
                 return
+            if kind == "unpair_phone":
+                result = self._unpair_ask(bot_id, act)
+                if result is None:
+                    return  # the owner's choice card is waiting
+                msgs = msgs + [{"role": "assistant", "content": json.dumps({"action": act})}, {"role": "user", "content": f"[tool result for unpair_phone] {result}"}]
+                continue
             if kind == "connector_call":
                 calls += 1
                 result = self._connector_call(bot_id, act, calls)
@@ -729,6 +739,48 @@ class Orchestrator:
         if lc is not None and not lc.ensure_healthy(90):
             raise TimeoutError("the phone did not wake up in time")
         dev.open_url(url)
+
+    UNPAIR_CHOICES = ("Unpair and keep its chat", "Unpair and delete its chat", "Cancel")
+
+    def _unpair_ask(self, bot_id: str, act: dict) -> str | None:
+        """unpair_phone: which paired phone? Only a phone connected through the app can be unpaired. Nothing happens until the owner picks on the card (None); an error text goes back to the model."""
+        want = str(act.get("phone", "")).strip()
+        if not want or not self.unpair_device:
+            return "error: say which phone to unpair"
+        if names.alias_key(want):
+            return f"error: {names.label_for_key(names.alias_key(want))} is not a phone that was paired through the app, so there is nothing to unpair"
+        paired = [b for b in self.db.list_bots() if b["kind"] == "phone"]
+        hit = [b for b in paired if b["name"].lower() == want.lower()] or [b for b in paired if want.lower() in b["name"].lower()]
+        if len(hit) != 1:
+            return "error: " + (f"no phone paired through the app is called '{want}'" if not hit else f"'{want}' matches several phones") + "; paired phones: " + (", ".join(b["name"] for b in paired) or "none")
+        phone = hit[0]
+        self.make_item(bot_id, None, {"kind": "choice", "question": f"Unpair {phone['name']}? It disconnects now and its access stops working, so it has to be paired again to come back.",
+                                      "options": list(self.UNPAIR_CHOICES), "unpair": {"phone_id": phone["phone_id"], "bot_id": phone["id"], "name": phone["name"]}})
+        return None
+
+    def unpair_decided(self, item: dict, choice: str) -> None:
+        """The owner answered the unpair card: do exactly what they picked."""
+        u = item["payload"].get("unpair") or {}
+        asker = item["bot_id"]
+        if choice not in self.UNPAIR_CHOICES[:2]:
+            self.post(asker, f"Okay, {u.get('name', 'the phone')} stays paired.")
+            return
+        try:
+            gone = bool(self.unpair_device and self.unpair_device(u.get("phone_id", "")))
+            deleted = False
+            if choice == self.UNPAIR_CHOICES[1] and self.remove_bot and self.db.get_bot(u.get("bot_id", "")):
+                self.remove_bot(u["bot_id"])
+                deleted = True
+        except Exception as e:
+            log.error("unpair failed (%s)", type(e).__name__, exc_info=True)
+            self.post(asker, f"I could not unpair {u.get('name', 'the phone')} ({type(e).__name__}). Try again, or remove it in the app on that phone.")
+            return
+        logs.audit("phone unpaired", name=u.get("name"), chat="deleted" if deleted else "kept")
+        for b in self.db.list_bots():
+            self.hub.publish(b["id"], {"type": "refresh", "what": "phone"})
+        if self.db.get_bot(asker):
+            self.post(asker, (f"{u.get('name')} is unpaired" if gone else f"{u.get('name')} was already unpaired") + (" and its chat is deleted." if deleted else ". Its chat is still in the list; you can delete it from the menu next to its name.")
+                      + " To use it again, pair it again from the Connect a phone dialog.")
 
     MAX_CONNECTOR_CALLS_PER_TURN = 3
 

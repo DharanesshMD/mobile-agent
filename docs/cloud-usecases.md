@@ -31,6 +31,7 @@ Question from the owner: what do people want to hand to a phone instead of doing
 | 9 | "Test-drive these three apps and tell me which is simplest to set up" | Try apps without installing them on your phone | `inspect_app` + guided first-run per app, steps and time counted, permissions requested, a comparison table, uninstall at the end | Three free open-source note apps from F-Droid |
 | 10 | "Sign me up for this service; the SMS code goes to my phone" (hybrid with the paired phone) | The phone does the long flow; your paired phone only supplies the SIM | OTP relay (server side built 3 Nov 2026, see [otp-relay.md](otp-relay.md)): the paired phone watches its notifications for one code, you approve THAT code with one click on the card, it is typed on the phone; the digits can always be typed by hand instead | A service that texts a code to the owner's number (owner picks); app side verified on virtual phones only |
 | 11 | "I can't figure this out, show me" (a setting, a screen, a concept) | The agent explains with a picture instead of a wall of text, using your paired phone screen only when it is awake and shows no account address | `make_image` (Muse Image 1.0): an illustration from a prompt, or an edit of your picture or the phone's screenshot (numbered arrows, a highlighted switch), labelled AI-generated | "I don't get what Wi-Fi calling is. Show me with a picture." and, with a Settings > Display screenshot, "Where do I tap to turn on dark theme? Show me."; a plain question (battery percentage) must stay text |
+| 12 | Another AI agent hires this one: an inbox agent finds a suspicious link and asks "Is this link safe?" over A2A | The outside agent has no phone; it borrows one, gets a typed answer, and every bot of the owner remembers the exchange | A2A service (`agent/a2a*.py`), skill `link-check` | Real run 3 Nov 2026: submitted, working, artifacts (verdict, report in Markdown and HTML, screenshot, answer), completed in 35 s; `retrieve-context` found it; Master recalled it; an agent without the `phone` scope was refused with error -32004 |
 
 Paired-phone assists (the client app) beyond #10: notification catch-up ("what did I miss") and a morning brief that uses the paired phone's battery and calendar. They are extras, not the focus.
 
@@ -77,3 +78,15 @@ Live, real models, cost about $0.07 in all (7 images incl. the first API probes)
 Known limit, stated in the prompt and in the default caption: the edit endpoint redraws the whole picture. In the live edit the Dark theme switch came back drawn ON although it was OFF in the screenshot, even with "change nothing else" in the instruction.
 So the picture shows WHERE to tap, never the current state. A pixel-exact version would draw the arrow ourselves from the UI tree's element positions (a possible follow-up).
 
+
+## Use case #12 "Another agent hires this one" run live over A2A (3 Nov 2026)
+The caller is a registered client ("Inbox agent", scopes ask, phone, context-write) using `scripts/a2a_client.py` against the A2A door on 127.0.0.1:8766.
+| Step | What happened |
+|---|---|
+| `send "Is this link safe? https://testsafebrowsing.appspot.com/s/phishing.html" --skill link-check --stream` | Task submitted, then working. The first try failed at once, honestly: the skill wanted a data part with the address. Now it also takes the first address in the text. |
+| Phone | The shared phone opened the page in a throwaway browser; Chrome's red warning appeared; nothing was typed or tapped on the page |
+| Result (35 s in all) | Artifacts: `verdict` (data), `report` in Markdown and HTML (files the caller downloads with its token), a screenshot, the job result and the `answer` text: "Looks harmful". State: completed |
+| `retrieve "what did you find about the phishing test page"` | The caller's own history came back ranked: the verdict, the report, the message |
+| Master, in the owner's chat: "What did the Inbox agent ask you to check, and what did you find?" | Master answered from the shared store: asked about that link; found "Looks harmful", opened in a throwaway browser |
+| A second agent with only the `ask` scope sends a phone task | Refused with `-32004: not allowed to use the phone-task skill (permission 'phone' is missing)` |
+Not shown here: approval cards (they stay with the owner: the task would sit in `input-required`), push webhooks, the 0.3 dialect against a third-party client.

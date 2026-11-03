@@ -42,7 +42,7 @@ class Names(unittest.TestCase):
         self.assertTrue(phones.EMULATOR.startswith("Phone: "))
         self.assertTrue(phones.GAMES.startswith("Phone 2: "))
         prompt = (ROOT / "prompts" / "orchestrator.md").read_text()
-        self.assertIn('the owner knows the phones only as "Phone", "Phone 2", "Phone 3"', prompt)
+        self.assertIn('the owner knows the phones by the names in your phone directory: "Phone", "Phone 2", and each connected phone by its own name', prompt)
 
 
 class Panel(unittest.TestCase):

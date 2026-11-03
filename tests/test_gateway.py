@@ -401,7 +401,7 @@ class Integrated(unittest.TestCase):
         with g.websocket_connect(f"/api/phone/ws?token={token}") as ws:
             ws.send_json({"type": "hello", "name": "Pixel 8", "model": "Pixel 8", "sdk": 34, "size": [1080, 2400]})
             until(lambda: app.state.phones.online(did))
-            self.assertEqual(app.state.db.phone_bot(did)["name"], "Phone 3")
+            self.assertEqual(app.state.db.phone_bot(did)["name"], "Pixel 8")
             self.assertEqual(app.state.phones.listing()[0]["via"], "gateway")
             self.assertTrue(c.get("/api/gateway/state").json()["connected"])
             out = {}

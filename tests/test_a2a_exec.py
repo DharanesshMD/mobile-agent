@@ -137,6 +137,15 @@ class PhoneJobs(Base):
         self.assertIn("http(s) url", bad["status"]["message"]["parts"][0]["text"])
         self.assertEqual(len(calls), 1)
 
+    def test_link_check_takes_the_address_from_the_text_when_there_is_no_data_part_for_it(self):
+        w = World(Spark())
+        calls = []
+        w.app.state.orch._queue_tasks = lambda bot, act_, kind: (calls.append(act_), w.app.state.orch.post(bot, "Nothing found in these checks."))
+        w.wait_state(w.task_of(w.send([{"text": "Is this link safe? https://example.com/path?x=1 thanks"}, data(skill="link-check")]))["id"], [DONE])
+        self.assertEqual(calls[0]["goal"], "check this link: https://example.com/path?x=1")
+        bad = w.wait_state(w.task_of(w.send([{"text": "no address here"}, data(skill="link-check")]))["id"], ["TASK_STATE_FAILED"])
+        self.assertIn("http(s) url", bad["status"]["message"]["parts"][0]["text"])
+
     def test_apk_check_needs_a_file_and_reports_failure(self):
         w = World(Spark())
         t = w.wait_state(w.task_of(w.send([data(skill="apk-check")]))["id"], ["TASK_STATE_FAILED"])

@@ -19,7 +19,7 @@ Three kinds of phone sit behind one interface:
 |---|---|---|---|
 | **Phone** | Android 14 with Google Play and Google sign-in | Play Store installs, system apps, anything normal | Apps that refuse to run on it |
 | **Phone 2** | A second light Android 13; boots in about 5 s, pauses in 0.2 s | Apps and games Phone cannot run; free games from F-Droid | Anything that needs Google Play or Google sign-in (it has none); fast 3D (software graphics) |
-| **Phone 3, 4 ...** | Any Android phone you connect with the Mobile Agent app (Kotlin, `android/`): it dials out to the server and acts through Android accessibility | Its own bot and chat, its own apps and accounts | Invisible background work (you see it act on the screen); banking apps |
+| **Connected phones** | Any Android phone you connect with the Mobile Agent app (Kotlin, `android/`): it dials out to the server and acts through Android accessibility | Its own bot and chat, its own apps and accounts | Invisible background work (you see it act on the screen); banking apps |
 
 **One-time codes.** When a task needs an SMS code that went to another of your phones, the app on that phone can find it, and you approve that one code with a click before it is typed ([docs/otp-relay.md](docs/otp-relay.md)).
 
@@ -118,7 +118,7 @@ Open http://127.0.0.1:8000 for the chat. Chat, memory, pictures, routines and th
 |---|---|
 | Phone | [docs/local-device.md](docs/local-device.md) (Android command-line tools, one AVD); the service starts and sleeps it |
 | Phone 2 | `bash scripts/virtual-android/setup.sh` once, then [docs/virtual-android.md](docs/virtual-android.md) |
-| Phone 3, 4 ... | [docs/real-phone-test.md](docs/real-phone-test.md) (the Mobile Agent app: scan a code or install from this computer) |
+| Connected phones | [docs/real-phone-test.md](docs/real-phone-test.md) (the Mobile Agent app: scan a code or install from this computer) |
 
 One-off task from the terminal, with a phone attached: `uv run python -m agent "Open Settings and tell me the battery percentage"`.
 `scripts/reset_fresh.py` restores a clean first-run state; `scripts/security_sweep.py` checks the repo before it is made public.

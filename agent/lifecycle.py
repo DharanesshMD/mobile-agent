@@ -91,6 +91,10 @@ class EmulatorBackend:
         self._adb("shell", "wm", "dismiss-keyguard", timeout=4)
         return True
 
+    def network_ok(self) -> bool:
+        """Does the phone still reach the internet after a freeze? A short pause usually leaves it connected, and then there is nothing to repair."""
+        return "1 received" in self._adb("shell", "ping", "-c", "1", "-W", "2", "1.1.1.1", timeout=6)
+
     def kick_network(self) -> None:
         """After a long freeze, open connections are dead (apps show playback or network errors): restart Wi-Fi so they reconnect."""
         self._adb("shell", "svc", "wifi", "disable", timeout=6)
@@ -126,6 +130,7 @@ class Lifecycle:
         self._stop_thread = threading.Event()
         self.last_activity = clock()
         self.detail, self.boot_started, self.last_boot_s = "", 0.0, 60.0
+        self.last_resume_s, self.waking_cold = 4.0, False  # how long waking a paused phone took last time (the progress estimate), and whether the wake in progress is a boot
         self._unhealthy, self._health_at = 0, 0.0
         s = backend.status()
         self.power = {"running": "on", "paused": "sleeping"}.get(s, "off")
@@ -156,7 +161,7 @@ class Lifecycle:
             out["stops_in"] = max(0, round(self.stop_s - (now - self.since)))
         if self.power == "waking" and self.boot_started:
             out["elapsed"] = round(now - self.boot_started)
-            out["expected"] = round(self.last_boot_s)
+            out["expected"] = round(self.last_boot_s if self.waking_cold else self.last_resume_s)
         return out
 
     # --- transitions (each runs in its own thread so the API never blocks) -----------------------------------------
@@ -169,7 +174,7 @@ class Lifecycle:
             cold = self.power == "off" or self.backend.status() == "stopped"  # a sleeping phone whose process is gone must boot
             slept = self.clock() - self.since
             self._set("waking", "Starting the phone…" if cold else "Waking the phone…")
-            self.boot_started = self.clock()
+            self.boot_started, self.waking_cold = self.clock(), cold
         threading.Thread(target=self._wake, args=(cold, slept), daemon=True, name="phone-wake").start()
         return "waking"
 
@@ -191,10 +196,12 @@ class Lifecycle:
                 self.backend.stop()
                 self._wake(True, 0)
                 return
-            elif slept > 90 and hasattr(self.backend, "kick_network"):
-                self._set("waking", "Reconnecting to the network…")
+            elif slept > 90 and hasattr(self.backend, "kick_network") and not (hasattr(self.backend, "network_ok") and self.backend.network_ok()):
+                self._set("waking", "Reconnecting to the network…")  # only when the connection really went stale
                 self.backend.kick_network()
             self.on_ready(cold)
+            if not cold:
+                self.last_resume_s = max(1.0, self.clock() - self.boot_started)
             self.touch()
             self._set("on")
         except Exception as e:  # leave a state the owner can retry from
