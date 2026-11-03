@@ -218,6 +218,11 @@ class Database:
         rows = self._q("select * from messages where bot_id=? order by id desc limit ?", (bot_id, limit))
         return list(reversed(rows))
 
+    def messages_before(self, bot_id: str, before: int, limit: int = 100) -> list[dict]:
+        """The page of messages that comes just before message id `before` (oldest first), for scrolling back in a long chat."""
+        rows = self._q("select * from messages where bot_id=? and id<? order by id desc limit ?", (bot_id, before, limit))
+        return list(reversed(rows))
+
     # jobs
     def create_job(self, bot_id: str, goal: str, after: str | None = None, verify: dict | None = None, routine: str | None = None, target: str = "",
                    files: list[str] | None = None, report: str | None = None) -> dict:

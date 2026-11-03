@@ -270,6 +270,18 @@ class Bots(unittest.TestCase):
         self.assertIn("You help with groceries.", spark.calls[0][0])
         self.assertEqual(c.get("/api/bots/nope/state").status_code, 404)
 
+    def test_scrolling_back_through_a_long_chat(self):
+        c, _, _, app = setup(Spark())
+        bot = c.post("/api/bots", json={"name": "Long"}).json()["id"]
+        ids = [app.state.db.add_message(bot, "user", "text", f"m{i}")["id"] for i in range(250)]
+        shown = msgs(c, bot)
+        self.assertEqual(len(shown), 200)  # the chat opens on the latest 200
+        page = c.get(f"/api/bots/{bot}/messages", params={"before": shown[0]["id"], "limit": 100}).json()
+        self.assertEqual([m["id"] for m in page], ids[:50])  # oldest first, nothing repeated, the 50 that were hidden
+        self.assertEqual(c.get(f"/api/bots/{bot}/messages", params={"before": ids[0]}).json(), [])
+        self.assertEqual(c.get(f"/api/bots/{bot}/messages", params={"before": 5, "limit": 0}).status_code, 422)
+        self.assertEqual(c.get("/api/bots/nope/messages", params={"before": 5}).status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

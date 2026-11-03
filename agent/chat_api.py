@@ -135,6 +135,11 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         return {"bot": b, "messages": db.messages(bot_id, 200), "last_seq": hub.last_seq(bot_id),
                 "jobs": db.jobs(bot_id, 10), "mobile": jobs.state(own_lane(bot_id))}
 
+    @app.get("/api/bots/{bot_id}/messages", dependencies=[Depends(auth)])
+    def earlier_messages(bot_id: str, before: int = Query(ge=0), limit: int = Query(default=100, ge=1, le=200)):
+        bot_or_404(bot_id)
+        return db.messages_before(bot_id, before, limit)
+
     uploads = Path(jobs.data_dir) / "uploads"
     upload_times: dict[str, deque] = {}
 

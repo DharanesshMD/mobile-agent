@@ -126,6 +126,8 @@
   .menu-btn { display: none !important; }
   .scrim, .drawer-close { display: none; }
   .feed { flex: 1; overflow-y: auto; padding: 24px max(20px, calc((100% - 720px) / 2)) 8px; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; }
+  .earlier { align-self: center; flex: none; font-size: 12px; color: var(--text-3); padding: 6px 14px; border: 1px solid var(--line-2); border-radius: 999px; }
+  .earlier:hover { color: var(--text); }
   .empty { margin: auto; max-width: 460px; display: flex; flex-direction: column; gap: 12px; padding: 24px 0; }
   .empty .rack { width: 112px; height: 40px; margin-bottom: 8px; fill: none; stroke: var(--text-3); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
   .empty .rack .lit { fill: var(--amber); stroke: var(--amber); }
@@ -369,7 +371,6 @@
       <input type="file" id="camera" accept="image/*" capture="environment" hidden>
       <form id="form">
         <button type="button" class="ghost icon" id="plusBtn" title="Attach pictures" aria-label="Attach pictures" aria-haspopup="menu" aria-expanded="false"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>
-        <button type="button" class="ghost icon" id="pasteBtn" title="Paste image from the clipboard" aria-label="Paste image from the clipboard"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2.5" width="10" height="12" rx="1.8"/><path d="M6 2.5V2a1 1 0 011-1h2a1 1 0 011 1v.5M5.5 9.5l1.7-1.8 1.5 1.5 1.3-1.2 1.5 1.5"/></svg></button>
         <textarea id="text" rows="1" placeholder="Ask, or hand it a task" aria-label="Message"></textarea>
         <button type="button" class="ghost icon mic" id="micBtn" title="Speak (click to start and stop)" aria-label="Speak a message"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0010 0M8 12.5v2"/></svg><span class="t"></span></button>
         <button class="primary icon" id="send" aria-label="Send"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"/></svg></button>
@@ -581,9 +582,20 @@ async function selectBot(id) {
   if (S.es) S.es.close();
   const st = await api(`/api/bots/${id}/state`);
   S.bot = st.bot; markSeen(id, Math.max(0, ...st.messages.map(m => m.id))); S.msgs = new Map(st.messages.map(m => [m.id, m])); S.thinking = false; S.mobile = st.mobile;
+  S.older = st.messages.length >= 200;  // a full page: there may be earlier messages to load
   renderBots(); renderHeader(); renderFeed(true); renderTab(); renderChips(); renderBench();
   S.es = new EventSource(`/api/bots/${id}/events?after=${st.last_seq}` + (token ? "&" + tq() : ""));
   S.es.onmessage = (e) => onEvent(JSON.parse(e.data));
+}
+async function loadEarlier() {
+  const id = S.bot.id, first = Math.min(...S.msgs.keys()), feed = $("feed"), keep = feed.scrollHeight - feed.scrollTop;
+  let page;
+  try { page = await api(`/api/bots/${id}/messages?before=${first}&limit=100`); } catch { return; }
+  if (!S.bot || S.bot.id !== id) return;  // the owner switched chats while it loaded
+  for (const m of page) S.msgs.set(m.id, m);
+  S.older = page.length >= 100;
+  renderFeed();
+  feed.style.scrollBehavior = "auto"; feed.scrollTop = feed.scrollHeight - keep; feed.style.scrollBehavior = "";  // stay on the message that was at the top, without the smooth scroll
 }
 function onEvent(ev) {
   if (ev.type === "message") {
@@ -686,6 +698,7 @@ function renderFeed(jump) {
   if (!list.length) {
     feed.append(emptyState());
   }
+  if (S.older && list.length) { const more = el("button", "ghost earlier", "Show earlier messages"); more.onclick = loadEarlier; feed.append(more); }
   for (const m of list) {
     if (m.kind === "status") feed.append(statusLine(m));
     else if (m.kind === "action_item") feed.append(card(m));
@@ -878,7 +891,6 @@ $("miCamera").onclick = () => { closeAttMenu(); camera.click(); };
 $("miPaste").onclick = () => { closeAttMenu(); pasteFromButton(); };
 $("miApk").onclick = () => { closeAttMenu(); $("apkPicker").click(); };
 $("apkPicker").onchange = () => { addApk($("apkPicker").files[0]); $("apkPicker").value = ""; };
-$("pasteBtn").onclick = pasteFromButton;
 for (const input of [picker, camera]) input.onchange = () => { addPictures([...input.files]); input.value = ""; };
 document.addEventListener("click", (e) => { if (!attMenu.hidden && !attMenu.contains(e.target)) closeAttMenu(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !attMenu.hidden) { closeAttMenu(); $("plusBtn").focus(); } });
