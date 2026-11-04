@@ -94,6 +94,9 @@ class Device:
         self.use_u2 = (os.environ.get("PHONE_READER", "u2") != "adb") if use_u2 is None else use_u2
         self._u2 = None
         self._u2_failed = False
+        self._console = None  # whether touches go through the emulator console (see _emu_touch)
+        self.ime_wait_s = 4.0  # how long to wait for the keyboard's digit keys before typing the old way
+        self._tid = 100
         self._size_at: tuple[float, tuple[int, int]] | None = None  # (time, size): rotation can change mid-task, so the size is re-read often
         self.keyboard_open = False
 
@@ -270,28 +273,121 @@ class Device:
             time.sleep(0.3)
         return None
 
+    def _console_touch(self) -> bool:
+        """True on an emulator whose screen is in portrait. Some apps (WhatsApp's sign-up screens) ignore touches made by `input tap` and uiautomator2, which come from a
+        virtual input device; a touch sent through the emulator console arrives as a real touchscreen touch and works. PHONE_TOUCH=adb turns it off."""
+        if self._console is None:
+            ser = self.serial
+            if ser is None:
+                try:
+                    ser = self._run("get-serialno", timeout=8).decode().strip()
+                except Exception:
+                    ser = ""
+            self._console = ser.startswith("emulator-") and os.environ.get("PHONE_TOUCH", "") != "adb"
+        if not self._console:
+            return False
+        w, h = self.size()
+        return w <= h  # the touch panel's axes do not follow the rotation: a rotated screen goes through adb
+
+    def _emu_touch(self, kind: str, x: int, y: int) -> None:
+        """One touch event (down, move, up) as a real touchscreen event through the emulator console."""
+        w, h = self.size()
+        tx, ty = round(min(max(x, 0), w - 1) * 32767 / w), round(min(max(y, 0), h - 1) * 32767 / h)
+        if kind == "down":
+            self._tid = self._tid % 60000 + 1
+            ev = [f"EV_ABS:ABS_MT_TRACKING_ID:{self._tid}", f"EV_ABS:ABS_MT_POSITION_X:{tx}", f"EV_ABS:ABS_MT_POSITION_Y:{ty}", "EV_ABS:ABS_MT_PRESSURE:600", "EV_KEY:BTN_TOUCH:1"]
+        elif kind == "move":
+            ev = [f"EV_ABS:ABS_MT_POSITION_X:{tx}", f"EV_ABS:ABS_MT_POSITION_Y:{ty}"]
+        else:
+            ev = ["EV_ABS:ABS_MT_TRACKING_ID:-1", "EV_KEY:BTN_TOUCH:0"]
+        out = self._run("emu", "event", "send", *ev, "EV_SYN:0:0", timeout=10)
+        if b"OK" not in out:
+            raise RuntimeError("console refused the touch: " + out.decode(errors="replace")[:80])
+
     def tap(self, x: int, y: int) -> None:
+        if self._console_touch():
+            try:
+                self._emu_touch("down", x, y)
+                time.sleep(0.04)
+                self._emu_touch("up", x, y)
+                return
+            except Exception:
+                try:
+                    self._emu_touch("up", x, y)  # never leave a finger down
+                except Exception:
+                    pass
         self._run("shell", "input", "tap", str(x), str(y))
 
     def touch(self, kind: str, x: int, y: int) -> None:
         """One live touch event (down, move or up) for follow-the-finger dragging. uiautomator2 injects it in about 18 ms;
-        `input motionevent` (Android 12+) is the fallback."""
-        d = self._u2_device()
+        `input motionevent` (Android 12+) is the fallback. A gesture uses ONE injector from its down to its up: a down sent one way and an up sent the
+        other leaves the finger pressed, and every later touch on the phone (even the notification shade) is ignored."""
+        if kind == "down":
+            self._touch_via = "emu" if self._console_touch() else "u2" if self._u2_device() is not None else "adb"
+        if getattr(self, "_touch_via", "adb") == "emu":
+            try:
+                self._emu_touch(kind, x, y)
+                return
+            except Exception:
+                if kind == "down":
+                    self._touch_via = "u2" if self._u2_device() is not None else "adb"
+                else:
+                    self.release_touch()
+                    return
+        d = self._u2_device() if getattr(self, "_touch_via", "adb") == "u2" else None
         if d is not None:
             try:
                 getattr(d.touch, kind)(x, y)
                 return
             except Exception:
-                pass
+                if kind == "down":
+                    self._touch_via = "adb"  # u2 failed before the finger went down: the whole gesture goes through adb
+                else:
+                    self.release_touch()  # u2 lost the gesture midway: lift the finger both ways rather than leave it stuck
+                    return
         self._run("shell", "input", "motionevent", kind.upper(), str(x), str(y))
 
+    def release_touch(self) -> None:
+        """Lift a finger that may be stuck down, through every injector. Harmless when nothing is pressed."""
+        if self._console:
+            try:
+                self._emu_touch("up", 0, 0)
+            except Exception:
+                pass
+        d = self._u2_device()
+        if d is not None:
+            try:
+                d.touch.up(0, 0)
+            except Exception:
+                pass
+        try:
+            self._run("shell", "input", "motionevent", "UP", "0", "0")
+        except Exception:
+            pass
+
     def swipe(self, x1: int, y1: int, x2: int, y2: int, ms: int = 300) -> None:
+        if self._console_touch():
+            try:
+                steps = max(3, min(10, ms // 40))
+                self._emu_touch("down", x1, y1)
+                for i in range(1, steps + 1):
+                    time.sleep(ms / 1000 / steps)
+                    self._emu_touch("move", round(x1 + (x2 - x1) * i / steps), round(y1 + (y2 - y1) * i / steps))
+                self._emu_touch("up", x2, y2)
+                return
+            except Exception:
+                try:
+                    self._emu_touch("up", x2, y2)
+                except Exception:
+                    pass
         self._run("shell", "input", "swipe", *map(str, (x1, y1, x2, y2, ms)))
 
     def type_text(self, text: str) -> None:
         """Appends to the focused field. Plain ASCII goes through Android's own `input text`, key by key: it never touches the clipboard, so an app that blocks
         paste (WhatsApp's number screen does) or a clipboard preview on screen cannot get in the way. Anything else (Tamil, accents) needs uiautomator2, which
         handles non-ASCII text; it is also the fallback if `input text` fails."""
+        if self._type_digits_on_keyboard(text):
+            return
         if text.isascii():
             try:
                 self._run("shell", "input", "text", shlex.quote(text.replace(" ", "%s")))
@@ -307,10 +403,72 @@ class Device:
                 pass
         self._run("shell", "input", "text", shlex.quote(text.replace(" ", "%s")))
 
+    def _ime_keys(self) -> dict[str, tuple[int, int]]:
+        """The digit keys of the on-screen keyboard (label -> centre), read from the UI tree. Empty when no keyboard with digit keys is showing."""
+        root = None
+        d = self._u2_device()
+        if d is not None:
+            try:
+                root = ET.fromstring(d.dump_hierarchy())
+            except Exception:
+                root = None
+        if root is None:
+            root = self._dump()
+        keys: dict[str, tuple[int, int]] = {}
+        for node in (root.iter("node") if root is not None else []):
+            if "inputmethod" not in (node.get("package") or "").lower() or node.get("clickable") != "true":
+                continue
+            label = node.get("content-desc") or node.get("text") or ""
+            m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+            if m and len(label) == 1 and label.isdigit() and label not in keys:
+                x1, y1, x2, y2 = map(int, m.groups())
+                keys[label] = ((x1 + x2) // 2, (y1 + y2) // 2)
+        return keys
+
+    def clear_field(self) -> None:
+        """Empty the focused field: End, then Delete many times, as key events (apps that ignore injected keys get the keyboard's own Delete key on an emulator)."""
+        if self._console_touch():
+            try:
+                root = self._u2_device().dump_hierarchy() if self._u2_device() is not None else None
+                node = None
+                for n in (ET.fromstring(root).iter("node") if root else []):
+                    if "inputmethod" in (n.get("package") or "").lower() and n.get("content-desc") == "Delete" and n.get("clickable") == "true":
+                        node = n
+                        break
+                m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", "")) if node is not None else None
+                if m:
+                    x1, y1, x2, y2 = map(int, m.groups())
+                    for _ in range(12):
+                        self.tap((x1 + x2) // 2, (y1 + y2) // 2)
+                        time.sleep(0.08)
+                    return
+            except Exception:
+                pass
+        self._run("shell", "input", "keyevent", "KEYCODE_MOVE_END", *["KEYCODE_DEL"] * 12)
+
+    def _type_digits_on_keyboard(self, text: str) -> bool:
+        """Some apps (WhatsApp's sign-up screens) ignore text and keys injected from outside the keyboard (`input text`, key events, uiautomator2) and only take what the
+        keyboard itself commits. On an emulator the digits are typed by touching the keyboard's own keys, as a person does. False when that is not possible."""
+        digits = re.sub(r"[ \-]", "", text)
+        if not digits or not digits.isdigit() or not self._console_touch():
+            return False
+        keys, end = self._ime_keys(), time.time() + self.ime_wait_s
+        while any(ch not in keys for ch in set(digits)) and time.time() < end:  # the keyboard slides up a moment after the field is tapped (longer on a busy computer)
+            time.sleep(0.5)
+            keys = self._ime_keys()
+        if any(ch not in keys for ch in set(digits)):
+            return False
+        for ch in digits:
+            self.tap(*keys[ch])
+            time.sleep(0.12)
+        return True
+
     def type_private(self, text: str) -> None:
         """Types a secret (a password, a number, a code) key by key through Android's own input command, never through the clipboard: the clipboard shows a
         preview of the text on screen (where the model could read it), is readable by other apps, and keeps the text afterwards. Text that is not plain
         ASCII has no such path, so it falls back to `type_text` and the clipboard is emptied after."""
+        if self._type_digits_on_keyboard(text):
+            return
         if text.isascii():
             self._run("shell", "input", "text", shlex.quote(text.replace(" ", "%s")))
             return

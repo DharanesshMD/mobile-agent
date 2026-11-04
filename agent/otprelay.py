@@ -17,13 +17,44 @@ from agent import logs
 
 log = logging.getLogger("agent.otp")
 
-WINDOW_S = 120  # how long the phone watches
-EXTEND_TO_S = 180  # one extension while the owner is still waiting
+WINDOW_S = 300  # how long the card keeps looking for a code (the phone's own watch is re-armed every 3 minutes at most)
+EXTEND_TO_S = 420  # one extension while the owner is still waiting
 POLL_S = 2.0
 CANDIDATE_TTL_S = 180  # a found code is usable for this long
 MAX_WATCHES_PER_HOUR = 3  # per phone
 CODE_RE = re.compile(r"\d{4,8}")
 DIGITS_RE = re.compile(r"\d{4,}")
+
+SCREEN_EVERY = 2  # polls between two looks at the owner's screen
+SCREEN_CODE_RE = re.compile(r"(?:code|otp|passcode)\b[^\d]{0,24}(\d{3}[ -]\d{3}|\d{4,8})(?!\d)", re.I)
+SCREEN_CUE_RE = re.compile(r"\b(code|otp|verification|verify|passcode|6-digit|six-digit|one-time)\b", re.I)
+SCREEN_PURE_RE = re.compile(r"\d{3}[ -]?\d{3}")
+
+
+def code_on_screen(labels) -> str | None:
+    """A verification code shown on the owner's own screen (an app that displays the code to type on a new device), found in the visible text only: digits next to the
+    word 'code', a lone six-digit label or six single-digit labels in a row, and only on a screen that talks about a code at all. Phone numbers, times and years never match.
+    The text is looked at in memory and dropped; only the digits are returned."""
+    texts = [" ".join(str(x).split()) for x in labels if x]
+    if not any(SCREEN_CUE_RE.search(t) for t in texts):
+        return None
+    for t in texts:
+        m = SCREEN_CODE_RE.search(t)
+        if m:
+            return re.sub(r"\D", "", m.group(1))
+    for t in texts:
+        if SCREEN_PURE_RE.fullmatch(t):
+            return re.sub(r"\D", "", t)
+    run = ""
+    for t in texts + [""]:
+        if len(t) == 1 and t.isdigit():
+            run += t
+            continue
+        if len(run) == 6:
+            return run
+        run = ""
+    return None
+
 
 REASONS = {
     "off": "Fetching codes is switched off in the app on {phone}",
@@ -31,7 +62,7 @@ REASONS = {
     "notifications_blocked": "Your phone hid the message text. Open Messages on it, or type the code here",
     "redacted": "Your phone hid the message text. Open Messages on it, or type the code here",
     "offline": "Your phone is not connected",
-    "timeout": "No code arrived in 2 minutes. Ask for a new one or type it here",
+    "timeout": "No code arrived in 5 minutes. Ask for a new one or type it here",
     "expired": "The code expired. Ask for a new one or type it here",
     "unavailable": "This version of the app cannot fetch codes. Update the app on {phone}",
     "limit": "Too many code requests in the last hour. Type the code here",
@@ -154,7 +185,7 @@ class OtpRelay:
                 return
             self._relay(item_id, "watching", phone=name)
             t0, deadline, extended = self.clock(), self.clock() + self.window_s, False
-            redacted = False
+            redacted, polls = False, 0
             while self._open(item_id, jr) and not stop.is_set():
                 now = self.clock()
                 if now >= deadline:
@@ -188,11 +219,20 @@ class OtpRelay:
                                 pass
                         cand = self._cands[item_id]
                         self._relay(item_id, "found", phone=name, hint=mask(cand["code"]), source=cand["source"], title=cand["title"], found=cand["found"])
+                elif item_id not in self._cands and polls % SCREEN_EVERY == 0 and self._look_at_screen(item_id, pid, name):
+                    pass  # the code is on the owner's screen (see code_on_screen)
                 elif r.get("redacted") and not redacted and item_id not in self._cands:
                     redacted = True
                     self._relay(item_id, "redacted", phone=name)
                 elif r.get("watching") is False and item_id not in self._cands:
-                    break
+                    left = deadline - self.clock()
+                    if left <= 1:
+                        break
+                    try:  # the phone's own watch is capped at 3 minutes: the card is still open, so ask for another stretch
+                        self._call(pid, "otp_watch", {"seconds": int(min(180, left))})
+                    except Exception:
+                        break
+                polls += 1
                 self._pause(stop)
             # the window is over: a code that was found stays usable until its own expiry or the card closes
             while self._open(item_id, jr) and not stop.is_set() and item_id in self._cands:
@@ -205,6 +245,27 @@ class OtpRelay:
                     end_state = "timeout"
         finally:
             self._end(item_id, pid, name, end_state, jr)
+
+    def _look_at_screen(self, item_id: str, pid: str, name: str) -> bool:
+        """Some apps show the code ON the owner's phone instead of texting it. While the card is open, the visible text of that phone is checked for one (never stored, never
+        logged, never shown to a model); a code found goes through the same masked card and the same one-click approval as a code from a notification."""
+        try:
+            r = self._call(pid, "elements", {"limit": 80}) or {}
+            found = code_on_screen([e.get("label") for e in (r.get("elements") or []) if isinstance(e, dict)])
+        except Exception:  # an app that cannot show its screen, a locked phone, a dropped link: the notification path still works
+            return False
+        if not found or not CODE_RE.fullmatch(found):
+            return False
+        with self._lock:
+            have = self._cands.get(item_id)
+            if have is not None and have["code"] == found:
+                return True
+            self._cands[item_id] = {"code": found, "id": "screen:" + found, "phone": pid, "name": name, "source": "On screen", "title": "",
+                                    "found": self.clock(), "expires": self.clock() + self.ttl_s}
+            cand = self._cands[item_id]
+        logs.audit("otp code seen on the owner's screen", phone=name, item=item_id)
+        self._relay(item_id, "found", phone=name, hint=mask(found), source=cand["source"], title="", found=cand["found"])
+        return True
 
     def _pause(self, stop: threading.Event) -> None:
         stop.wait(self.poll_s)

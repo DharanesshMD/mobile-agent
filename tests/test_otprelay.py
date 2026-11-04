@@ -6,7 +6,7 @@ import time
 import unittest
 from types import SimpleNamespace
 
-from agent.otprelay import OtpRelay, clean_label, mask
+from agent.otprelay import OtpRelay, clean_label, code_on_screen, mask
 from agent.remote import PhoneOffline
 from test_chat import Spark, Worker, act, msgs, open_card, say, setup, until
 
@@ -36,6 +36,8 @@ class FakeHub:
             if isinstance(self.watch, Exception):
                 raise self.watch
             return self.watch
+        if op == "elements":
+            return {"keyboard": False, "elements": [{"label": x, "center": [1, 1], "clickable": False} for x in getattr(self, "screen", [])]}
         if op == "otp_poll":
             if self.fail_poll:
                 raise self.fail_poll
@@ -120,7 +122,35 @@ class Basics(unittest.TestCase):
         self.assertEqual(clean_label("x" * 100), "***")  # a long unbroken string is redacted like any secret-looking text
 
 
+class OnScreen(unittest.TestCase):
+    def test_codes_shown_on_the_owners_screen_are_found_and_look_alikes_are_not(self):
+        self.assertEqual(code_on_screen(["Confirm it's you", "Your 6-digit code: 482-913", "Don't share it"]), "482913")
+        self.assertEqual(code_on_screen(["Enter this code on your new phone", "482 913"]), "482913")
+        self.assertEqual(code_on_screen(["Verification code", "4", "8", "2", "9", "1", "3", "Done"]), "482913")
+        self.assertEqual(code_on_screen(["Your OTP is 4821"]), "4821")
+        self.assertIsNone(code_on_screen(["Verify +91 99430 82281", "Choose how to verify"]))   # a phone number is not a code
+        self.assertIsNone(code_on_screen(["Inbox", "Meeting at 10:30", "2026", "482913"]))       # no talk of a code on this screen
+        self.assertIsNone(code_on_screen(["Your code is ready", "Order 2026", "Total 4821"]))     # a cue, but no code next to it or lone six digits
+        self.assertIsNone(code_on_screen([]))
+
+
 class Flow(unittest.TestCase):
+    def test_a_code_shown_on_the_owners_screen_goes_through_the_same_masked_card_and_click(self):
+        w = World()
+        self.addCleanup(w.close)
+        item, jr = w.card()
+        w.hub.screen = ["Chats", "Calls"]
+        w.relay.begin(item, jr)
+        until(lambda: (w.relay_meta(item) or {}).get("state") == "watching")
+        self.assertFalse(w.relay.has_candidate(item["id"]))
+        w.hub.screen = ["Verify your new phone", "Your 6-digit code: 482-913"]
+        until(lambda: (w.relay_meta(item) or {}).get("state") == "found")
+        meta = w.relay_meta(item)
+        self.assertEqual((meta["hint"], meta["source"], meta["phone"]), ("••••13", "On screen", "Pixel"))
+        self.assertEqual(w.phone.typed, [])   # nothing typed before the owner's click
+        self.assertEqual(w.relay.take(item["id"]), (CODE, "Pixel"))
+        w.no_code_anywhere(self, CODE)
+
     def test_a_found_code_is_approved_once_and_typed_on_the_cloud_phone(self):
         spark = Spark(act(type="mobile_task", goal="sign in", say="ok"), act(type="reply", text="in"))
         w = World(spark, Worker(act(type="request_otp", app="Gmail"), act(type="done", answer="ok")))
@@ -323,7 +353,7 @@ class States(unittest.TestCase):
         item, jr = w.card()
         w.relay.begin(item, jr)
         until(lambda: (w.relay_meta(item) or {}).get("state") == "expired")
-        self.assertIn("No code arrived in 2 minutes", w.relay_meta(item)["reason"])
+        self.assertIn("No code arrived in 5 minutes", w.relay_meta(item)["reason"])
         until(lambda: w.hub.ops("otp_stop"))
         self.assertFalse(w.relay.has_candidate(item["id"]))
 

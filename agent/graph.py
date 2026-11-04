@@ -4,6 +4,7 @@ Gates (ask, handoff, request_otp) call interrupt(), so a run can wait for the ow
 and resume exactly where it stopped. Add more agents later as extra nodes or sub-graphs on the same state.
 """
 import hashlib
+import re
 import json
 import struct
 import threading
@@ -23,12 +24,25 @@ from agent import cloudtools, gamepolicy
 from agent.device import Element
 from agent.config import IMAGE_MODE, IMAGE_WIDTH
 from agent.config import CRASH_LIMIT, MAX_JOB_MINUTES, MAX_WAIT_S
-from agent.loop import ANIMATED_AFTER, ANIMATED_SAME, GATES, STUCK_LIMIT, build_prompt, coarse, coarse_diff, execute, need_image, parse_action, shrink, system_prompt
+from agent.loop import ANIMATED_AFTER, ANIMATED_SAME, DEAD_TAP_RADIUS, GATES, STUCK_LIMIT, build_prompt, coarse, coarse_diff, execute, need_image, parse_action, rejection, shrink, system_prompt
 from agent.loop import settle as settle_screen
 
 
 MAX_BLOCKS = 3  # input refused by the game guard this many times in one task: the task ends instead of looping
 CRASH_PREFIX = "App keeps crashing: "  # the orchestrator recognises a failed task by this start and does not retry it
+
+
+def tap_sig(act: dict, elements: list) -> tuple | None:
+    """What a tap pressed: the label of the element, or the spot (to within a finger's width) when it was tapped by coordinates."""
+    if act.get("type") != "tap":
+        return None
+    if "element" in act:
+        e = next((e for e in elements if e.get("id") == act.get("element")), None)
+        return ("label", e["label"]) if e and e.get("label") else ("element", act.get("element"))
+    try:
+        return ("xy", round(float(act["x"]) / DEAD_TAP_RADIUS), round(float(act["y"]) / DEAD_TAP_RADIUS))
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def crash_report(pkg: str, n: int, emulator: bool) -> str:
@@ -60,6 +74,9 @@ class State(TypedDict, total=False):
     blocked: int  # inputs the game guard refused in this task
     grants: dict  # saved-secret label -> {"t": when the owner approved typing it, "fg": the app it was approved for}: the same secret in the same app is not asked again for GRANT_S
     launchers: list  # packages with a launcher icon: only these are apps whose crash can stop a task (system services crash in the background on their own)
+    otp_focus_hinted: bool  # the worker was told once to focus the code field before request_otp
+    last_taps: list  # signatures of the taps made so far (see tap_sig)
+    rejected: dict  # the screen refused what was entered: {"text": what it said, "sig": the tap that submitted it}; cleared when something new is typed or the owner is asked
 
 
 @dataclass
@@ -177,7 +194,11 @@ def observe(state: State, config: RunnableConfig) -> dict:
                    + ". A loading screen is NOT loading if the app keeps crashing. If a 'keeps stopping' dialog is showing, tap Close app. "
                      f"Open the app again at most once more; after {CRASH_LIMIT} crashes the task is stopped.")
     ms = {"shot": shot_ms, "tree": tree_ms, "observe": round((time.time() - t0) * 1000), "image": send}
-    return {**crash_state, "fg": fg, "guard": guard, "guard_name": guard_name, "site": site, "goal": goal, "step": step, "last_hash": digest, "last_sig": sig, "unchanged": unchanged,
+    refused = state.get("rejected")
+    said = rejection(elements, state.get("acts", []))
+    if said and not refused:  # the screen refused what was entered: remember it, and which button submitted it, even after the dialog is dismissed
+        refused = {"text": said, "sig": (state.get("last_taps") or [None])[-1]}
+    return {**crash_state, "rejected": refused or {}, "fg": fg, "guard": guard, "guard_name": guard_name, "site": site, "goal": goal, "step": step, "last_hash": digest, "last_sig": sig, "unchanged": unchanged,
             "obs": {"png": small, "send_image": send, "scale": scale, "size": (w0, h0), "elements": [asdict(e) for e in elements],
                     "prompt": prompt, "ms": ms}}
 
@@ -209,6 +230,15 @@ def plan(state: State, config: RunnableConfig) -> dict:
         except Exception:
             pass
     act, thought, n = parsed["action"], str(parsed.get("thought", "")), state["step"]
+    refused, taps = state.get("rejected") or {}, list(state.get("last_taps") or [])
+    sig = tap_sig(act, obs["elements"])
+    if refused and sig is not None and sig == refused.get("sig"):
+        # The same button that submitted the refused input, with nothing changed: pressing it again gets the same refusal. Ask the owner instead of looping.
+        act = {"type": "need_info", "field": "the right value", "why": f'I entered it and the screen said: "{refused["text"]}". I will not submit the same thing again without your answer.', "options": []}
+        thought = "Not submitting the refused input again; asking the owner."
+        sig = None
+    if sig is not None:
+        taps.append(sig)
     obs["ms"]["model"] = round((time.time() - t0) * 1000)
     tokens1 = getattr(c["model"], "tokens", {}) or {}
     for k in ("prompt", "completion", "cached"):
@@ -219,7 +249,8 @@ def plan(state: State, config: RunnableConfig) -> dict:
         (t / f"step{n:02d}.png").write_bytes(obs["png"])
         (t / f"step{n:02d}.json").write_text(json.dumps({"prompt": obs["prompt"], "reply": parsed}, indent=2))
     _emit(config, {"type": "step", "n": n, "thought": thought, "action": act})
-    return {"action": act, "thought": thought, "acts": state.get("acts", []) + [act], "obs": obs}
+    cleared = act.get("type") in ("type", "type_secret", "need_info")  # something new is entered, or the owner is asked: the refusal no longer applies
+    return {"action": act, "thought": thought, "acts": state.get("acts", []) + [act], "obs": obs, "last_taps": taps[-12:], **({"rejected": {}} if cleared else {})}
 
 
 def finish(state: State) -> dict:
@@ -232,16 +263,26 @@ def finish(state: State) -> dict:
 GRANT_S = 180  # one yes to type a saved secret into an app covers retries of the same secret in the same app for this long (a field that did not take it the first time)
 
 
+CODE_HANDOFF_RE = re.compile(r"\b(verification|one-time|otp|\d-digit)\b|(?<!country )(?<!area )(?<!zip )(?<!postal )(?<!promo )(?<!qr )\bcode\b", re.I)
+NOT_A_CODE_RE = re.compile(r"\b(password|captcha|passcode|biometric|fingerprint|face id|pin)\b|\bfield (is )?(still )?empty\b|\bnumber field\b", re.I)
+
+
 def gate(state: State, config: RunnableConfig) -> dict:
     c, act, n = _c(config), state["action"], state["step"]
+    if act["type"] == "handoff" and CODE_HANDOFF_RE.search(str(act.get("reason", ""))) and not NOT_A_CODE_RE.search(str(act.get("reason", ""))):
+        act = {"type": "request_otp", "app": str(act.get("app", "")) or "The app"}  # a code is fetched from the owner's phone (agent/otprelay.py), never a reason to hand over the screen
     kind = act["type"]
+    if kind == "request_otp" and getattr(c["device"], "keyboard_open", True) is False and not state.get("otp_focus_hinted"):
+        # a code is typed into the focused field: with no keyboard open nothing has focus, so the owner's click would type into nothing
+        return {"otp_focus_hinted": True, "history": state.get("history", []) + [f"{n}. request_otp -> not yet: no keyboard is open, so no field has focus. Tap the code field first, then use request_otp"]}
     text = str(act.get("question") or act.get("reason") or act.get("app") or "")
     payload = {"kind": kind, "text": text}
     refused = _game_guard(state, c, n) if kind == "type_secret" else None
     if refused:
         return refused
     if kind == "need_info":
-        payload = {"kind": kind, "field": str(act.get("field", "")), "text": str(act.get("why", ""))}
+        payload = {"kind": kind, "field": str(act.get("field", "")), "text": str(act.get("why", "")),
+                   "options": [str(o)[:80] for o in (act.get("options") or []) if str(o).strip()][:4] if isinstance(act.get("options"), list) else []}
     if kind == "need_secret":
         label, secrets = str(act.get("label", "")).strip(), c.get("secrets")
         if not label:

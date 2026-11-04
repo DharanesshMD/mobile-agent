@@ -4,10 +4,10 @@ Use case: a task on a phone reaches a sign-in or sign-up that sends a one-time c
 
 ## Flow
 1. The phone worker reaches a code screen and asks for a code (`request_otp`). The usual card appears in the chat: "Gmail sent a one-time code. Enter it here." You can always type the digits, as before.
-2. If one of your paired phones is connected (and it is not the phone the task runs on), the server asks it to **watch** for a code for 2 minutes (`otp_watch`). The card says "Watching Pixel for a code…". If no phone is connected the card says "Connect your phone to fetch codes automatically" and nothing else changes.
+2. If one of your paired phones is connected (and it is not the phone the task runs on), the server asks it to **watch** for a code for 5 minutes (`otp_watch`, re-armed every 3 minutes because the app caps one watch at 3). The card says "Watching Pixel for a code…". If no phone is connected the card says "Connect your phone to fetch codes automatically" and nothing else changes.
 3. The phone finds a code in a notification and returns it (`otp_poll`). The card now shows only a **masked hint** (`••••13`), where it came from ("Messages · HDFCBK on Pixel") and how long ago, with **Use this code**. A newer code replaces an older one.
 4. You press **Use this code**. The server takes the code from memory, types it on the phone exactly like a typed code, forgets it and tells the phone to wipe its copy (`otp_stop`). The card records "Code from Pixel sent to the phone".
-5. The watch ends when the card is answered, the task is stopped or times out, or the window closes (one extension to 3 minutes while you are still waiting). A found code stays usable for 3 minutes, then it is dropped.
+5. The watch ends when the card is answered, the task is stopped or times out, or the window closes (one extension to 7 minutes while you are still waiting). A found code stays usable for 3 minutes, then it is dropped.
 
 ## Ops contract with the app (over the existing phone link)
 | Op | Arguments | Answer |
@@ -32,3 +32,7 @@ The app captures only while a watch is open and only if you switched on "Let tas
 - A phone can hide message text: notifications set to "hide sensitive content" on the lock screen, Xiaomi's "Hide notification content", and Android 15's redaction of one-time codes for apps that read notifications. The card then says "Your phone hid the message text. Open Messages on it, or type the code here".
 - It reads notifications, not the SMS inbox (the app holds no SMS permission, which Google Play Protect would block for a sideloaded app).
 - Status: the server and page side are built and tested with a scripted phone. The app side was verified on virtual phones only; no real SMS was relayed end to end here.
+
+
+## A code shown on your phone's screen (added 4 Nov 2026)
+Some apps (WhatsApp's "use your other phone" sign-up) do not text a code: they show it inside the app on your own phone. While a code card is open, the server also reads the visible text of the connected phone (the app's `elements` op, through the accessibility permission and the same "fetch verification codes" switch) and takes a code only from text next to the word "code" or from a lone six-digit label on a screen that talks about a code. The text is looked at in memory and dropped; the code goes through the same masked card and the same one-click approval. Nothing is typed without the click.

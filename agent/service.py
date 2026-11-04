@@ -504,7 +504,7 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
             except (WebSocketDisconnect, RuntimeError, ValueError):
                 inbox.put_nowait(None)
 
-        task, down = asyncio.create_task(reader()), None
+        task, down, dirty = asyncio.create_task(reader()), None, False
         loop = asyncio.get_running_loop()
         try:
             while True:
@@ -527,11 +527,14 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
                     if kind == "up":
                         stale(lane)
                 except Exception:  # a bad event or a failed injection must not end the stream
+                    dirty = True  # an injection that failed midway may have left a finger down: it is lifted when the stream ends
                     continue
         finally:
             task.cancel()
             if down is not None:  # the browser went away mid-drag: lift the finger
                 dev.touch("up", *down["at"])  # synchronous on purpose: a cancelled task must still lift the finger
+            if dirty and hasattr(dev, "release_touch"):
+                dev.release_touch()
 
     @app.post("/api/device/tap", dependencies=[Depends(auth)])
     def tap(body: Tap, phone: str | None = Query(default=None)):

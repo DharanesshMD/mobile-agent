@@ -195,3 +195,143 @@ class Typing(unittest.TestCase):
         d.type_private("9943 08")
         self.assertEqual(calls, [("shell", "input", "text", "9943%s08")])
         self.assertFalse(hasattr(u2, "typed"))
+
+
+class LiveTouchInjection(unittest.TestCase):
+    """A gesture uses one injector from down to up; mixing them leaves the finger pressed and the whole phone ignores touches."""
+
+    class FakeTouch:
+        def __init__(self, fail_on=()):
+            self.log, self.fail_on = [], set(fail_on)
+
+        def __getattr__(self, kind):
+            def go(x, y):
+                if kind in self.fail_on:
+                    raise RuntimeError("u2 lost")
+                self.log.append(kind)
+            return go
+
+    def device(self, fail_on=()):
+        d = Device(use_u2=True)
+        d._console = False  # these tests are about uiautomator2 and adb; the console route has its own tests below
+        d._u2 = mock.Mock()
+        d._u2.touch = self.FakeTouch(fail_on)
+        calls = []
+        d._run = lambda *a: calls.append(a[-3:]) or b""
+        return d, calls
+
+    def test_a_gesture_stays_on_uiautomator2_when_it_works(self):
+        d, calls = self.device()
+        for k in ("down", "move", "up"):
+            d.touch(k, 5, 6)
+        self.assertEqual(d._u2.touch.log, ["down", "move", "up"])
+        self.assertEqual(calls, [])
+
+    def test_a_gesture_whose_down_failed_goes_entirely_through_adb(self):
+        d, calls = self.device(fail_on=("down",))
+        for k in ("down", "move", "up"):
+            d.touch(k, 5, 6)
+        self.assertEqual(d._u2.touch.log, [])  # no u2 up for an adb down
+        self.assertEqual([c[0] for c in calls], ["DOWN", "MOVE", "UP"])
+
+    def test_losing_uiautomator2_midway_lifts_the_finger_both_ways(self):
+        d, calls = self.device(fail_on=("move",))
+        d.touch("down", 5, 6)
+        d.touch("move", 5, 7)
+        self.assertEqual(d._u2.touch.log, ["down", "up"])  # release_touch: u2 up ...
+        self.assertEqual([c[0] for c in calls], ["UP"])    # ... and the adb up
+
+
+class ConsoleTouch(unittest.TestCase):
+    """On an emulator a touch goes through the console as a real touchscreen event: WhatsApp's sign-up screens ignore adb's and uiautomator2's touches."""
+
+    def emulator(self, size=(720, 1600), reply=b"OK\n"):
+        import time as _t
+        d = Device("emulator-5554", use_u2=False)
+        d._size_at = (_t.time() + 1000, size)
+        calls = []
+        d._run = lambda *a, **k: calls.append(a) or reply
+        return d, calls
+
+    def test_a_tap_is_a_down_and_an_up_with_scaled_coordinates(self):
+        d, calls = self.emulator()
+        d.tap(360, 800)
+        self.assertEqual([c[:3] for c in calls], [("emu", "event", "send")] * 2)
+        down, up = calls
+        self.assertIn("EV_ABS:ABS_MT_POSITION_X:16384", down)  # 360 / 720 of the 0..32767 range
+        self.assertIn("EV_ABS:ABS_MT_POSITION_Y:16384", down)
+        self.assertIn("EV_KEY:BTN_TOUCH:1", down)
+        self.assertIn("EV_ABS:ABS_MT_TRACKING_ID:-1", up)
+        self.assertEqual(down[-1], "EV_SYN:0:0")
+
+    def test_a_swipe_moves_in_steps_between_down_and_up(self):
+        d, calls = self.emulator()
+        d.swipe(360, 1200, 360, 400, ms=120)
+        self.assertTrue(len(calls) >= 5)
+        self.assertIn("EV_KEY:BTN_TOUCH:1", calls[0])
+        self.assertIn("EV_KEY:BTN_TOUCH:0", calls[-1])
+
+    def test_a_rotated_screen_or_a_refusing_console_falls_back_to_adb_input(self):
+        d, calls = self.emulator(size=(1600, 720))
+        d.tap(100, 200)
+        self.assertEqual(calls, [("shell", "input", "tap", "100", "200")])
+        d2, calls2 = self.emulator(reply=b"KO: nope\n")
+        d2.tap(100, 200)
+        self.assertEqual(calls2[-1], ("shell", "input", "tap", "100", "200"))
+
+    def test_a_real_phone_never_uses_the_console(self):
+        d = Device("R5CT123", use_u2=False)
+        calls = []
+        d._run = lambda *a, **k: calls.append(a) or b""
+        d.tap(1, 2)
+        self.assertEqual(calls, [("shell", "input", "tap", "1", "2")])
+
+
+class KeyboardTyping(unittest.TestCase):
+    """WhatsApp's sign-up fields ignore `input text`, key events and uiautomator2 typing: on an emulator digits are typed by touching the keyboard's own keys."""
+
+    def emulator(self, keys):
+        import time as _t
+        d = Device("emulator-5554", use_u2=False)
+        d.ime_wait_s = 0
+        d._size_at = (_t.time() + 1000, (720, 1600))
+        taps, other = [], []
+        d.tap = lambda x, y: taps.append((x, y))
+        d._ime_keys = lambda: keys
+        d._run = lambda *a, **k: other.append(a) or b""
+        return d, taps, other
+
+    KEYS = {str(i): (100 + i * 10, 1200 + i) for i in range(10)}
+
+    def test_digits_are_typed_by_touching_the_keys_and_nothing_goes_through_input_text(self):
+        d, taps, other = self.emulator(self.KEYS)
+        d.type_private("99 43-0")
+        self.assertEqual(taps, [self.KEYS[c] for c in "99430"])
+        self.assertEqual(other, [])
+
+    def test_text_with_letters_or_missing_keys_uses_the_old_way(self):
+        d, taps, other = self.emulator(self.KEYS)
+        d.type_private("pass1")
+        self.assertEqual(taps, [])
+        self.assertEqual(other[-1][:3], ("shell", "input", "text"))
+        d2, taps2, other2 = self.emulator({"1": (1, 1)})  # no keyboard with a 9 on screen
+        d2.type_private("19")
+        self.assertEqual(taps2, [])
+        self.assertEqual(other2[-1][:3], ("shell", "input", "text"))
+
+    def test_a_real_phone_types_the_old_way(self):
+        d = Device("R5CT123", use_u2=False)
+        calls = []
+        d._run = lambda *a, **k: calls.append(a) or b""
+        d._ime_keys = lambda: {str(i): (1, 1) for i in range(10)}
+        d.type_private("1234")
+        self.assertEqual(calls, [("shell", "input", "text", "1234")])
+
+    def test_it_waits_for_the_keyboard_to_come_up_before_typing(self):
+        d, taps, other = self.emulator({})
+        d.ime_wait_s = 3
+        answers = iter([{}, {}, self.KEYS])
+        d._ime_keys = lambda: next(answers)
+        d.type_private("55")
+        self.assertEqual(taps, [self.KEYS["5"], self.KEYS["5"]])
+        self.assertEqual(other, [])

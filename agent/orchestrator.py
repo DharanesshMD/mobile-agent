@@ -1312,9 +1312,11 @@ class Orchestrator:
         """The worker needs a plain value. Try memory and the model first; otherwise ask the owner in chat.
         Returns {"value": str} or {"item": <action item>} (the owner's answer then resumes the worker)."""
         field, why = payload.get("field", ""), payload.get("text", "")
+        options = [str(x) for x in (payload.get("options") or [])][:4]
         hits = self.db.memory_search(bot_id, f"{field} {why}")
         user = (f"Job goal: {job['goal']}\nThe worker needs: {field}\nWhy: {why}\n"
-                f"Memory hits: {'; '.join(hits) if hits else 'none'}")
+                + (f"The worker suggests these answers: {'; '.join(options)}\n" if options else "")
+                + f"Memory hits: {'; '.join(hits) if hits else 'none'}")
         msgs = [{"role": "user", "content": user}]
         try:
             model = self.model_factory(ORCHESTRATOR_MODEL)
@@ -1330,9 +1332,12 @@ class Orchestrator:
                              {"role": "user", "content": "[tool result] " + ("; ".join(more) if more else "nothing found")}]
                     continue
                 if act["type"] == "ask_user":
-                    return {"item": self.make_item(bot_id, job["id"], {**act, "field": field})}
+                    spec = {**act, "field": field}
+                    if options and len(spec.get("options") or []) < 2:  # the worker knew the likely answers: show them as buttons
+                        spec.update(kind="choice", options=options)
+                    return {"item": self.make_item(bot_id, job["id"], spec)}
                 break
         except Exception:
             pass
         question = f"I need your {field or 'input'} to continue" + (f" ({why})" if why else "") + "."
-        return {"item": self.make_item(bot_id, job["id"], {"kind": "text", "question": question, "field": field})}
+        return {"item": self.make_item(bot_id, job["id"], {"kind": "choice" if len(options) >= 2 else "text", "question": question, "field": field, "options": options})}

@@ -16,7 +16,7 @@ from pathlib import Path
 from agent import cloudtools, names, report as report_mod, reportsave
 from agent.artifacts import Artifacts
 from agent.checks import run_check
-from agent.config import HOLD_IDLE_MIN, OWNER_WAIT_MIN, WORKER_MODEL
+from agent.config import HANDOFF_IDLE_S, HOLD_IDLE_MIN, OWNER_WAIT_MIN, WORKER_MODEL
 from agent.db import Database
 from agent.graph import build_graph, run as run_graph
 from agent.hub import Hub
@@ -71,9 +71,10 @@ class JobRun:
 class JobManager:
     def __init__(self, db: Database, hub: Hub, device, model_factory, data_dir: str | Path = "data",
                  settle: float = 0.4, max_steps: int = 25, external_busy=None, vault: Vault | None = None,
-                 owner_wait_s: float = OWNER_WAIT_MIN * 60, hold_idle_s: float = HOLD_IDLE_MIN * 60, phone_retries: int = 1):
+                 owner_wait_s: float = OWNER_WAIT_MIN * 60, hold_idle_s: float = HOLD_IDLE_MIN * 60, phone_retries: int = 1, handoff_idle_s: float = HANDOFF_IDLE_S):
         self.db, self.hub, self.device, self.model_factory = db, hub, device, model_factory
         self.owner_wait_s, self.hold_idle_s, self.phone_retries = owner_wait_s, hold_idle_s, phone_retries
+        self.handoff_idle_s, self._input_at = handoff_idle_s, {}  # _input_at: when the owner last really touched or typed on each lane's phone
         self.data_dir, self.settle, self.max_steps = Path(data_dir), settle, max_steps
         self.external_busy = external_busy or (lambda: False)
         self.vault = vault
@@ -301,7 +302,7 @@ class JobManager:
 
     def owner_input(self, lane: str = "") -> None:
         """The owner just did something on this phone: control is not forgotten."""
-        self._hold_at[lane] = time.time()
+        self._hold_at[lane] = self._input_at[lane] = time.time()
 
     def _expire_hold(self, lane: str = "") -> None:
         """Owner control that is forgotten (no input for HOLD_IDLE_MIN) ends by itself, or every queued task would wait for ever."""
@@ -463,6 +464,12 @@ class JobManager:
         if jr.report in ("guide", "matrix", "plain"):
             cloudtools.snapshot(device, art)  # whatever the task changes in Settings is put back afterwards
         run_goal = jr.goal + REPORT_GOAL.get(jr.report, "")
+        try:  # what the owner told the bots earlier that bears on this task (their country for a phone number, say): the worker uses it instead of guessing or trying the default
+            facts = self.db.memory_search(jr.bot_id, jr.goal[:160])[:3]
+        except Exception:
+            facts = []
+        if facts:
+            run_goal += "\nOwner facts (from memory, use them instead of guessing): " + "; ".join(f[:200] for f in facts)
         trace = self.data_dir / "runs" / jr.job_id
         status, result, attempt = "failed", "", 0
         while True:
@@ -594,14 +601,44 @@ class JobManager:
         self.db.update_job(jr.job_id, status="waiting")
         self._set_status(jr, "Waiting for you")
         self._announce_queue()  # tasks queued behind this one now say they are waiting for the owner
-        if not jr.resume.wait(self.owner_wait_s):
-            self._expire(jr, item)
+        self._wait_for_owner(jr, item, watch_phone=(kind == "handoff"))
         jr.pending_item = None
         if not jr.cancel.is_set():
             self.db.update_job(jr.job_id, status="running")
             self._set_status(jr, "Working…")
             self._announce_queue()
         return jr.resume_value
+
+    def _wait_for_owner(self, jr: JobRun, item: dict, watch_phone: bool = False) -> None:
+        """Block until the card is answered. For a handover the owner does not have to press Done: if they touched or typed on the phone and then left it alone for
+        handoff_idle_s, the step counts as finished and the task goes on (the worker looks at the screen next, and hands over again if the step is not really done)."""
+        started, deadline = time.time(), time.time() + self.owner_wait_s
+        while True:
+            left = deadline - time.time()
+            if left <= 0:
+                self._expire(jr, item)
+                return
+            if jr.resume.wait(min(1.0, left)):
+                return
+            if watch_phone and not jr.cancel.is_set() and self._owner_finished(jr.lane, started):
+                self._finish_handoff(jr, item)
+                return
+
+    def _owner_finished(self, lane: str, since: float) -> bool:
+        touched = self._input_at.get(lane, 0.0)
+        return touched > since and time.time() - touched >= self.handoff_idle_s
+
+    def _finish_handoff(self, jr: JobRun, item: dict) -> None:
+        """The owner did their part on the phone and stopped: answer the handover card for them."""
+        if not self.resume(jr.job_id, {"done": True}):
+            return
+        self.db.close_item(item["id"], "answered", "Done (noticed)")
+        m = self.db.get_message(item["message_id"]) if item.get("message_id") else None
+        if m:
+            self.hub.publish(jr.bot_id, {"type": "message", "message": self.db.update_message(m["id"], meta={**m["meta"], "status": "answered", "answer": "Done (noticed)"})})
+        self.release_control(jr.lane)  # they are no longer driving the phone
+        self.orch.post(jr.bot_id, "I saw you finish on the phone and stop, so I'm continuing the task now.")
+        log.info("handoff finished by the owner (noticed) job=%s", jr.job_id)
 
     def _expire(self, jr: JobRun, item: dict) -> None:
         """The owner did not answer in time: close the card, stop the task and give the phone to the next one."""

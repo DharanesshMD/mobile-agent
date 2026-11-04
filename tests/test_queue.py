@@ -341,6 +341,29 @@ class ChatResumesHandoff(unittest.TestCase):
         self.assertIn("Cards waiting for the owner", spark.calls[1][0])  # the model was told a handoff was open
         self.assertIn("Continuing.", texts(c, bot, "assistant"))
 
+    def test_a_handoff_is_finished_by_itself_when_the_owner_touches_the_phone_and_stops(self):
+        spark = Spark(act(type="mobile_task", goal="sign in to the store", say="ok"))
+        c, _, bot, app = setup(spark, Worker(act(type="handoff", reason="enter your password"), act(type="done", answer="signed in")))
+        app.state.jobs.handoff_idle_s = 0.4
+        say(c, bot, "sign in")
+        until(lambda: open_card(c, bot))
+        time.sleep(1.6)  # nothing touched yet: the card keeps waiting
+        self.assertEqual(open_card(c, bot)["meta"]["status"], "open")
+        self.assertEqual(c.post("/api/device/tap", json={"fx": 0.5, "fy": 0.25}).status_code, 200)  # the owner does their part ...
+        until(lambda: statuses(c, bot) == {"sign in to the store": "done"})  # ... and stops: no Done press, no chat message
+        card = next(m for m in msgs(c, bot) if m["kind"] == "action_item")
+        self.assertEqual((card["meta"]["status"], card["meta"]["answer"]), ("answered", "Done (noticed)"))
+        self.assertTrue(any("finish on the phone" in t for t in texts(c, bot, "assistant")))
+
+    def test_pressing_done_still_works_and_other_cards_are_never_auto_answered(self):
+        c, _, bot, app = setup(Spark(act(type="mobile_task", goal="send it", say="ok")), Worker(act(type="ask", question="Send the message?")))
+        app.state.jobs.handoff_idle_s = 0.2
+        say(c, bot, "go")
+        until(lambda: open_card(c, bot))
+        c.post("/api/device/tap", json={"fx": 0.5, "fy": 0.25})
+        time.sleep(1.5)
+        self.assertEqual(open_card(c, bot)["meta"]["status"], "open")  # a confirmation needs its own click, whatever the owner did on the phone
+
     def test_chat_cannot_approve_a_confirmation(self):
         spark = Spark(act(type="mobile_task", goal="send the message", say="ok"), act(type="resume_task"))
         c, _, bot, _ = setup(spark, Worker(act(type="ask", question="Send the message?")))

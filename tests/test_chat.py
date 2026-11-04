@@ -211,6 +211,30 @@ class Jobs(unittest.TestCase):
         self.assertEqual(app.state.db.memory_search(bot, "city"), ["Owner said city: Mumbai"])
         self.assertNotIn("Mumbai", texts(c, bot, "user"))  # a worker answer is not replayed as a chat turn
 
+    def test_the_workers_suggested_answers_become_buttons_on_the_question(self):
+        spark = Spark(act(type="mobile_task", goal="sign in to WhatsApp", say="ok"),
+                      act(type="ask_user", kind="text", question="Which country is this number from?"), act(type="reply", text="signed in with India"))
+        worker = Worker(act(type="need_info", field="country", why="typed 9943082281, the screen says invalid for the US",
+                            options=["India (+91)", "United States (+1)"]), act(type="done", answer="ok"))
+        c, _, bot, app = setup(spark, worker)
+        say(c, bot, "log me into whatsapp")
+        card = until(lambda: open_card(c, bot))
+        self.assertEqual((card["meta"]["kind"], card["meta"]["options"]), ("choice", ["India (+91)", "United States (+1)"]))
+        self.assertIn("India (+91); United States (+1)", str(spark.calls[1]))  # the model that phrases the question saw the suggestions
+        c.post(f"/api/items/{card['meta']['item_id']}/answer", json={"choice": "India (+91)"})
+        until(lambda: "signed in with India" in texts(c, bot, "assistant"))
+        self.assertIn("owner provided country: India (+91)", worker.prompts[-1])
+
+    def test_what_the_owner_said_earlier_reaches_the_worker_as_owner_facts(self):
+        spark = Spark(act(type="mobile_task", goal="enter my phone number in the sign-up form", say="ok"), act(type="reply", text="entered it"))
+        worker = Worker(act(type="done", answer="ok"))
+        c, _, bot, app = setup(spark, worker)
+        app.state.db.memory_add(bot, "Owner said country for phone number: India (+91)")
+        say(c, bot, "enter my phone number in the sign-up form")
+        until(lambda: "entered it" in texts(c, bot, "assistant"))
+        self.assertIn("Owner facts", worker.prompts[0])
+        self.assertIn("India (+91)", worker.prompts[0])
+
     def test_otp_card_types_code_and_never_stores_it(self):
         spark = Spark(act(type="mobile_task", goal="sign in", say="ok"), act(type="reply", text="in"))
         c, phone, bot, app = setup(spark, Worker(act(type="request_otp", app="Gmail"), act(type="done", answer="ok")))
@@ -676,3 +700,23 @@ class Steering(unittest.TestCase):
         system = spark.calls[0][0]
         self.assertIn("No phone job is running", system)
         self.assertIn("failed: install the game", system)
+
+
+class StuckFinger(unittest.TestCase):
+    def test_a_failed_touch_event_makes_the_stream_lift_the_finger_when_it_ends(self):
+        c, phone, _, _ = setup(Spark())
+        released = []
+        phone.release_touch = lambda: released.append(1)
+
+        attempted = []
+
+        def flaky(kind, x, y):
+            attempted.append(kind)
+            if kind == "move":
+                raise RuntimeError("injection failed")
+        phone.touch = flaky
+        with c.websocket_connect("/api/device/touch") as ws:
+            ws.send_json({"t": "down", "fx": 0.5, "fy": 0.5})
+            ws.send_json({"t": "move", "fx": 0.5, "fy": 0.4})
+            until(lambda: "move" in attempted)  # the failing event was really processed before the stream ends
+        until(lambda: released)

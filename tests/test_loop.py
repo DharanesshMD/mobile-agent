@@ -103,6 +103,81 @@ class LoopTests(unittest.TestCase):
         self.assertNotIn("STOP: nothing has changed", model.calls[3])
         self.assertIn("STOP: nothing has changed", model.calls[5])  # after four
 
+    def test_a_rejection_after_typing_tells_the_worker_to_ask_the_owner_instead_of_guessing(self):
+        class Dev(FakeDevice):
+            def elements(self):
+                return [Element(0, "The phone number +1 (994) 308-2281 you entered is invalid for the country: United States", (540, 1000), False), Element(1, "OK", (540, 1400), True)]
+        model = FakeModel([reply(type="type", text="9943082281"), reply(type="tap", element=1), reply(type="done", answer="x")])
+        run("g", Dev([png(1), png(2), png(3), png(4)]), model, settle=0, max_steps=15)
+        self.assertNotIn("rejects what you entered", model.calls[0])   # before anything was typed
+        self.assertIn("rejects what you entered", model.calls[1])      # right after typing
+        self.assertIn('"need_info"', model.calls[1])
+        self.assertIn("invalid for the country", model.calls[1])
+
+    def test_the_same_submit_is_not_pressed_again_after_a_refusal_even_when_the_dialog_was_dismissed(self):
+        class Dev(FakeDevice):
+            def elements(self):
+                if self.i == 2:
+                    return [Element(0, "The number you entered is invalid for the country", (540, 1000), False), Element(1, "OK", (540, 1400), True)]
+                return [Element(0, "Next", (540, 2000), True), Element(1, "Cancel", (200, 2000), True)]
+        d = Dev([png(i) for i in range(1, 12)])
+        seen = []
+        model = FakeModel([reply(type="type", text="9943082281"), reply(type="tap", element=0),   # enter it, press Next: refused
+                           reply(type="tap", element=1),                                         # dismiss the dialog
+                           reply(type="tap", element=0),                                         # press Next again with the same input
+                           reply(type="done", answer="asked")])
+        res = run("g", d, model, settle=0, max_steps=15, handler=lambda p: seen.append(p) or {"value": "India"})
+        self.assertEqual(res.status, "done")
+        self.assertEqual(seen[0]["kind"], "need_info")
+        self.assertIn("invalid for the country", seen[0]["text"])
+        self.assertEqual(len(d.taps), 2)   # Next once and OK once: the second Next was never pressed
+
+    def test_not_found_on_a_page_nobody_typed_into_is_not_a_rejection(self):
+        from agent.loop import rejection
+        self.assertEqual(rejection([Element(0, "Page not found", (1, 1), False)], [{"type": "tap", "x": 1, "y": 2}]), "")
+        self.assertIn("Invalid", rejection([Element(0, "Invalid code", (1, 1), False)], [{"type": "type", "text": "1"}]))
+
+    def test_a_handover_about_a_verification_code_becomes_a_code_request(self):
+        seen = []
+        res = run("g", FakeDevice([png(1), png(2)]),
+                  FakeModel([reply(type="handoff", reason="The screen says to open WhatsApp on your other phone to get the 6-digit code"), reply(type="done", answer="in")]),
+                  settle=0, handler=lambda p: seen.append(p) or {"code": "482913"})
+        self.assertEqual(seen[0]["kind"], "request_otp")
+        self.assertEqual(res.status, "done")
+
+    def test_a_handover_about_an_empty_number_field_or_a_country_code_is_not_a_code_request(self):
+        for why in ("Phone number field is still empty after typing; the country code box shows +1", "Change the country code to 91 yourself"):
+            seen = []
+            run("g", FakeDevice([png(1), png(2)]), FakeModel([reply(type="handoff", reason=why), reply(type="done", answer="in")]),
+                settle=0, handler=lambda p: seen.append(p) or {"done": True})
+            self.assertEqual(seen[0]["kind"], "handoff", why)
+
+    def test_a_code_request_waits_until_a_field_has_focus(self):
+        class Dev(FakeDevice):
+            keyboard_open = False
+        seen = []
+        d = Dev([png(i) for i in range(1, 6)])
+        model = FakeModel([reply(type="request_otp", app="WhatsApp"), reply(type="request_otp", app="WhatsApp"), reply(type="done", answer="in")])
+        res = run("g", d, model, settle=0, handler=lambda p: seen.append(p) or {"code": "482913"})
+        self.assertEqual(res.status, "done")
+        self.assertIn("no keyboard is open", model.calls[1])   # told once to tap the code field first
+        self.assertEqual(len(seen), 1)                         # the second request went through (the worker may have no field to focus)
+
+    def test_a_handover_for_a_password_stays_a_handover(self):
+        seen = []
+        run("g", FakeDevice([png(1), png(2)]), FakeModel([reply(type="handoff", reason="Enter your password and the verification code"), reply(type="done", answer="in")]),
+            settle=0, handler=lambda p: seen.append(p) or {"done": True})
+        self.assertEqual(seen[0]["kind"], "handoff")
+
+    def test_type_with_clear_empties_the_field_first(self):
+        class Dev(FakeDevice):
+            def clear_field(self):
+                self.cleared = True
+        d = Dev([png(1), png(2)])
+        run("g", d, FakeModel([reply(type="type", text="91", clear=True), reply(type="done", answer="ok")]), settle=0)
+        self.assertTrue(d.cleared)
+        self.assertEqual(d.typed, ["91"])
+
     def test_bouncing_between_two_controls_is_called_out(self):
         bounce = [reply(type="tap", element=0) if i % 2 == 0 else reply(type="tap", x=300, y=50) for i in range(6)]
         model = FakeModel(bounce + [reply(type="done", answer="ok")])

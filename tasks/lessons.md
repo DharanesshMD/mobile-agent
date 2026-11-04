@@ -110,3 +110,12 @@ I ran `git stash` in a command chain as if it were a read-only check; it put eve
 
 ## 23. A tap that does nothing means the thing is not tappable, and a loop needs an exit
 Hero B's calendar task burned three 25-step jobs tapping Google Calendar's "30 minutes before" row, which is a plain label (the working controls are its X and "Add notification"). The "screen has not changed" warning was ignored for 17 steps, and a later take bounced between the start and end time pickers instead. Fixes (loop.py, graph.py): name the dead spot in the prompt, stop the job after 8 unchanged input actions, flag A-B-A-B tapping, tell the worker to finish the main goal and report what it could not set, and prefer re-running the `insert_event` intent over the clock-dial pickers. When a worker stalls, read data/logs/jobs.log and the step PNGs in data/runs/<job> first; check that `adb` is on the PATH of any service you start by hand.
+
+## 24. Never repeat an input the screen refused; ask the owner, with options
+WhatsApp said the number was invalid for the US and the agent pressed Next again, several times, on the owner's real number. The owner had to stop it. Now the rejection is remembered (with the button that submitted it), a repeat press is turned into `need_info` with suggested answers, the owner's earlier answers reach the worker as "Owner facts" (country first, so the default country is never tried), and a code request waits until a field has focus. Test a flow with a real account only when a failed attempt is cheap, and cap attempts.
+
+## 25. Some apps ignore injected input; use what a person uses
+WhatsApp's sign-up ignores `adb input` taps, key events, `input text` and uiautomator2 typing (virtual input device), but accepts touches through the emulator console and digits tapped on the on-screen keyboard. Probe an app with one harmless dummy action before blaming the agent, and read data/logs/jobs.log and data/runs/<job> first. A finger left "down" by a dropped up-event makes the whole phone ignore touches: lift it with release_touch.
+
+## 26. A code can be shown on the owner's phone, not only texted
+The relay reads the visible text of the connected phone (never stored, never shown to a model) and still needs the owner's one click per code. Handover reasons that mention a "country code" or an empty field are not code requests.
