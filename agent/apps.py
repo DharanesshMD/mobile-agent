@@ -64,7 +64,7 @@ from zoneinfo import ZoneInfo
 INTENT_KINDS = {
     "set_alarm": "hour, minute, label?", "set_timer": "seconds, label?", "dial": "number",
     "compose_sms": "number, body", "compose_email": "to, subject, body", "insert_contact": "name, phone, email?",
-    "insert_event": "title, start 'YYYY-MM-DD HH:MM' (phone time zone), minutes?, location?", "maps_search": "query",
+    "insert_event": "title, start 'YYYY-MM-DD HH:MM' (phone time zone), minutes?, location?, description?", "maps_search": "query",
     "navigate": "destination", "share_text": "text", "camera": "",
 }
 PHONE_RE = re.compile(r"^\+?\(?[0-9][0-9 ()\-]{2,20}$")
@@ -159,7 +159,11 @@ def build_intent(kind: str, p: dict, tz: str = "UTC") -> tuple[list[str], str]:
         loc = _text(p, "location", 200, required=False)
         if loc:
             args += _es("eventLocation", loc)
-        return args, f"calendar event form opened and filled in for {start}; tap Save (a first-run screen may appear first)"
+        desc = _text(p, "description", 1000, required=False)
+        if desc:
+            args += _es("description", desc)
+        return args, (f"calendar event form opened and filled in for {start}; the title field has focus and the keyboard is up: press back once, "
+                      "check the fields, ask the owner to confirm, then tap Save (a first-run screen may appear first)")
     if kind == "maps_search":
         return ["-a", A + "VIEW", "-d", shlex.quote("geo:0,0?q=" + quote(_text(p, "query", 200)))], "Maps opened with the search"
     if kind == "navigate":

@@ -25,7 +25,7 @@ Reply with ONLY one JSON object: {"thought": "<one short sentence>", "action": {
   {"type":"intent","kind":"set_alarm|set_timer|dial|compose_sms|compose_email|insert_contact|insert_event|maps_search|navigate|share_text|camera", ...}
                                            do it without tapping through the app. Fields by kind: set_alarm hour (0-23), minute, label?; set_timer seconds, label?;
                                            dial number; compose_sms number, body; compose_email to, subject, body; insert_contact name, phone, email?;
-                                           insert_event title, start "YYYY-MM-DD HH:MM", minutes?, location?; maps_search query; navigate destination; share_text text
+                                           insert_event title, start "YYYY-MM-DD HH:MM", minutes?, location?, description?; maps_search query; navigate destination; share_text text
   {"type":"open_settings","page":"wifi|bluetooth|display|sound|battery|apps|storage|location|security|privacy|accounts|add_account|date_time|language|keyboard|accessibility|airplane_mode|nfc|network|data_usage|notifications|do_not_disturb|about_phone|developer_options|default_apps"}
                                            jump straight to a Settings page (much faster than hunting through menus)
   {"type":"rotate","orientation":"landscape|portrait"}   turn the screen; apps that force landscape (games) rotate by themselves, use this for the rest, and turn back to portrait when you are done
@@ -60,6 +60,10 @@ exact toggle or row. If the screen did not change after an action, try a
 different approach instead of repeating it. Prefer element ids over coordinates. If a value you need is not
 visible, the row that names it (for example "Android version") often opens a detail screen: tap it instead of
 scrolling back and forth.
+Main goal first, extras last: do the part the owner asked for (create, send, set) before optional details such as a reminder, description or colour, and give any one detail at most two tries.
+If a tap does nothing, that thing is not tappable: do not tap it again. Look in the element list for a [clickable] control next to it (a remove or X button, an add button, an arrow) and use that.
+If a detail still cannot be set, save or finish the main goal anyway, then finish with "done" saying exactly what could not be set. Never spend more than a few actions on one detail.
+Calendar event form: after the insert_event intent the title field has focus and the keyboard covers the lower rows, so press "back" once to hide the keyboard before scrolling. Check the title, date, time and place on screen (if a time or date picker is open, set the value and press OK first: never ask or save with a picker or dialog open), then "ask" the owner to confirm in one sentence (what, when, where, reminder) before you tap Save. To change the title, date, time, length or place, do NOT use the date or time pickers (a clock dial is slow and unreliable to tap): press back until the form closes (discard the draft if asked), then run insert_event again with the corrected values. The reminder row ("30 minutes before") is NOT tappable: tap its X ("Remove notification"), then "Add notification", then choose the option the owner asked for.
 In a game or any app with no listed elements, work from the screenshot. Do exactly what the goal asks and no more: when it asks for a few moves, one level or
 one action, count what you have done, stop at that number and finish with "done", describing what the screen shows (what you see, any numbers or text you can read).
 Do not keep exploring after the goal is met.
@@ -114,6 +118,38 @@ def oscillating(acts: list[dict]) -> bool:
     return d[0] == d[2] and d[1] == d[3] and d[0] != d[1]
 
 
+DEAD_TAP_RADIUS = 60  # screenshot pixels: two taps this close are the same spot
+STUCK_HINT_AT = 4     # unchanged actions before the prompt tells the worker to give up on the detail and finish
+STUCK_LIMIT = 8       # unchanged actions in a row: stop instead of burning the whole step budget on a dead screen
+
+
+def dead_tap(acts: list[dict], unchanged: int) -> str:
+    """Describe the spot the worker keeps tapping without any effect ('' when there is none): the same element id, or coordinates within DEAD_TAP_RADIUS."""
+    taps = [a for a in acts[-max(unchanged, 0):] if a.get("type") == "tap"] if unchanged >= 2 else []
+    if len(taps) < 2:
+        return ""
+    last = taps[-1]
+    for a in taps[:-1]:
+        if "element" in last and a.get("element") == last["element"]:
+            return f"element {last['element']}"
+        if "x" in last and "x" in a and abs(float(a["x"]) - float(last["x"])) <= DEAD_TAP_RADIUS and abs(float(a["y"]) - float(last["y"])) <= DEAD_TAP_RADIUS:
+            return f"({round(float(last['x']))},{round(float(last['y']))})"
+    return ""
+
+
+def ping_pong(acts: list[dict], unchanged: int = 0) -> bool:
+    """True when the last six taps bounce between two spots (A, B, A, B, A, B): the screen changes every time, so it is not 'unchanged', but nothing progresses."""
+    taps = acts[-6:]
+    if len(taps) < 6 or any(a.get("type") != "tap" for a in taps):
+        return False
+
+    def spot(a):
+        return ("e", a["element"]) if "element" in a else ("xy", round(float(a["x"]) / DEAD_TAP_RADIUS), round(float(a["y"]) / DEAD_TAP_RADIUS))
+
+    pts = [spot(a) for a in taps]
+    return pts[0] == pts[2] == pts[4] and pts[1] == pts[3] == pts[5] and pts[0] != pts[1]
+
+
 def need_image(mode: str, step: int, elements, unchanged: int, acts: list[dict], history: list[str]) -> bool:
     """Whether to attach the screenshot this turn. Adaptive: look when the text view is likely not enough."""
     if mode == "always":
@@ -143,6 +179,16 @@ def build_prompt(goal: str, history: list[str], elements, scale: float, unchange
                         for e in elements) or "(UI element list unavailable right now: use screenshot coordinates)"
     waiting = bool(acts) and acts[-1]["type"] == "wait"  # an unchanged screen while waiting is expected
     hint = f"\nWARNING: the screen has not changed for {unchanged} action(s); change approach." if unchanged and not waiting else ""
+    spot = dead_tap(acts, unchanged)
+    if spot and not waiting:
+        hint += (f"\nWARNING: tapping {spot} changed nothing {unchanged} times, so it is NOT tappable. Do not tap it again. "
+                 "Tap a nearby [clickable] control (a remove/X, add or arrow button) instead, or skip this detail.")
+    if unchanged >= STUCK_HINT_AT and not waiting:
+        hint += ("\nSTOP: nothing has changed for several actions. Give up on this detail now: if the main goal is otherwise done, "
+                 'save or finish it and answer with "done" saying exactly what you could not set; if not, use "fail" with the reason.')
+    if ping_pong(acts):
+        hint += ("\nWARNING: you keep tapping the same two controls one after the other and nothing improves. Stop: use a different route "
+                 '(for example an "intent", or press back and start that part again), or finish the main goal and say what you could not do.')
     if oscillating(acts):
         hint += ("\nWARNING: you keep scrolling up and down without progress. Stop scrolling; tap a row that "
                  "could open the detail you need, or use the search field.")

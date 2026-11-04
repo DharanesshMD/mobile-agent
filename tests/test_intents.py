@@ -55,6 +55,11 @@ class Builder(unittest.TestCase):
         args, _ = build_intent("insert_event", dict(title="x", start="2026-10-29 15:00"), "UTC")
         self.assertNotEqual(int(args[args.index("beginTime") + 1]), want)  # different zone, different instant
 
+    def test_event_description_and_keyboard_hint(self):
+        e, note = parsed("insert_event", title="Market", start="2026-11-21 19:00", location="Park", description="Food, music. Free entry")
+        self.assertEqual(e[e.index("description") + 1], "Food, music. Free entry")
+        self.assertIn("press back once", note)
+
     def test_validation_gives_helpful_errors(self):
         bad = [("set_alarm", dict(hour=24, minute=0), "between 0 and 23"), ("set_alarm", dict(hour="x", minute=0), "whole number"),
                ("set_timer", dict(seconds=0), "between 1"), ("dial", dict(number="abc"), "not a phone number"),

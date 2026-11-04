@@ -107,3 +107,6 @@ Recording one use case after another, I reset the history (stop, wipe, restart) 
 
 ## 23. Never probe with a command that changes state
 I ran `git stash` in a command chain as if it were a read-only check; it put every uncommitted change away until I popped it. Use `git status` / `git stash list` to look, never a state-changing command. Also: a change to which bots the sidebar lists must be checked against the tests that read the list (the A2A management test).
+
+## 23. A tap that does nothing means the thing is not tappable, and a loop needs an exit
+Hero B's calendar task burned three 25-step jobs tapping Google Calendar's "30 minutes before" row, which is a plain label (the working controls are its X and "Add notification"). The "screen has not changed" warning was ignored for 17 steps, and a later take bounced between the start and end time pickers instead. Fixes (loop.py, graph.py): name the dead spot in the prompt, stop the job after 8 unchanged input actions, flag A-B-A-B tapping, tell the worker to finish the main goal and report what it could not set, and prefer re-running the `insert_event` intent over the clock-dial pickers. When a worker stalls, read data/logs/jobs.log and the step PNGs in data/runs/<job> first; check that `adb` is on the PATH of any service you start by hand.

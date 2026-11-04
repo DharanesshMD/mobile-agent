@@ -23,7 +23,7 @@ from agent import cloudtools, gamepolicy
 from agent.device import Element
 from agent.config import IMAGE_MODE, IMAGE_WIDTH
 from agent.config import CRASH_LIMIT, MAX_JOB_MINUTES, MAX_WAIT_S
-from agent.loop import ANIMATED_AFTER, ANIMATED_SAME, GATES, build_prompt, coarse, coarse_diff, execute, need_image, parse_action, shrink, system_prompt
+from agent.loop import ANIMATED_AFTER, ANIMATED_SAME, GATES, STUCK_LIMIT, build_prompt, coarse, coarse_diff, execute, need_image, parse_action, shrink, system_prompt
 from agent.loop import settle as settle_screen
 
 
@@ -146,6 +146,9 @@ def observe(state: State, config: RunnableConfig) -> dict:
     if not same and getattr(dev, "unsettled", 0) >= ANIMATED_AFTER and state.get("last_sig"):
         same = coarse_diff(sig, state["last_sig"]) <= ANIMATED_SAME  # a game animates all the time, so no two frames are identical: judge the picture, not the bytes
     unchanged = state.get("unchanged", 0) + 1 if same else 0
+    last_act = (state.get("acts") or [{}])[-1].get("type")
+    if unchanged >= STUCK_LIMIT and last_act in ("tap", "scroll", "swipe", "key", "type"):  # inputs that should change the screen, and did not
+        return {"status": "failed", "answer": f"The phone's screen did not change for {unchanged} actions in a row, so I stopped instead of repeating them. Those taps changed nothing."}
     # The image width is the portrait width; in landscape keep the same short side so the picture is not tiny.
     small, scale = shrink(png, c["image_width"] if h0 >= w0 else round(c["image_width"] * w0 / h0))
     step = state.get("step", 0) + 1

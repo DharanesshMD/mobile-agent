@@ -92,6 +92,36 @@ class LoopTests(unittest.TestCase):
         self.assertNotIn("keep scrolling", model.calls[3])
         self.assertIn("keep scrolling", model.calls[4])
 
+    def test_a_dead_tap_is_named_and_the_worker_is_told_to_give_up_on_the_detail(self):
+        taps = [reply(type="tap", x=180, y=700 + i) for i in range(5)]  # the same spot, the screen never changes
+        model = FakeModel(taps + [reply(type="done", answer="saved, reminder not set")])
+        res = run("g", FakeDevice([png(1)]), model, settle=0, max_steps=15)
+        self.assertEqual(res.status, "done")
+        self.assertNotIn("NOT tappable", model.calls[1])
+        self.assertIn("NOT tappable", model.calls[3])      # after two unanswered taps on the same spot
+        self.assertIn("clickable", model.calls[3])
+        self.assertNotIn("STOP: nothing has changed", model.calls[3])
+        self.assertIn("STOP: nothing has changed", model.calls[5])  # after four
+
+    def test_bouncing_between_two_controls_is_called_out(self):
+        bounce = [reply(type="tap", element=0) if i % 2 == 0 else reply(type="tap", x=300, y=50) for i in range(6)]
+        model = FakeModel(bounce + [reply(type="done", answer="ok")])
+        run("g", FakeDevice([png(i) for i in range(1, 10)]), model, settle=0, max_steps=15)  # the screen changes every time
+        self.assertNotIn("one after the other", model.calls[5])
+        self.assertIn("one after the other", model.calls[6])
+
+    def test_a_screen_that_never_responds_stops_the_job_early(self):
+        model = FakeModel([reply(type="tap", x=10 + i * 90, y=100) for i in range(30)])
+        res = run("g", FakeDevice([png(1)]), model, settle=0, max_steps=25)
+        self.assertEqual(res.status, "failed")
+        self.assertIn("did not change", res.answer)
+        self.assertLess(len(model.calls), 12)  # not the whole budget
+
+    def test_waiting_on_an_unchanged_screen_is_not_stuck(self):
+        model = FakeModel([reply(type="wait", seconds=1) for _ in range(10)] + [reply(type="done", answer="ok")])
+        res = run("g", FakeDevice([png(1)]), model, settle=0, max_steps=25)
+        self.assertEqual(res.status, "done")
+
     def test_ask_resumes_when_approved_and_ends_when_denied(self):
         ask = reply(type="ask", question="Send it?")
         ok = run("g", FakeDevice([png(1), png(2)]), FakeModel([ask, reply(type="done", answer="sent")]), settle=0,
