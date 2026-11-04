@@ -75,6 +75,11 @@ def migrate_phone_names(db: Database, device_names: dict[str, str] | None = None
         db.rename_bot(b["id"], new, PHONE_PERSONA)
         db._x("insert or ignore into names_reverted(bot_id, at) values(?,?)", (b["id"], time.time()))
         out.append(new)
+    for b in db.list_bots():  # a phone bot still named by its model code ("2107113SI") gets the name people know it by ("Xiaomi 11T Pro")
+        if b["kind"] == "phone" and names.market_name(b["name"]) != b["name"].strip():
+            new = unique_phone_name(db, names.market_name(b["name"]), b["id"])
+            db.rename_bot(b["id"], new, PHONE_PERSONA)
+            out.append(new)
     for n in out:
         audit("phone bot renamed", to=n)
     relabeled = 0
@@ -98,7 +103,7 @@ def unique_phone_name(db: Database, name: str, own_id: str = "") -> str:
 
 def phone_name(info: dict) -> str:
     """A friendly bot name for a phone: the device name unless it is a raw model string (`sdk_gphone64_arm64`), then "My phone"."""
-    name = str(info.get("name") or info.get("model") or "").strip()[:40]
+    name = names.market_name(str(info.get("name") or info.get("model") or "").strip())[:40]
     return "My phone" if not name or RAW_MODEL_NAME.search(name) else name
 
 

@@ -19,6 +19,14 @@ def is_blank(img) -> bool:
     return img.convert("L").crop((0, int(h * 0.08), w, int(h * 0.92))).resize((16, 32)).getextrema()[1] <= 4
 
 
+class InstallError(ValueError):
+    """Android refused to install an app. `code` is its INSTALL_FAILED_... reason when adb printed one."""
+
+    def __init__(self, code: str, detail: str = ""):
+        super().__init__(f"install failed: {code or detail}")
+        self.code, self.detail = code, detail
+
+
 @dataclass
 class Element:
     id: int
@@ -281,8 +289,15 @@ class Device:
         self._run("shell", "input", "swipe", *map(str, (x1, y1, x2, y2, ms)))
 
     def type_text(self, text: str) -> None:
-        """Appends to the focused field. uiautomator2 is about 4x faster than `adb input text`, bypasses keyboard autocorrect and
-        suggestions, and handles non-ASCII text (Tamil, accents); adb is the fallback."""
+        """Appends to the focused field. Plain ASCII goes through Android's own `input text`, key by key: it never touches the clipboard, so an app that blocks
+        paste (WhatsApp's number screen does) or a clipboard preview on screen cannot get in the way. Anything else (Tamil, accents) needs uiautomator2, which
+        handles non-ASCII text; it is also the fallback if `input text` fails."""
+        if text.isascii():
+            try:
+                self._run("shell", "input", "text", shlex.quote(text.replace(" ", "%s")))
+                return
+            except subprocess.CalledProcessError:
+                pass
         d = self._u2_device()
         if d is not None:
             try:
@@ -291,6 +306,19 @@ class Device:
             except Exception:
                 pass
         self._run("shell", "input", "text", shlex.quote(text.replace(" ", "%s")))
+
+    def type_private(self, text: str) -> None:
+        """Types a secret (a password, a number, a code) key by key through Android's own input command, never through the clipboard: the clipboard shows a
+        preview of the text on screen (where the model could read it), is readable by other apps, and keeps the text afterwards. Text that is not plain
+        ASCII has no such path, so it falls back to `type_text` and the clipboard is emptied after."""
+        if text.isascii():
+            self._run("shell", "input", "text", shlex.quote(text.replace(" ", "%s")))
+            return
+        self.type_text(text)  # not ASCII: uiautomator2's clipboard path
+        try:
+            self._run("shell", "cmd", "clipboard", "set", "text", "")
+        except Exception:
+            pass
 
     def key(self, name: str) -> None:
         self._run("shell", "input", "keyevent", name)
@@ -423,9 +451,14 @@ class Device:
 
     def install_apks(self, paths: list[str]) -> None:
         """Install an app from its APK files (a base APK plus splits go in together), replacing an older copy. Only the app, never anyone's data."""
-        out = self._run("install-multiple", "-r", *map(str, paths), timeout=300).decode(errors="replace")
+        try:
+            out = self._run("install-multiple", "-r", *map(str, paths), timeout=300).decode(errors="replace")
+        except subprocess.CalledProcessError as e:  # adb prints the reason ("INSTALL_FAILED_...") and exits non-zero
+            text = ((e.stdout or b"") + (e.stderr or b"")).decode(errors="replace")
+            code = re.search(r"INSTALL_[A-Z_]+", text)
+            raise InstallError(code.group(0) if code else "", text.strip()[-200:]) from e
         if "Success" not in out:
-            raise ValueError("install failed: " + out.strip()[-200:])
+            raise InstallError("", out.strip()[-200:])
 
     def foreground(self) -> str:
         """Package name of the app in front."""

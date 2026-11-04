@@ -14,6 +14,7 @@ from typing import Any
 from PIL import Image
 
 from agent.device import Element
+from agent.names import market_name
 
 CALL_TIMEOUT = 40  # a screenshot or a UI tree on a busy phone can take a few seconds
 RECONNECT_GRACE_S = 20  # a phone that just dropped usually reconnects within seconds (Wi-Fi to mobile data, a sleeping radio)
@@ -74,7 +75,7 @@ class PhoneHub:
         return max(self.links.values(), key=lambda link: link.since).id if self.links else None
 
     def listing(self) -> list[dict]:
-        return [{"id": link.id, **{k: link.info.get(k) for k in ("name", "model", "sdk", "size")}, "since": link.since, "via": link.via} for link in self.links.values()]
+        return [{"id": link.id, **{k: link.info.get(k) for k in ("name", "model", "sdk", "size")}, "name": market_name(str(link.info.get("name") or link.info.get("model") or "")) or None, "since": link.since, "via": link.via} for link in self.links.values()]  # named the way people know the phone ("Xiaomi 11T Pro"), not by its model code
 
     def kick(self, phone_id: str) -> bool:
         """Close one phone's socket (it was revoked, or the owner disconnected it)."""

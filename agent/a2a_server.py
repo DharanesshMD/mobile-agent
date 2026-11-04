@@ -28,6 +28,7 @@ from agent.gateway import Listener, lan_address
 
 MAX_BODY = 60 * 1024 * 1024  # base64 of 40 MB of files plus text
 MAX_STREAMS_PER_CLIENT = 5
+KEEPALIVE_S = 15  # an open stream with nothing to say sends a comment line this often
 PUSH_TRIES = 3
 SECURITY = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store"}
 INLINE_TYPES = {"image/png", "image/jpeg", "image/webp", "text/plain", "application/json"}
@@ -224,9 +225,32 @@ def build_app(svc: Service, base_url=lambda request: "") -> FastAPI:
         token = object()
 
         def frames():
+            """The events as they come, plus a comment line every KEEPALIVE_S while nothing happens (a phone task can be quiet for minutes, and a client or proxy
+            that sees no bytes gives up: the caller's read timeout, a load balancer's idle timeout)."""
             svc.streams[client["id"]].append(token)
+            box: queue.Queue = queue.Queue()
+            done = object()
+
+            def pump():
+                try:
+                    for item in out:
+                        box.put(item)
+                except Exception as e:  # the iterator ended badly: say so to the loop below, which closes the stream
+                    box.put(e)
+                finally:
+                    box.put(done)
+
+            threading.Thread(target=pump, daemon=True, name="a2a-sse").start()
             try:
-                for seq, frame in out:
+                while True:
+                    try:
+                        item = box.get(timeout=KEEPALIVE_S)
+                    except queue.Empty:
+                        yield ": keepalive\n\n"
+                        continue
+                    if item is done or isinstance(item, Exception):
+                        break
+                    seq, frame = item
                     yield (f"id: {seq}\n" if seq is not None else "") + f"data: {json.dumps(frame, ensure_ascii=False)}\n\n"
             finally:
                 svc.streams[client["id"]].remove(token)

@@ -39,7 +39,7 @@ class Client:
             h["Content-Type"] = "application/json"
         if self.token:
             h["Authorization"] = f"Bearer {self.token}"
-        return urllib.request.urlopen(urllib.request.Request(self.url + path, data=data, method=method or ("POST" if data is not None else "GET"), headers=h), timeout=120)
+        return urllib.request.urlopen(urllib.request.Request(self.url + path, data=data, method=method or ("POST" if data is not None else "GET"), headers=h), timeout=180)
 
     def card(self) -> dict:
         with self._req("/.well-known/agent-card.json" + ("?version=0.3" if self.v03 else "")) as r:
@@ -85,15 +85,30 @@ class Client:
     def stream(self, parts: list, **extra):
         self.n += 1
         body = {"jsonrpc": "2.0", "id": self.n, "method": self.methods()["stream"], "params": {"message": self.message(parts, **extra)}}
-        with self._req("/a2a", body, accept="text/event-stream") as r:
-            data = []
-            for raw in r:
-                line = raw.decode().rstrip("\n")
-                if line.startswith("data:"):
-                    data.append(line[5:].lstrip())
-                elif not line and data:
-                    yield json.loads("\n".join(data))["result"]
-                    data = []
+        task_id = None
+        try:
+            with self._req("/a2a", body, accept="text/event-stream") as r:
+                data = []
+                for raw in r:  # lines starting with ":" are the server's keepalive comments
+                    line = raw.decode().rstrip("\n")
+                    if line.startswith("data:"):
+                        data.append(line[5:].lstrip())
+                    elif not line and data:
+                        ev = json.loads("\n".join(data))["result"]
+                        task_id = task_id or (ev.get("task") or ev.get("statusUpdate") or ev.get("artifactUpdate") or {}).get("id") or (ev.get("statusUpdate") or ev.get("artifactUpdate") or {}).get("taskId")
+                        yield ev
+                        data = []
+        except (TimeoutError, OSError):  # the stream dropped: keep following the task by asking for it
+            if not task_id:
+                raise
+            end = time.time() + 600
+            task = self.rpc("get", {"id": task_id})
+            while task["status"]["state"] not in DONE | PAUSED and time.time() < end:
+                time.sleep(2)
+                task = self.rpc("get", {"id": task_id})
+            yield {"statusUpdate": {"taskId": task_id, "status": task["status"]}}
+            for a in task.get("artifacts", []):
+                yield {"artifactUpdate": {"taskId": task_id, "artifact": a}}
 
 
 def file_part(path: str) -> dict:
@@ -118,6 +133,27 @@ def show_task(t: dict, out) -> None:
             else:
                 f = p.get("file", p)
                 print(f"  [{a['artifactId']}] file {f.get('filename') or f.get('name')} ({f.get('mediaType') or f.get('mimeType')}): {f.get('url') or f.get('uri')}", file=out)
+
+
+def describe_event(ev: dict) -> str:
+    """One readable line for a streamed event (the raw JSON is still there with --json). Events that say nothing new return an empty line."""
+    if "task" in ev:
+        t = ev["task"]
+        return f"task {t.get('id', '')[:8]} {t.get('status', {}).get('state', '').replace('TASK_STATE_', '').lower()}"
+    if "statusUpdate" in ev:
+        st = ev["statusUpdate"].get("status", {})
+        msg = " ".join(p.get("text", "") for p in (st.get("message") or {}).get("parts", []))
+        return f"state {st.get('state', '').replace('TASK_STATE_', '').lower()}" + (f": {msg[:110]}" if msg else "")
+    if "artifactUpdate" in ev:
+        a = ev["artifactUpdate"].get("artifact", {})
+        parts = a.get("parts", [])
+        text = next((p["text"] for p in parts if "text" in p), "")
+        data = next((p["data"] for p in parts if "data" in p), None)
+        detail = text[:90] if text else (json.dumps(data, ensure_ascii=False)[:90] if data else (f"{len(parts)} file(s)" if parts else ""))
+        return f"artifact {a.get('name') or a.get('artifactId', '')}" + (f": {detail}" if detail else "")
+    if "message" in ev:
+        return "reply " + " ".join(p.get("text", "") for p in ev["message"].get("parts", []))[:120]
+    return json.dumps(ev, ensure_ascii=False)[:160]
 
 
 def main(argv=None, out=sys.stdout) -> int:
@@ -177,8 +213,15 @@ def main(argv=None, out=sys.stdout) -> int:
         else:
             parts = [{"data": {"skill": "store-context", "text": a.text, **({"title": a.title} if a.title else {})}}]
         if a.cmd == "send" and a.stream:
+            last = ""
             for ev in c.stream(parts, **extra):
-                (emit if a.json else lambda e: print(json.dumps(e, ensure_ascii=False)[:400], file=out))(ev)
+                if a.json:
+                    emit(ev)
+                    continue
+                line = describe_event(ev)
+                if line and line != last:  # a status that repeats itself is printed once
+                    print(line, file=out, flush=True)
+                last = line
         else:
             task = c.send(parts, getattr(a, "wait", 120), **extra)
             emit(task) if a.json else show_task(task, out)

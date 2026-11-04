@@ -72,9 +72,11 @@ def register_chat(app: FastAPI, auth, db, hub, jobs, orch, vault, scheduler) -> 
         return b
 
     def bot_listed(b: dict) -> bool:
-        """The sidebar starts with the master bot alone. A phone's bot appears when its phone is working or connected (or once it has been used); the owner makes every other bot."""
+        """The sidebar starts with the master bot alone. A phone's bot appears when its phone is working or connected, and an A2A caller's bot once that agent has sent something (or once the owner has used either); the owner makes every other bot."""
         if b["kind"] == "phone":
             return bool(jobs.phones and jobs.phones.online(b["phone_id"])) or db.has_activity(b["id"])
+        if b["kind"] == "agent":  # an A2A caller's bot appears once that agent has actually sent something
+            return db.has_activity(b["id"])
         if b["kind"] == "virtual" and b["phone_id"] == "games":
             pair = (getattr(jobs, "virtuals", None) or {}).get("games")
             return bool(pair and pair[1].power in ("on", "waking")) or db.has_activity(b["id"])

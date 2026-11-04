@@ -32,9 +32,9 @@ class Builder(unittest.TestCase):
         self.assertIn("not sent", note)
 
     def test_contact_email_event_maps_share(self):
-        c, _ = parsed("insert_contact", name="Asha Raman", phone="+91 99430 82281", email="a@x.com")
+        c, _ = parsed("insert_contact", name="Asha Raman", phone="+91 98765 43210", email="a@x.com")
         self.assertEqual(c[c.index("name") + 1], "Asha Raman")
-        self.assertEqual(c[c.index("phone") + 1], "+919943082281")
+        self.assertEqual(c[c.index("phone") + 1], "+919876543210")
         e, _ = parsed("compose_email", to="a@x.com", subject="Hi there", body="Line one")
         self.assertEqual(e[e.index("-d") + 1], "mailto:a@x.com")
         m, _ = parsed("maps_search", query="Chennai Airport & cafes")

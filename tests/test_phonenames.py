@@ -70,8 +70,8 @@ class Sweep(unittest.TestCase):
         master.ensure_games_bot(db, None)
         one = master.ensure_phone_bot(db, None, "p1", {"name": "2107113SI", "model": "2107113SI"})
         two = master.ensure_phone_bot(db, None, "p2", {"name": "Pixel 8"})
-        self.assertEqual((one["name"], two["name"]), ("2107113SI", "Pixel 8"))  # a connected phone is named after the device
-        self.assertEqual(master.ensure_phone_bot(db, None, "p1", {})["name"], "2107113SI")  # once per phone
+        self.assertEqual((one["name"], two["name"]), ("Xiaomi 11T Pro", "Pixel 8"))  # a connected phone is named after the device, by the name people know it by
+        self.assertEqual(master.ensure_phone_bot(db, None, "p1", {})["name"], "Xiaomi 11T Pro")  # once per phone
         three = master.ensure_phone_bot(db, None, "p3", {"name": "Pixel 8"})
         self.assertEqual(three["name"], "Pixel 8 2")  # two phones never share a name
         self.assertEqual(master.ensure_phone_bot(db, None, "p4", {"name": "Phone 2"})["name"], "Phone 2 2")  # and never take the fixed names
@@ -117,16 +117,27 @@ class Migration(unittest.TestCase):
         games = db.create_bot("Cloud phone 2", "old persona", kind="virtual", phone_id="games")
         numbered = db.create_bot("Phone 3", "p", kind="phone", phone_id="d1")  # an earlier version numbered connected phones
         mine = db.create_bot("Dad's phone", "p", kind="phone", phone_id="d2")  # chosen by the owner
-        model = db.create_bot("2107113SI", "p", kind="phone", phone_id="d3")  # already right
-        out = master.migrate_phone_names(db, {"d1": "2107113SI", "d2": "Pixel 7", "d3": "2107113SI"})
-        self.assertEqual(sorted(out), ["2107113SI 2", "Phone 2"])  # d3 already carries the name, so d1 gets the next free one
+        model = db.create_bot("Pixel 7a", "p", kind="phone", phone_id="d3")  # already right
+        out = master.migrate_phone_names(db, {"d1": "Pixel 7a", "d2": "Pixel 7", "d3": "Pixel 7a"})
+        self.assertEqual(sorted(out), ["Phone 2", "Pixel 7a 2"])  # d3 already carries the name, so d1 gets the next free one
         self.assertEqual(db.get_bot(games["id"])["name"], "Phone 2")
-        self.assertEqual(db.get_bot(numbered["id"])["name"], "2107113SI 2")
-        self.assertEqual((db.get_bot(mine["id"])["name"], db.get_bot(model["id"])["name"]), ("Dad's phone", "2107113SI"))
-        self.assertEqual(master.migrate_phone_names(db, {"d1": "2107113SI"}), [])  # once
+        self.assertEqual(db.get_bot(numbered["id"])["name"], "Pixel 7a 2")
+        self.assertEqual((db.get_bot(mine["id"])["name"], db.get_bot(model["id"])["name"]), ("Dad's phone", "Pixel 7a"))
+        self.assertEqual(master.migrate_phone_names(db, {"d1": "Pixel 7a"}), [])  # once
         db.rename_bot(numbered["id"], "Phone 3")  # the owner chooses that name later
-        self.assertEqual(master.migrate_phone_names(db, {"d1": "2107113SI"}), [])  # and it stays
+        self.assertEqual(master.migrate_phone_names(db, {"d1": "Pixel 7a"}), [])  # and it stays
         self.assertEqual(db.get_bot(numbered["id"])["name"], "Phone 3")
+
+    def test_a_phone_named_by_its_model_code_gets_the_name_people_know_it_by(self):
+        db = Database(":memory:")
+        code = db.create_bot("2107113SI", "p", kind="phone", phone_id="d1")
+        mine = db.create_bot("Dad's phone", "p", kind="phone", phone_id="d2")
+        other = db.create_bot("Pixel 7a", "p", kind="phone", phone_id="d3")
+        self.assertEqual(master.migrate_phone_names(db), ["Xiaomi 11T Pro"])
+        self.assertEqual([db.get_bot(x["id"])["name"] for x in (code, mine, other)], ["Xiaomi 11T Pro", "Dad's phone", "Pixel 7a"])
+        self.assertEqual(master.migrate_phone_names(db), [])
+        self.assertEqual(master.phone_name({"name": "SM-S918B"}), "Galaxy S23 Ultra")
+        self.assertEqual(master.phone_name({"model": "Unknown X1"}), "Unknown X1")  # not a code we know: what the phone reports
 
     def test_library_labels_are_renamed_and_chat_history_is_left_alone(self):
         db = Database(":memory:")

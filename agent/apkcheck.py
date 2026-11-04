@@ -133,7 +133,32 @@ def facts_lines(info: dict) -> list[str]:
     return lines
 
 
-def sandbox_run(device, art: Artifacts, apk: str, info: dict, watch_s: float | None = None, sleep=time.sleep, clock=time.time) -> list[str]:
+INSTALL_REASONS = {
+    "INSTALL_FAILED_NO_MATCHING_ABIS": "it is built only for chips this test phone does not have (the app ships 32-bit or other-architecture libraries only)",
+    "INSTALL_FAILED_DEPRECATED_SDK_VERSION": "it targets an Android version that is too old for this phone to accept",
+    "INSTALL_FAILED_OLDER_SDK": "it needs a newer Android version than this test phone has",
+    "INSTALL_FAILED_UPDATE_INCOMPATIBLE": "a copy signed by someone else is already there",
+    "INSTALL_PARSE_FAILED_NO_CERTIFICATES": "it has no valid signature, so Android will not install it",
+}
+
+
+def install_reason(e: Exception) -> str:
+    """A plain-English reason an app could not be installed on the test phone, for the report."""
+    code = getattr(e, "code", "")
+    return INSTALL_REASONS.get(code) or (f"Android refused to install it ({code.replace('INSTALL_', '').replace('_', ' ').lower()})" if code else "Android refused to install it")
+
+
+def _what_it_shows(describe, png: bytes) -> str:
+    """One plain sentence about the launched app's screen from the vision model; empty when there is none or it fails (the pictures still go in the report)."""
+    if not describe:
+        return ""
+    try:
+        return str(describe(png) or "").strip()[:240]
+    except Exception:
+        return ""
+
+
+def sandbox_run(device, art: Artifacts, apk: str, info: dict, watch_s: float | None = None, sleep=time.sleep, clock=time.time, describe=None) -> list[str]:
     """Install on the throwaway phone, launch, watch the crash log and the screen for `watch_s` seconds, and always uninstall. Returns the lines to add to the report."""
     package, notes, installed = info["package"], [], False
     watch_s = WATCH_S if watch_s is None else watch_s
@@ -141,7 +166,13 @@ def sandbox_run(device, art: Artifacts, apk: str, info: dict, watch_s: float | N
         had = package in device.packages()
         if had:
             raise ApkError(f"{package} is already installed on that phone; I will not touch an app that was there before. Remove it first or check it on another phone.")
-        device.install_apks([apk])
+        try:
+            device.install_apks([apk])
+        except ValueError as e:  # not installable on the test phone: the static read still stands, and the report says what was not run
+            if not hasattr(e, "code"):
+                raise
+            info["not_run"] = install_reason(e)
+            return [f"I could not run it on the test phone: {info['not_run']}. This verdict is from reading the file only."]
         installed = True
         try:
             before = {(p, i) for p, i in device.crashes()}
@@ -166,7 +197,12 @@ def sandbox_run(device, art: Artifacts, apk: str, info: dict, watch_s: float | N
             notes.append(f"It crashed {len(fresh)} time(s) while launching.")
         elif front == package:
             notes.append(f"It launched and was still on screen after {round(watch_s)} s with no crash.")
-            art.add_capture(device.screenshot(), f"After {round(watch_s)} seconds", "Still running")
+            png = device.screenshot()
+            art.add_capture(png, f"After {round(watch_s)} seconds", "Still running")
+            seen = _what_it_shows(describe, png)
+            if seen:
+                info["screen"] = seen
+                notes.append(f"What it showed: {seen}")
         else:
             notes.append(f"It launched, but a different app was in front after {round(watch_s)} s ({front or 'unknown'}); it may have closed itself or opened another app.")
         return notes

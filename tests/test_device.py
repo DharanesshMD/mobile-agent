@@ -165,12 +165,33 @@ class Typing(unittest.TestCase):
         self.assertEqual(u2.typed, ["வணக்கம் é"])
         self.assertEqual(calls, [])  # adb was not needed
 
-    def test_falls_back_to_adb_input_text(self):
+    def test_plain_text_goes_through_adb_input_text_and_never_the_clipboard(self):
         u2 = FakeU2()
-        u2.keys_fail = True
         d = Device(use_u2=True)
         d._u2 = u2
         calls = []
         d._run = lambda *a: calls.append(a) or b""
         d.type_text("hello world")
         self.assertEqual(calls, [("shell", "input", "text", "hello%sworld")])
+        self.assertFalse(hasattr(u2, "typed"))  # uiautomator2 pastes through the clipboard: not used for ASCII
+
+    def test_a_failing_adb_input_falls_back_to_the_resident_service(self):
+        import subprocess
+        u2 = FakeU2()
+        d = Device(use_u2=True)
+        d._u2 = u2
+        def boom(*a):
+            raise subprocess.CalledProcessError(1, "adb")
+        d._run = boom
+        d.type_text("91")
+        self.assertEqual(u2.typed, ["91"])
+
+    def test_a_private_secret_is_typed_by_adb_and_never_reaches_the_clipboard_for_ascii(self):
+        u2 = FakeU2()
+        d = Device(use_u2=True)
+        d._u2 = u2
+        calls = []
+        d._run = lambda *a: calls.append(a) or b""
+        d.type_private("9943 08")
+        self.assertEqual(calls, [("shell", "input", "text", "9943%s08")])
+        self.assertFalse(hasattr(u2, "typed"))

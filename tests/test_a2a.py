@@ -376,7 +376,7 @@ def frames(resp):
     out = []
     for block in resp.text.split("\n\n"):
         lines = [ln for ln in block.split("\n") if ln]
-        if lines:
+        if lines and any(ln.startswith("data:") for ln in lines):  # a block with only a ":" comment is a keepalive, not an event
             out.append({"id": next((ln[3:].strip() for ln in lines if ln.startswith("id:")), None), "data": json.loads(next(ln[5:] for ln in lines if ln.startswith("data:")))})
     return out
 
@@ -402,6 +402,23 @@ class Streaming(unittest.TestCase):
         self.assertTrue(all(f["id"] for f in fr[1:]))  # every event carries an id to resume from
         art = next(f["data"]["result"]["artifactUpdate"] for f in fr if "artifactUpdate" in f["data"]["result"])
         self.assertEqual((art["append"], art["lastChunk"]), (False, True))
+
+    def test_a_quiet_stream_sends_keepalive_comments_so_a_slow_phone_task_does_not_drop_it(self):
+        import time
+        from unittest import mock
+        from agent import a2a_server
+        w = World()
+
+        def slow():
+            yield 1, {"jsonrpc": "2.0", "id": 7, "result": {"task": {"id": "t1"}}}
+            time.sleep(0.6)  # the phone is busy and says nothing
+            yield 2, {"jsonrpc": "2.0", "id": 7, "result": {"statusUpdate": {"taskId": "t1", "status": {"state": "TASK_STATE_COMPLETED"}}}}
+
+        msg = {"messageId": "k1", "role": "ROLE_USER", "parts": [data(skill="store-context", text="x")]}
+        with mock.patch.object(a2a_server, "KEEPALIVE_S", 0.1), mock.patch.object(a2a_server.Service, "rpc", return_value=("stream", slow())):
+            r = self.stream(w, "SendStreamingMessage", {"message": msg})
+        self.assertIn(": keepalive", r.text)
+        self.assertEqual(len(frames(r)), 2)  # the comments are not events
 
     def test_stream_0_3(self):
         w = World()
@@ -652,8 +669,8 @@ class Management(unittest.TestCase):
         self.assertEqual([c["name"] for c in s["clients"]], ["Zed"])
         self.assertEqual(s["urls"]["card"], "http://127.0.0.1:8766/.well-known/agent-card.json")
         self.assertEqual(set(s["clients"][0]) , {"id", "name", "scopes", "ratePerMin", "maxRunning", "botId", "created", "lastSeen", "revoked", "running"})
-        # the caller's own bot is in the sidebar
-        bots = {b["id"]: b for b in w.c.get("/api/bots").json()}
+        # the caller's own bot exists; the sidebar lists it once that agent has sent something
+        bots = {b["id"]: b for b in w.c.get("/api/bots", params={"all": "true"}).json()}
         self.assertEqual(bots[s["clients"][0]["botId"]]["name"], "Agent: Zed")
         self.assertEqual(bots[s["clients"][0]["botId"]]["kind"], "agent")
         t = w.task_of(w.send([data(skill="store-context", text="listed")]))
@@ -794,7 +811,7 @@ class ClientScript(unittest.TestCase):
         self.w.spark.replies.append(json.dumps({"thought": "t", "action": act(type="reply", text="Streamed.")}))
         lines = self.run_cli("send", "stream this", "--stream").strip().split("\n")
         self.assertIn("task", lines[0])
-        self.assertIn("TASK_STATE_COMPLETED", lines[-1])
+        self.assertIn("state completed", lines[-1])  # readable lines; --json still prints the raw events
         # a finished task cannot be cancelled: the script reports the agent's error and exits non-zero
         with self.assertRaises(SystemExit) as e:
             self.run_cli("cancel", tid)

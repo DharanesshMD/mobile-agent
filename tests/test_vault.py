@@ -123,6 +123,26 @@ class Worker_(unittest.TestCase):
         self.assertIn("typed saved secret 'bank'", model.calls[1])
         self.assertEqual([(r["label"], r["job_id"], r["app"]) for r in v.audit()], [("bank", "job1", "Chase")])
 
+    def test_a_retry_of_the_same_secret_in_the_same_app_does_not_ask_again(self):
+        _, v = fresh()
+        v.put("bank", SECRET)
+        dev = FakeDevice([png(1), png(2), png(3), png(4)])
+        model = FakeModel([reply(type="type_secret", label="bank", app="Chase"), reply(type="type_secret", label="bank", app="Chase"), reply(type="done", answer="in")])
+        asked: list = []
+        res = run("g", dev, model, settle=0, emit=lambda e: None, handler=lambda p: asked.append(p) or {"approved": True}, secrets=SecretUse(v, "job1"))
+        self.assertEqual((res.status, len(asked), dev.typed), ("done", 1, [SECRET, SECRET]))  # one card, two typings
+        self.assertEqual(len(v.audit()), 2)  # both uses are still on the audit trail
+
+    def test_a_secret_goes_through_the_private_path_when_the_device_has_one(self):
+        _, v = fresh()
+        v.put("bank", SECRET)
+        dev = FakeDevice([png(1), png(2)])
+        private: list = []
+        dev.type_private = private.append
+        model = FakeModel([reply(type="type_secret", label="bank", app="Chase"), reply(type="done", answer="in")])
+        res = run("g", dev, model, settle=0, emit=lambda e: None, handler=lambda p: {"approved": True}, secrets=SecretUse(v, "job1"))
+        self.assertEqual((res.status, private, hasattr(dev, "typed")), ("done", [SECRET], False))  # never through type_text, which may use the clipboard
+
     def test_declined_secret_ends_the_run_and_types_nothing(self):
         res, dev, _, _, v = self.run_secret(lambda p: {"approved": False})
         self.assertEqual(res.status, "denied")

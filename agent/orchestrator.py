@@ -10,7 +10,7 @@ from pathlib import Path
 
 from agent import phones
 from agent.checks import KINDS, find_packages, run_check
-from agent.config import MAX_ACTIVE_PER_BOT, ORCHESTRATOR_MODEL
+from agent.config import MAX_ACTIVE_PER_BOT, ORCHESTRATOR_MODEL, WORKER_MODEL
 from agent.db import Database
 from agent.escalate import SIMPLE_OPEN, Escalator, app_name
 from agent import names, logs, apkcheck, cloudtools, gamepolicy, images, museimage, options, reportsave, sensitive, websearch
@@ -1079,6 +1079,13 @@ class Orchestrator:
         spare = self._resolve_phone(bot_id, other) if other else None  # used only when the first phone already has this app (an app that was there is never touched)
         threading.Thread(target=self._do_apk_check, args=(bot_id, att, [target] + ([spare] if isinstance(spare, tuple) else [])), daemon=True, name="apk-check").start()
 
+    def _describe_launch(self, png: bytes) -> str:
+        """What a just-launched app shows, in one sentence: its look, and anything it asks of the person (sign-in, permissions, payments, ads)."""
+        text = self.model_factory(WORKER_MODEL).complete(
+            "You describe what is on a phone screen, plainly and briefly.",
+            "This is an app that was just installed on a test phone and opened. In one or two short sentences say what the screen shows: what kind of app it looks like and what it asks the person to do (for example sign in, allow permissions, pay, or watch an ad). Describe only what is visible. Reply with the sentences only.", png, 160)
+        return " ".join(str(text).split())
+
     def _do_apk_check(self, bot_id: str, att: dict, targets: list) -> None:
         art, name = Artifacts(), att["name"] or "the APK"
         try:
@@ -1100,10 +1107,21 @@ class Orchestrator:
                 break
             if dev is None:
                 raise ValueError(f"{info['package']} is already installed on the phones I can use for this, and I never touch an app that was there before. Remove it from one of them first.")
-            notes = apkcheck.sandbox_run(dev, art, att["path"], info)
-            checked = ["The manifest: package, version, permissions and what they allow", "The signing certificate", f"Installing it on {label} and launching it for {apkcheck.WATCH_S} seconds, watching for crashes"]
+            notes = apkcheck.sandbox_run(dev, art, att["path"], info, describe=self._describe_launch)
+            checked = ["The manifest: package, version, permissions and what they allow", "The signing certificate"]
             not_checked = ["Network traffic and what the app sends out", "What it does after the first seconds or after signing in", "Its code (this is not a malware scanner)"]
-            art.set_verdict(level, reasons or ["No powerful permissions found, a signing certificate is present, and nothing unusual showed in the manifest."] + notes[:1], checked, not_checked)
+            if info.get("not_run"):
+                not_checked.insert(0, f"Running it on {label}: {info['not_run']}")
+            else:
+                checked.append(f"Installing it on {label} and launching it for {apkcheck.WATCH_S} seconds, watching for crashes")
+            why = list(reasons) or ["No powerful permissions found, a signing certificate is present, and nothing unusual showed in the manifest."]
+            if info.get("screen"):
+                why.append(f"Installed on {label} and opened, it showed: {info['screen']}")
+            elif not info.get("not_run") and notes:
+                why.append(notes[0])
+            if info.get("not_run") and reasons:
+                why.append(f"I could not run it on the test phone ({info['not_run']}), so this is from reading the file only.")
+            art.set_verdict(level, why, checked, not_checked)
             art.facts += notes
             reportsave.save(self.db, self.hub, self.jobs.data_dir, bot_id, None, "apk", f"App check: {info['package']} {info['version']}".strip(), f"Check {name}", "done", " ".join(notes), art, label)
         except (apkcheck.ApkError, ValueError) as e:

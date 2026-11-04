@@ -101,3 +101,9 @@ The pairing door closed with the last phone and after every restart, so a paired
 
 ## 21. Do not commit work an agent is still writing
 Commit only finished pieces: leave the files of a running agent out, and say so.
+
+## 22. Do not reset the app between demo takes
+Recording one use case after another, I reset the history (stop, wipe, restart) before each take. The owner did not want that: it restarts the phone link and wipes chats for no need. Record on the running app; reset only when asked.
+
+## 23. Never probe with a command that changes state
+I ran `git stash` in a command chain as if it were a read-only check; it put every uncommitted change away until I popped it. Use `git status` / `git stash list` to look, never a state-changing command. Also: a change to which bots the sidebar lists must be checked against the tests that read the list (the A2A management test).

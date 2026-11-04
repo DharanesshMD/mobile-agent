@@ -19,7 +19,7 @@ def save(db, hub, data_dir, bot_id: str, job_id: str | None, kind: str, title: s
     item = db.add_library(bot_id, job_id, title, str(path), kind="report")
     db.knowledge.add(md, kind="report", visibility="bots", bot_id=bot_id, title=title, source=item["id"])  # the report's words can be found by every bot
     level = art.verdict["level"] if art.verdict else None
-    text = (f"{report_mod.VERDICT_LABEL[level]}. " + "; ".join(art.verdict["reasons"][:3])) if level else f"{title} ({len(art.captures)} picture{'' if len(art.captures) == 1 else 's'})."
+    text = (f"{report_mod.VERDICT_LABEL[level]}. " + " ".join(r if r.rstrip().endswith((".", "!", "?")) else r.rstrip() + "." for r in art.verdict["reasons"][:3])) if level else f"{title} ({len(art.captures)} picture{'' if len(art.captures) == 1 else 's'})."
     msg = db.add_message(bot_id, "assistant", "report", text, {"library_id": item["id"], "title": title[:100], "verdict": level, "pictures": len(art.captures), "report": kind})
     hub.publish(bot_id, {"type": "message", "message": msg})
     hub.publish(bot_id, {"type": "refresh", "what": "library"})

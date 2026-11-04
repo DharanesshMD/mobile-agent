@@ -58,6 +58,7 @@ class State(TypedDict, total=False):
     guard_name: str  # the game the guard is protecting
     site: str  # a third-party site the browser is on: nothing is typed there
     blocked: int  # inputs the game guard refused in this task
+    grants: dict  # saved-secret label -> {"t": when the owner approved typing it, "fg": the app it was approved for}: the same secret in the same app is not asked again for GRANT_S
     launchers: list  # packages with a launcher icon: only these are apps whose crash can stop a task (system services crash in the background on their own)
 
 
@@ -225,6 +226,9 @@ def finish(state: State) -> dict:
     return {"status": "failed", "answer": str(act.get("reason", ""))}
 
 
+GRANT_S = 180  # one yes to type a saved secret into an app covers retries of the same secret in the same app for this long (a field that did not take it the first time)
+
+
 def gate(state: State, config: RunnableConfig) -> dict:
     c, act, n = _c(config), state["action"], state["step"]
     kind = act["type"]
@@ -248,7 +252,10 @@ def gate(state: State, config: RunnableConfig) -> dict:
             known = ", ".join(secrets.labels()) if secrets else ""
             return {"history": state.get("history", []) + [f"{n}. type_secret -> error: no saved secret '{label}'" + (f" (saved: {known})" if known else "")]}
         payload = {"kind": kind, "label": label, "text": f"Type your saved secret '{label}'" + (f" into {app}" if app else "") + "?"}
-    resume = interrupt(payload)
+    grants = dict(state.get("grants") or {})
+    g = grants.get(str(act.get("label", "")).lower()) if kind == "type_secret" else None
+    reused = bool(g and time.time() - g["t"] <= GRANT_S and g["fg"] == state.get("fg", ""))
+    resume = {"approved": True} if reused else interrupt(payload)  # the owner already said yes to this secret in this app a moment ago: no second card
     if resume.get("cancelled"):
         return {"status": "cancelled"}
     history = state.get("history", [])
@@ -270,8 +277,10 @@ def gate(state: State, config: RunnableConfig) -> dict:
     elif kind == "type_secret":
         if not resume.get("approved"):
             return {"status": "denied", "answer": f"owner did not allow using '{label}'"}
-        c["device"].type_text(secrets.reveal(label, app))  # typed here only: never put in state, history, events or the model prompt
-        history = history + [f"{n}. typed saved secret '{label}'"]
+        dev = c["device"]
+        (getattr(dev, "type_private", None) or dev.type_text)(secrets.reveal(label, app))  # typed here only (never put in state, history, events or the model prompt), and not through the clipboard
+        history = history + [f"{n}. typed saved secret '{label}'" + (" (approved a moment ago)" if reused else "") + ": read the field; if it is still empty, hand over to the owner instead of typing again"]
+        grants[label.lower()] = {"t": time.time(), "fg": state.get("fg", "")}
     else:
         code = str(resume.get("code") or "")
         if not code:
@@ -279,7 +288,7 @@ def gate(state: State, config: RunnableConfig) -> dict:
         c["device"].type_text(code)  # typed here only: never put in state, history, events or the model prompt
         history = history + [f"{n}. one-time code entered"]
     settle_screen(c["device"], c["settle"])
-    return {"history": history}
+    return {"history": history, "grants": grants}
 
 
 def _game_guard(state: State, c: dict, n: int) -> dict | None:

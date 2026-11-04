@@ -138,6 +138,30 @@ class SandboxRun(unittest.TestCase):
             self.run_it(phone)
         self.assertFalse(any(k == "uninstall" for k, *_ in phone.log))
 
+    def test_what_the_launched_app_shows_is_described_for_the_report(self):
+        phone, art, seen = ApkPhone(), Artifacts(), []
+        info = {"package": "com.example.tool", "version": "1.2"}
+        notes = apkcheck.sandbox_run(phone, art, "x.apk", info, watch_s=0.1, sleep=lambda s: None, describe=lambda png: seen.append(png) or "A game title screen with a Start button.")
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(info["screen"], "A game title screen with a Start button.")
+        self.assertIn("What it showed: A game title screen", " ".join(notes))
+        self.assertEqual(phone.installed, [])  # still removed afterwards
+
+    def test_a_failing_description_never_breaks_the_check(self):
+        phone, art, info = ApkPhone(), Artifacts(), {"package": "com.example.tool", "version": "1.2"}
+        notes = apkcheck.sandbox_run(phone, art, "x.apk", info, watch_s=0.1, sleep=lambda s: None, describe=lambda png: 1 / 0)
+        self.assertIn("no crash", notes[0])
+        self.assertNotIn("screen", info)
+
+    def test_an_app_the_test_phone_cannot_install_is_still_read_and_says_it_was_not_run(self):
+        from agent.device import InstallError
+        phone, art, info = ApkPhone(), Artifacts(), {"package": "com.example.tool", "version": "1.2"}
+        phone.install_apks = lambda paths: (_ for _ in ()).throw(InstallError("INSTALL_FAILED_NO_MATCHING_ABIS"))
+        notes = apkcheck.sandbox_run(phone, art, "x.apk", info, watch_s=0.1, sleep=lambda s: None)
+        self.assertIn("could not run it", notes[0])
+        self.assertIn("32-bit", info["not_run"])
+        self.assertFalse(any(k in ("open", "uninstall") for k, *_ in phone.log))
+
 
 class InChat(unittest.TestCase):
     def upload(self, c, bot, path, name="tool.apk"):
@@ -185,6 +209,26 @@ class InChat(unittest.TestCase):
         self.assertEqual([k for k, *_ in phone.log], ["install", "open", "uninstall"])
         self.assertFalse(Path(path).exists())  # the uploaded file is not kept
         self.assertIsNone(app.state.db.get_attachment(aid))
+
+    def test_an_app_that_cannot_be_installed_still_gets_a_report_from_the_static_read(self):
+        from agent.device import InstallError
+        spark = Spark()
+        c, _, bot, app = setup(spark)
+        phone = ApkPhone()
+        phone.install_apks = lambda paths: (_ for _ in ()).throw(InstallError("INSTALL_FAILED_NO_MATCHING_ABIS"))
+        app.state.jobs.device = phone
+        with tempfile.TemporaryDirectory() as d:
+            aid = self.upload(c, bot, fake_apk(Path(d, "y.apk")), "tool.apk").json()["id"]
+        spark.replies = [json.dumps({"thought": "t", "action": {"type": "check_apk", "attachment": aid}})]
+        info = {**apkcheck.parse_manifest(manifest(target="22")), "certs": ["ab" * 32], "size_mb": 0.1}
+        with mock.patch.object(apkcheck, "analyze", return_value=info):
+            c.post(f"/api/bots/{bot}/messages", json={"text": "is this app ok?", "attachments": [aid]})
+            until(lambda: any(m["kind"] == "report" for m in c.get(f"/api/bots/{bot}/state").json()["messages"]), timeout=30)
+        msgs = c.get(f"/api/bots/{bot}/state").json()["messages"]
+        card = next(m for m in msgs if m["kind"] == "report")
+        self.assertEqual(card["meta"]["verdict"], "suspicious")  # an old target Android version is a reason
+        self.assertFalse(any("could not check" in m["content"] for m in msgs))
+        self.assertFalse(any(k == "open" for k, *_ in phone.log))
 
     def test_when_the_first_phone_already_has_the_app_the_other_cloud_phone_is_used(self):
         spark = Spark()

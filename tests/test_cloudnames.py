@@ -61,7 +61,8 @@ class Panel(unittest.TestCase):
         self.assertIn('d.p.kind === "real") return !!v.up', body)           # a paired phone shows only while it is connected
         self.assertIn('v.lamp === "on" || v.lamp === "wait"', body)         # a chip means a lane is working or waiting for you
         self.assertIn("openConnect", body)                                  # the connect dialog hook
-        self.assertIn("if (realUp) cs.replaceChildren()", body)             # the button is gone while a phone is connected
+        self.assertIn("if (cs && !cs.firstChild)", body)                     # the Connect a phone button is always there, even with a phone connected
+        self.assertNotIn("realUp", body)
         self.assertIn("It starts by itself when you give it a task.", self.html)  # an asleep second phone is a calm sentence, not a card
 
     def test_the_first_phone_is_called_phone_in_the_panel(self):

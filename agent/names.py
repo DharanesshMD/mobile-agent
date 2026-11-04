@@ -43,3 +43,17 @@ def looks_like_model_name(name: str, model: str = "", info_name: str = "") -> bo
     """True when a paired phone's bot name is only the device's own model string (what the app reported), i.e. the owner never chose it."""
     n = (name or "").strip().lower()
     return bool(n) and n in {(model or "").strip().lower(), (info_name or "").strip().lower()} - {""}
+
+
+# A phone reports its model code ("2107113SI"), which nobody recognises. The names people know for the codes we are sure about; any other phone keeps what it reports.
+MARKET_NAMES = {
+    "2107113si": "Xiaomi 11T Pro", "2107113sg": "Xiaomi 11T Pro", "21081111rg": "Xiaomi 11T",
+    "sm-s918b": "Galaxy S23 Ultra", "sm-s916b": "Galaxy S23+", "sm-s911b": "Galaxy S23", "sm-s908b": "Galaxy S22 Ultra", "sm-s901b": "Galaxy S22",
+    "sm-g991b": "Galaxy S21", "sm-g998b": "Galaxy S21 Ultra", "sm-a546b": "Galaxy A54", "sm-a536b": "Galaxy A53",
+}
+
+
+def market_name(model: str) -> str:
+    """The name people know a phone by, or the model string itself when it is not one of the codes above."""
+    m = (model or "").strip()
+    return MARKET_NAMES.get(m.lower(), m)

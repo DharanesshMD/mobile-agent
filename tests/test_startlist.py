@@ -53,6 +53,15 @@ class StartList(unittest.TestCase):
         self.assertTrue(db.has_activity(games["id"]))
         self.assertEqual(names(c), ["Master", "Phone 2"])
 
+    def test_an_a2a_callers_bot_is_listed_only_after_that_agent_sent_something(self):
+        c, app, db, lc = make()
+        bot = db.create_bot("Agent: Inbox agent", "")
+        db._exec("update bots set kind='agent' where id=?", (bot["id"],)) if hasattr(db, "_exec") else db.conn.execute("update bots set kind='agent' where id=?", (bot["id"],))
+        self.assertEqual(names(c), ["Master"])
+        self.assertIn("Agent: Inbox agent", names(c, True))
+        db.add_message(bot["id"], "user", "text", "check this link")
+        self.assertEqual(names(c), ["Master", "Agent: Inbox agent"])
+
     def test_a_connected_phone_is_listed_and_an_unconnected_unused_one_is_not(self):
         c, app, db, lc = make()
         from agent.master import ensure_phone_bot

@@ -404,6 +404,7 @@
   .thumb img.ok, .overlay .screen img.ok { visibility: visible; }
   .thumb:not(:has(img.ok))::after { content: "Waiting for the screen…"; position: absolute; left: 0; right: 0; top: 14px; text-align: center; color: var(--text-3); font-size: 12px; pointer-events: none; }
   .thumb .open { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #000b; color: #fff; border-color: #fff3; backdrop-filter: blur(6px); border-radius: 999px; padding: 6px 16px; font-weight: 400; }
+  @media (hover: hover) { .thumb .open { opacity: 0; transition: opacity .15s; } .thumb:hover .open, .thumb .open:focus-visible { opacity: 1; } }  /* a mouse sees the Open button only when pointing at the phone, so it never covers the screen; touch screens keep it */
   .mcap { text-align: center; color: var(--text-2); font-size: 13px; margin-top: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
   .mcap .chip { justify-content: center; } .mcap .sleepnote { justify-content: center; flex-wrap: wrap; }
   .worklist { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; } .worklist:empty { display: none; }
@@ -879,7 +880,7 @@ function humanTitle(t) {
   x = (parts[0] || x).replace(/[ .;,]+$/, "");
   x = x.replace(/^(create|make|write|produce)\b[^:]{0,80}:\s*/i, "").replace(/^how to\s+/i, "").replace(/\s+/g, " ").trim();
   if (x.length < 6) return "Report";  // a stored title that was cut to nothing useful
-  x = x[0].toUpperCase() + x.slice(1);
+  if (!/^(https?:\/\/|[a-z0-9-]+(\.[a-z0-9-]+)+\b)/i.test(x)) x = x[0].toUpperCase() + x.slice(1);  // an address or a package name keeps its own case
   if (x.length > 64) x = x.slice(0, 64).replace(/\s+\S*$/, "") + "\u2026";
   return x + (more ? ` + ${more} more` : "");
 }
@@ -1317,9 +1318,8 @@ function paintWork() {
         b.onclick = () => { const bot = botOf(d.p); if (bot) selectBot(bot.id).then(() => setTab("mobile")); }; return b; }));
     }
   }
-  if (cs && S.bot && S.bot.kind !== "phone") {
-    const realUp = ds.some(d => d.p.kind === "real" && d.view.up);
-    if (realUp) cs.replaceChildren(); else if (!cs.firstChild) { const b = el("button", "pill", "Connect a phone"); b.type = "button"; b.onclick = openConnect; cs.append(b); }
+  if (cs && !cs.firstChild) {  // always there, on every bot and with a phone already connected: more phones can be added any time
+    const b = el("button", "pill", "Connect a phone"); b.type = "button"; b.onclick = openConnect; cs.append(b);
   }
 }
 async function renderTab() {
