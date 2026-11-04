@@ -645,7 +645,7 @@ class Orchestrator:
         try:
             if kind == "routine_create":
                 r = self.routines.add(bot_id, str(act.get("name", "")), str(act.get("prompt", "")), act.get("schedule") or {})
-                return f"created '{r['name']}' ({describe(r['schedule'])}); tell the owner it is set"
+                return f"created '{r['name']}' ({describe(r['schedule'])}); tell the owner it is set, and name any part of its prompt you have no way to read (no connected app lists it, or the phone may not have the app signed in)"
             rows = self.db.routines(bot_id)
             if kind == "routine_list":
                 return "; ".join(f"{r['name']} ({describe(r['schedule'])}{'' if r['enabled'] else ', paused'})" for r in rows) or "no routines"
