@@ -1,11 +1,32 @@
-# Mobile Agent
+<p align="center">
+  <img src="docs/img/banner.jpg" alt="Mobile Agent: an assistant with its own Android phones" width="100%">
+</p>
 
-**An always-on assistant with its own Android phones. It picks the phone that can do the job, finds another way when one fails, and protects you from itself.**
+<h3 align="center">It picks the phone that can do the job, finds another way when one fails, and protects you from itself.</h3>
 
-Built for the Meta Global AI Developer Hackathon (Indie Developer track, 27 Oct to 4 Nov 2026). All code in this repository is new work from the event. MIT licensed.
+<p align="center">
+  <a href="https://youtu.be/psFdJ-Ajhr4"><b>Demo video (3 min)</b></a> &nbsp;|&nbsp;
+  <a href="#run-it-locally-and-test-it"><b>Run it</b></a> &nbsp;|&nbsp;
+  <a href="docs/docker.md"><b>Docker</b></a> &nbsp;|&nbsp;
+  <a href="docs/README.md"><b>Docs</b></a> &nbsp;|&nbsp;
+  <a href="docs/replay.md"><b>Replay</b></a> &nbsp;|&nbsp;
+  <a href="#meta-models-used"><b>Meta models</b></a>
+</p>
 
-- Demo video (3 min): [https://youtu.be/psFdJ-Ajhr4](https://youtu.be/psFdJ-Ajhr4)
-- Replay a session in a browser, no phone and no keys needed: [docs/replay.md](docs/replay.md) (the session that ships in the repo is a synthetic demo, marked as such)
+<p align="center">
+  <img src="https://img.shields.io/badge/LICENSE-MIT-3fa66a?style=for-the-badge" alt="License: MIT">
+  <img src="https://img.shields.io/badge/PYTHON-3.11%2B-3776AB?style=for-the-badge" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/TESTS-872%20PASSING-4cc38a?style=for-the-badge" alt="872 tests passing">
+  <img src="https://img.shields.io/badge/DOCKER-READY-2496ED?style=for-the-badge" alt="Docker ready">
+  <img src="https://img.shields.io/badge/ANDROID-KOTLIN%20APP-3DDC84?style=for-the-badge" alt="Android app in Kotlin">
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/BUILT%20WITH-MUSE%20SPARK%20%C2%B7%20WONDER%20%C2%B7%20VOICE%20%C2%B7%20IMAGE-0866FF?style=for-the-badge" alt="Built with Muse Spark, Wonder, Voice Transcribe and Image">
+  <img src="https://img.shields.io/badge/META%20GLOBAL%20AI%20DEVELOPER%20HACKATHON-INDIE%20TRACK-f0a43a?style=for-the-badge" alt="Meta Global AI Developer Hackathon, Indie Developer track">
+</p>
+
+> Built for the Meta Global AI Developer Hackathon (Indie Developer track, 27 Oct to 4 Nov 2026). All code in this repository is new work from the event. MIT licensed.
+> Replay a session in a browser, no phone and no keys needed: [docs/replay.md](docs/replay.md) (the session that ships in the repo is a synthetic demo, marked as such).
 
 ## What it does
 
