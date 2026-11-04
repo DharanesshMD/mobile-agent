@@ -5,10 +5,11 @@ Start with the [project README](../README.md). The files below are grouped by wh
 ## Run it and try it
 | File | What |
 |---|---|
+| [docker.md](docker.md) | Run everything in Docker: build, ports, data volume, what works without a phone emulator |
 | [local-device.md](local-device.md) | Set up the shared Android emulator on a Mac (Apple Silicon) |
 | [virtual-android.md](virtual-android.md) | Phone 2 (Redroid in a Lima VM): what is built, how to install free games, the phone list |
 | [phone-client.md](phone-client.md) | The Mobile Agent app for a paired phone: feasibility, protocol, build |
-| [paired-phone-test.md](paired-phone-test.md) | A one-hour, step-by-step test on your own Android phone |
+| [real-phone-test.md](real-phone-test.md) | A step-by-step test on your own Android phone |
 | [image-input.md](image-input.md) | Pictures in chat: upload, privacy, what the model gets |
 
 ## How it is designed and why it is safe

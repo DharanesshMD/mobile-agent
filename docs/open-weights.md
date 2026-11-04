@@ -3,7 +3,7 @@
 Goal: be eligible for the "Best Build on Meta Open Weight Models" bonus ($10K, open weights served on partner inference) by running the orchestrator (chat, memory,
 routing, planning) on Muse Spark Open through Baseten, behind one switch. The phone worker stays Muse Wonder and speech to text stays Muse Voice Transcribe, both on Meta's API.
 
-**Status: code done and tested, live run BLOCKED: there is no Baseten API key in `.env` (only `META_API_KEY`).** The go/no-go needs the key. Decision rule: **GO if at least 9 of 10
+**Status (final, 4 Nov): code done and tested against fakes; never run live, so NOT entered for the bonus. Reason: there is no Baseten API key in `.env` (only `META_API_KEY`).** The go/no-go needs the key. Decision rule: **GO if at least 9 of 10
 decisions are valid JSON and the right action** on `scripts/openweights_check.py`.
 
 > **Model id (2 Nov):** the hackathon's partner-credit notes say to use `meta-models/muse-spark-open-1026` on Baseten, not the id in Baseten's own docs (`meta-models/muse-spark-open`). The default is now `-1026`; if Baseten answers 404 for it, set `OPEN_WEIGHT_MODEL` in `.env` to the other id. Partner credits: Baseten $100 + 2M TPM, per person, reviewed by use case; request link is in section 6 of https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details. Modal ($100, first 1,000) is the fallback host for the open weights.

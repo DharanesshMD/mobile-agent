@@ -32,7 +32,7 @@ Each phone has its own queue, so a long task on one never blocks another. Extra 
 1. **It finds a way.** Ask any bot to "open Clash of Clans". It crashes on Phone (the agent counts crashes and stops after 3), the app is copied to Phone 2 and opened there, and one message says where it ran. Asked to *play* it, the agent refuses
    (Supercell bans bot accounts) and points you to Take control, where you play it yourself. Meanwhile a task on Phone and a task on Phone 2 run side by side.
 2. **See it, say it.** <!-- confirm the calendar flow after rehearsal --> Paste a picture and say what you want with the microphone. Muse Spark reads the picture, a confirm card asks before anything is saved, Muse Wonder does it on the phone, and you can steer while it runs.
-3. **Proactive and safe.** <!-- confirm after rehearsal --> A routine messages you first with a web-search brief. A sign-in uses a vault secret: an approval card, and the agent never sees the value. Text hidden inside a picture is reported, never obeyed.
+3. **Proactive and safe.** A routine messages you first with a web-search brief. A sign-in uses a vault secret: an approval card, and the agent never sees the value. Text hidden inside a picture is reported, never obeyed.
 
 ## What it looks like
 
@@ -59,7 +59,7 @@ The interface is dark only (a deliberate choice for the demo). Fonts are Geist a
 
 ### Open weights
 
-OPEN_WEIGHTS_STATUS
+Not claimed. An optional switch (`ORCHESTRATOR_BACKEND=baseten`, see [docs/open-weights.md](docs/open-weights.md)) can run the orchestrator on Muse Spark Open through Baseten. The code is written and unit tested against fakes, but **it was never run live** (no Baseten key was used), so this project is not entered for the open-weights bonus. Everything the demo shows runs on the Meta Model API.
 
 ## Architecture
 
@@ -119,6 +119,8 @@ Open http://127.0.0.1:8000 for the chat. Chat, memory, pictures, routines and th
 | Phone | [docs/local-device.md](docs/local-device.md) (Android command-line tools, one AVD); the service starts and sleeps it |
 | Phone 2 | `bash scripts/virtual-android/setup.sh` once, then [docs/virtual-android.md](docs/virtual-android.md) |
 | Connected phones | [docs/real-phone-test.md](docs/real-phone-test.md) (the Mobile Agent app: scan a code or install from this computer) |
+
+No Python or Android tools on your machine? Run it in Docker: `docker compose up -d --build` ([docs/docker.md](docs/docker.md); the Setup window shows the one command that starts the emulator on your computer and Docker finds it; BlueStacks and Phone 2 stay on the host).
 
 One-off task from the terminal, with a phone attached: `uv run python -m agent "Open Settings and tell me the battery percentage"`.
 `scripts/reset_fresh.py` restores a clean first-run state; `scripts/security_sweep.py` checks the repo before it is made public.
