@@ -32,7 +32,7 @@ class EmulatorBackend:
 
     @staticmethod
     def available(avd: str = "agent34ps") -> bool:
-        return (ROOT / "scripts" / "emulator.sh").exists() and (Path.home() / ".android" / "avd" / f"{avd}.avd").exists()
+        return (ROOT / "scripts" / "emulator.sh").exists() and (Path(os.environ.get("ANDROID_AVD_HOME") or Path.home() / ".android" / "avd") / f"{avd}.avd").exists()
 
     def _adb(self, *args: str, timeout: float = 8) -> str:
         try:

@@ -46,6 +46,7 @@ def connect(c, app, **hello):
     sock = ws.__enter__()
     sock.send_json({"type": "hello", "name": "Pixel 8", "model": "Pixel 8", "sdk": 34, "size": [1080, 2400], **hello})
     until(lambda: app.state.phones.online())
+    until(lambda: app.state.db.phone_bot("local"))  # the phone's bot is made right after the link is registered: do not race it
     phone = FakeAndroid(sock)
     phone.thread.start()
     return ws, phone

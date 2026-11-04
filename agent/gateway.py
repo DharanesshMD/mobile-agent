@@ -48,6 +48,13 @@ SECRET_RE = re.compile(r"dev_[A-Za-z0-9_\-]{16,}|[A-Za-z0-9_\-]{40,}")
 
 def lan_address() -> str | None:
     """The computer's address on the local network (no packet is sent: a UDP socket only picks the route). None when there is no private LAN address."""
+    forced = os.environ.get("PHONE_GATEWAY_ADVERTISE_IP", "").strip()  # in Docker the container sees only its bridge address: the owner names the host's LAN address
+    if forced:
+        try:
+            a = ipaddress.ip_address(forced)
+        except ValueError:
+            return None
+        return forced if a.is_private and not a.is_loopback and not a.is_link_local else None
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("192.0.2.1", 9))  # a documentation address: nothing is sent

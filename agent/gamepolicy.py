@@ -44,7 +44,8 @@ _cache: dict = {"stamp": None, "owner": []}
 def _owner_list() -> list[str]:
     """Packages the owner added (re-read when the file changes). A broken file adds nothing and never removes a built-in."""
     try:
-        stamp = POLICY_FILE.stat().st_mtime_ns
+        st = POLICY_FILE.stat()
+        stamp = (st.st_mtime_ns, st.st_size)  # size too: two writes inside one clock tick must not look unchanged
     except OSError:
         return []
     if _cache["stamp"] != stamp:

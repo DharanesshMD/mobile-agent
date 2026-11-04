@@ -266,6 +266,10 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     def vendor_qr():  # the QR generator for the "Connect a phone" dialog (MIT, web/vendor/QRCODE-LICENSE.txt): no outside request
         return FileResponse(WEB / "vendor" / "qrcode.js", media_type="text/javascript", headers={"Cache-Control": "public, max-age=86400"})
 
+    @app.get("/setup.js", include_in_schema=False)
+    def setup_js():  # the Setup checklist (API key, Wi-Fi address, connect a phone)
+        return FileResponse(WEB / "setup.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+
     @app.get("/connect.js", include_in_schema=False)
     def connect_js():  # the "Connect a phone" dialog (QR, gateway switch, live status)
         return FileResponse(WEB / "connect.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
@@ -659,6 +663,9 @@ def create_app(device, model_factory, token: str | None = None, settle: float = 
     @app.post("/api/gateway/close", dependencies=[Depends(auth)])
     def gateway_close():
         return gateway.close()
+
+    from agent.setup import register_setup
+    register_setup(app, auth, data_dir, gateway, phones)
     vault = Vault(db, vault_key or secrets.token_bytes(32))  # an in-memory db gets a throwaway key
     jobs = JobManager(db, hub, device, model_factory, data_dir=data_dir, settle=settle, external_busy=lambda: bool(active()), vault=vault)
     orch = Orchestrator(db, hub, model_factory, jobs, vault)
@@ -758,6 +765,8 @@ def create_default_app() -> FastAPI:
     from agent.model import load_env
     from agent.openweights import make_model_factory
     load_env()
+    from agent.setup import load_saved
+    load_saved("data/settings.env")  # what the owner saved from the setup page
     device = Device(default_serial(os.environ.get("ANDROID_SERIAL"), EmulatorBackend.available()))
     light = os.environ.get("PHONE_PROFILE", "light") == "light"
     lifecycle = None
@@ -770,11 +779,13 @@ def create_default_app() -> FastAPI:
         if lifecycle.power == "off":
             lifecycle.wake()  # the phone is not running: boot it now, the page shows "Starting the phone"
     if (lifecycle is None or lifecycle.power == "on") and light:
-        try:
-            if device.is_emulator():
-                prepare_with_retries(device)
-        except Exception as e:  # a phone that is still settling must not stop the server from starting
-            log.warning("could not apply the light profile yet (%s); continuing", type(e).__name__)
+        def apply_light_profile() -> None:  # in the background: a phone that is asleep or still booting (or a slow adb link) must not hold the server back
+            try:
+                if device.is_emulator(timeout=10):
+                    prepare_with_retries(device)
+            except Exception as e:  # a phone that is still settling must not stop anything
+                log.warning("could not apply the light profile yet (%s); continuing", type(e).__name__)
+        threading.Thread(target=apply_light_profile, daemon=True, name="light-profile").start()
     from agent.adbphones import AdbPhones, load_adb_phones
     extra, problems = load_adb_phones()
     for p in problems:

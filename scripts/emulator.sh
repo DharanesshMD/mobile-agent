@@ -7,4 +7,4 @@ export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 AVD="${1:-agent34ps}"
 exec emulator -avd "$AVD" -no-window -no-audio -no-boot-anim -no-metrics -no-snapshot \
-  -gpu "${EMU_GPU:-host}" -cores "${EMU_CORES:-3}" -memory "${EMU_MEMORY:-2048}"
+  ${EMU_ACCEL:+-accel "$EMU_ACCEL"} -gpu "${EMU_GPU:-host}" -cores "${EMU_CORES:-3}" -memory "${EMU_MEMORY:-2048}"

@@ -67,3 +67,32 @@ Moved to [docs/demo-plan.md](../docs/demo-plan.md) (29 Oct 2026, pending owner a
 
 ## Cloud-phone use cases (2 Nov 2026)
 See [docs/cloud-usecases.md](../docs/cloud-usecases.md): batch 1 (report, set_device, inspect_app, link check, APK check, look-and-feel, guide) built and tested; batch 2 (watch, QA run, screen recording) and batch 3 (comparison, SMS relay) open.
+
+## Docker packaging (4 Nov 2026)
+- [ ] Dockerfile (uv from uv.lock, slim, non-root, adb, test stage), .dockerignore, docker-compose.yml, docker/entrypoint.sh
+- [ ] Container fixes: HOST=0.0.0.0 needs APP_TOKEN (entrypoint creates one in the volume); gateway must advertise the host LAN IP (PHONE_GATEWAY_ADVERTISE_IP)
+- [ ] docker build, run on a fresh volume, curl UI + API, restart persistence, logs clean
+- [ ] Tests inside image and outside Docker
+- [ ] docs/docker.md, link from README.md and docs/README.md
+- [ ] Review section below
+
+### Review (Docker, 4 Nov 2026)
+- Done: Dockerfile (builder/runtime/test stages), docker-compose.yml, docker/entrypoint.sh (token in volume), .dockerignore, docs/docker.md (linked from README.md and docs/README.md).
+- Code changes: gateway.py `PHONE_GATEWAY_ADVERTISE_IP`; gamepolicy.py cache stamp includes size; test_remote.py / test_gateway.py wait for the phone bot (race).
+- Verified: build, compose up healthy, UI 200, API 200/401, restart keeps data and token, gateway opens/closes through the published port, errors.log has only the "no phone" warning, 856 tests pass on host, 855 in image (test_virtual lima test needs the host's limactl).
+- Not verified: chat turn (no API key), real phone pairing, USB/host-adb route, APK download (no APK in volume).
+
+### Setup from the UI (4 Nov 2026)
+- agent/setup.py (+ tests/test_setup.py), web/setup.js, "Setup" sidebar button: API key (validated, saved to data/settings.env), Wi-Fi address (Docker), connect-a-phone, honest emulator note. Gateway port now published on the LAN by default; docker/mobile-agent.apk is seeded into the volume when present.
+- Checked: dialog opens by itself without a key, bad key and public IP refused, good key + IP saved and survive `docker restart`, gateway advertises the LAN IP.
+- Not done: bundling an APK (the only build, 30 Oct, is older than the current android sources: rebuild before shipping).
+
+### One-click emulator (4 Nov 2026)
+- agent/emulatorsetup.py (+ tests), Setup window step with licence tick, progress, auto-restart; lifecycle honours ANDROID_AVD_HOME; emulator.sh honours EMU_ACCEL; image has Java + emulator libs; entrypoint sets EMU_ACCEL=off without /dev/kvm.
+- Verified: 866 host tests pass; real install started in the container, download progress shown in the UI.
+- Not verified: a finished install, the emulator booting in Docker (no KVM on this Mac; slow network). Linux arm64 emulator package availability is unconfirmed until the install passes the "emulator" package step.
+
+### Emulator on the Docker host (4 Nov 2026)
+- scripts/host-emulator.sh (install/start/wake on the host), agent/hostemulator.py (probe host.docker.internal:5037, save ANDROID_SERIAL + adb server env, restart once), Setup step with command + auto-detect, compose extra_hosts.
+- Fixes: restart_app replays sys.orig_argv; light-profile prepare runs in a background thread (a frozen emulator no longer holds the server back).
+- Verified end to end on this Mac: container auto-detected the host emulator, restarted itself, /api/mobile/state power on, screenshot from the emulator. No task run on it (it is the owner's emulator).

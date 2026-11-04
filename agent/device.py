@@ -483,9 +483,10 @@ class Device:
 
     ANIMATION_SETTINGS = ("window_animation_scale", "transition_animation_scale", "animator_duration_scale")
 
-    def is_emulator(self) -> bool:
-        return self._run("shell", "getprop", "ro.kernel.qemu").decode().strip() == "1" or \
-            self._run("shell", "getprop", "ro.boot.qemu").decode().strip() == "1"
+    def is_emulator(self, timeout: float = 60) -> bool:
+        kw = {} if timeout == 60 else {"timeout": timeout}
+        return self._run("shell", "getprop", "ro.kernel.qemu", **kw).decode().strip() == "1" or \
+            self._run("shell", "getprop", "ro.boot.qemu", **kw).decode().strip() == "1"
 
     def sync_timezone(self, zone: str | None = None) -> str:
         """Put the phone in the owner's time zone (default: this computer's), so a clock it reads or a time it reports is local, not UTC. Idempotent, needs no root."""

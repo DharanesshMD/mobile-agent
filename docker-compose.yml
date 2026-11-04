@@ -1,0 +1,22 @@
+# docker compose up -d --build   then open http://localhost:8000 (see docs/docker.md)
+services:
+  mobile-agent:
+    build: .
+    image: mobile-agent:latest
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false          # works without a .env; add META_API_KEY there for chat turns
+    environment:
+      # The IP of THIS computer on your Wi-Fi. Needed to pair a real phone: inside Docker the app only sees its bridge address.
+      PHONE_GATEWAY_ADVERTISE_IP: ${PHONE_GATEWAY_ADVERTISE_IP:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach the emulator on this computer (Docker Desktop has it already; Linux needs this line)
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${APP_PORT:-8000}:8000"     # web UI + API. 0.0.0.0 in BIND_ADDR exposes it on your LAN (the token is always required)
+      - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-8765}:8765"     # phone gateway: on your Wi-Fi so a phone can reach it; nothing listens inside until you press "Connect a phone"
+      - "${BIND_ADDR:-127.0.0.1}:${A2A_PORT:-8766}:8766"     # A2A door, only while A2A is switched on
+    volumes:
+      - mobile-agent-data:/app/data
+volumes:
+  mobile-agent-data:
