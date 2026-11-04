@@ -1,5 +1,6 @@
 package ai.mobileagent.client
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -24,6 +25,14 @@ object Ops {
         Thread.sleep(600)
     }
 
+    /** Power and lock state, read without waking anything: {"interactive","locked","secure","hour"} (hour is the phone's local hour 0-23). */
+    private fun screenState(c: Context): JSONObject {
+        val km = c.getSystemService(KeyguardManager::class.java)
+        return JSONObject().put("interactive", c.getSystemService(PowerManager::class.java).isInteractive)
+            .put("locked", km.isKeyguardLocked).put("secure", km.isDeviceSecure)
+            .put("hour", java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY))
+    }
+
     private fun launch(c: Context, intent: Intent) {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         c.startActivity(intent)
@@ -31,6 +40,22 @@ object Ops {
 
     fun handle(c: Context, op: String, args: JSONObject): Any? {
         when (op) {
+            // verification codes (OtpRelay): they must not wake the screen or need the accessibility service to answer
+            "otp_watch" -> return OtpRelay.watch(c, args.optInt("seconds", 60), args.optLong("since_ms", 0L))
+            "otp_poll" -> return OtpRelay.poll(c)
+            "otp_ack" -> return OtpRelay.ack(args.optString("id"))
+            "otp_stop" -> return OtpRelay.stop(c)
+            // the screen and the notifications: answered without the accessibility service (screen_state, wake) or from what it saw (notifications_recent)
+            "screen_state" -> return screenState(c)
+            "wake" -> {  // wakes the screen and NEVER unlocks it: no PIN, no pattern, no dismissing the keyguard
+                wakeScreen(c)
+                if (!c.getSystemService(PowerManager::class.java).isInteractive) {  // some makers (MIUI) ignore the wake lock: a see-through activity that only asks for the screen to turn on
+                    runCatching { launch(c, Intent(c, WakeActivity::class.java)) }
+                }
+                Thread.sleep(100)
+                return screenState(c)
+            }
+            "notifications_recent" -> return NotifFeed.recent(c, args.optLong("since_ms", 0L), args.optInt("limit", 20))
             "size" -> return JSONArray(size(c).toList())
             "packages" -> return JSONArray(c.packageManager.getInstalledApplications(0).map { it.packageName }.sorted())
             "launcher_apps" -> {

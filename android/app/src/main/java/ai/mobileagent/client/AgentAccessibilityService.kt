@@ -38,15 +38,62 @@ class AgentAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         instance = null
+        OtpRelay.stop(this)
+        NotifFeed.clear()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
         instance = null
+        OtpRelay.stop(this)
+        NotifFeed.clear()
         super.onDestroy()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    /**
+     * Notification rows that are visible right now on the lock screen or in the open shade, read from the window tree: [app, title, text] each.
+     * Best effort (standard Android view ids; a maker's own layout may not match). Needed because with a secure lock Android delivers notification
+     * events WITHOUT their text, while the lock screen itself still shows it. Empty unless the screen is on and SystemUI is in front. Never changes the screen.
+     */
+    fun visibleNotifications(): List<Array<String>> {
+        val root = rootInActiveWindow ?: return emptyList()
+        if (root.packageName?.toString() != "com.android.systemui") return emptyList()
+        fun first(n: AccessibilityNodeInfo, vararg ids: String): String {
+            for (id in ids) n.findAccessibilityNodeInfosByViewId(id).firstOrNull()?.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+            return ""
+        }
+        // the open shade and a notification's own layout use android:id/*; the lock screen's grouped rows use SystemUI's notification_* ids
+        val titleIds = listOf("android:id/title", "com.android.systemui:id/notification_title")
+        val textIds = arrayOf("android:id/big_text", "android:id/text", "com.android.systemui:id/notification_text")
+        val out = ArrayList<Array<String>>()
+        for (tid in titleIds) for (t in root.findAccessibilityNodeInfosByViewId(tid)) {
+            val title = t.text?.toString()?.trim().orEmpty()
+            if (title.isEmpty()) continue
+            var row = t.parent
+            var depth = 0
+            while (row != null && depth < 6 && first(row, *textIds).isEmpty()) { row = row.parent; depth++ }
+            if (row == null || depth >= 6) continue
+            var app = first(row, "android:id/app_name_text")
+            var up = row.parent
+            var hops = 0
+            while (app.isEmpty() && up != null && hops < 4) { app = first(up, "android:id/app_name_text"); up = up.parent; hops++ }
+            out.add(arrayOf(app, title, first(row, *textIds)))
+        }
+        return out.distinctBy { it[1] + "\u0000" + it[2] }
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Notification text is read only (a) while the server holds an open watch window for a verification code, or (b) when the owner switched on "read my notifications".
+        if (event?.eventType != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) return
+        OtpRelay.seen++
+        val otp = OtpRelay.watching()
+        val feed = NotifFeed.enabled(this)
+        if (!otp && !feed) { OtpRelay.gated++; return }
+        val p = NotifParse.parse(this, event) ?: run { OtpRelay.unparsed++; return }
+        OtpRelay.parsed++
+        if (otp) OtpRelay.consume(this, p)
+        if (feed) NotifFeed.add(this, p)
+    }
     override fun onInterrupt() {}
 
     // --- reading the screen ------------------------------------------------------------------------------------

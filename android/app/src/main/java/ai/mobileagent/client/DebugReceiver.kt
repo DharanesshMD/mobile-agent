@@ -19,6 +19,28 @@ class DebugReceiver : BroadcastReceiver() {
             AgentService.stop(context)
             return
         }
+        if (intent.getStringExtra("action") == "a11y_ids") {  // the structure of the screen in front (view ids, classes, depth; no texts) to adapt the notification reader
+            val root = AgentAccessibilityService.instance?.rootInActiveWindow
+            fun walk(n: android.view.accessibility.AccessibilityNodeInfo, d: Int) {
+                if (d > 14) return
+                if (!n.text.isNullOrBlank()) Log.i("MobileAgent", "node d=$d id=${n.viewIdResourceName} cls=${n.className?.toString()?.substringAfterLast('.')} len=${n.text.length} pkg=${n.packageName}")
+                for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, d + 1) }
+            }
+            if (root != null) walk(root, 0) else Log.i("MobileAgent", "node none")
+            return
+        }
+        if (intent.getStringExtra("action") == "wake_activity") {  // starts the screen-on trampoline from this app's own process, as the wake op does (adb may not start a non-exported activity)
+            context.startActivity(Intent(context, WakeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        }
+        if (intent.getStringExtra("action") == "otp_diag") {  // counters only: never a text or a digit
+            Log.i("MobileAgent", "otp diag " + OtpRelay.diag())
+            return
+        }
+        if (intent.getStringExtra("action") == "otp_selftest") {  // runs the code finder on a fixed table; logs only pass or the failing case numbers
+            Log.i("MobileAgent", "otp extractor " + OtpExtract.selfTest())
+            return
+        }
         val server = intent.getStringExtra("server") ?: Prefs.server(context)
         val result = goAsync()
         Thread {

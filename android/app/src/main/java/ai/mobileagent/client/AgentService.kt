@@ -69,6 +69,7 @@ class AgentService : Service() {
     }
 
     override fun onDestroy() {
+        OtpRelay.stop(this)  // a closed connection forgets any code that was waiting
         running = false
         socket?.close(1000, "stopped")
         pinger.shutdownNow()
@@ -158,11 +159,13 @@ class AgentService : Service() {
         Status.lastOp = op
         val args = req.optJSONObject("args") ?: JSONObject()
         lastOpAt = System.currentTimeMillis()
-        if (!controlling) { controlling = true; notify("Mobile Agent is controlling this phone") }
-        val pkg = args.optString("package").ifEmpty {
-            runCatching { AgentAccessibilityService.instance?.rootInActiveWindow?.packageName?.toString() }.getOrNull().orEmpty()
+        if (!op.startsWith("otp_") && op != "screen_state" && op != "notifications_recent") {  // reading state or watching for a code is not controlling the screen; those ops write their own digit-free history lines (or none)
+            if (!controlling) { controlling = true; notify("Mobile Agent is controlling this phone") }
+            val pkg = args.optString("package").ifEmpty {
+                runCatching { AgentAccessibilityService.instance?.rootInActiveWindow?.packageName?.toString() }.getOrNull().orEmpty()
+            }
+            OpsLog.add(this, op, pkg)
         }
-        OpsLog.add(this, op, pkg)
         try {
             val result = Ops.handle(this, op, args)
             reply.put("ok", true).put("result", result ?: JSONObject.NULL)

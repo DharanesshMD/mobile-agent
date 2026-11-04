@@ -29,6 +29,10 @@ object Prefs {
         p(c).edit().putBoolean("enabled", on).apply()
     }
 
+    /** Small yes/no memories of the setup checklist (a Settings screen was opened, the owner marked a Xiaomi step done). */
+    fun flag(c: Context, key: String): Boolean = p(c).getBoolean("flag_$key", false)
+    fun setFlag(c: Context, key: String, on: Boolean) { p(c).edit().putBoolean("flag_$key", on).apply() }
+
     /** Disconnect: forget the token and stop; the server address stays so pairing again is quick. */
     fun forget(c: Context) {
         p(c).edit().remove("token").remove("token_sealed").putBoolean("enabled", false).apply()

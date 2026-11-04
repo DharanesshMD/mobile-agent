@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">Mobile Agent</string>
-    <string name="a11y_description">Lets the Mobile Agent you paired with open apps, read the screen, tap and type on this phone when you give it a task. Turn it off at any time.</string>
+    <string name="a11y_description">Lets the Mobile Agent you paired with open apps, read the screen, tap and type on this phone when you give it a task. Only if you switch on verification codes in the app, it also reads the text of a notification while a task is waiting for a code. Turn it off at any time.</string>
 </resources>

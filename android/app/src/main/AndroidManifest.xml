@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Finding the owner's computer on the Wi-Fi: which network and address the phone has (both normal permissions, no prompt) -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -35,6 +38,16 @@
 
         <activity android:name=".HistoryActivity" android:exported="false" />
 
+        <!-- Turns the screen on and shows over the lock screen for a moment, then closes. It never unlocks the phone (see Ops "wake"). -->
+        <activity
+            android:name=".WakeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <service
             android:name=".AgentService"
             android:exported="false"
@@ -56,6 +69,9 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_config" />
         </service>
+
+        <!-- The Stop button of the notice shown while the app watches for a verification code (OtpRelay) -->
+        <receiver android:name=".OtpRelay$StopReceiver" android:exported="false" />
 
         <!-- Debug only: lets a test pair the phone without typing (adb shell am broadcast -n ai.mobileagent.client/.DebugReceiver ...). -->
         <receiver android:name=".DebugReceiver" android:exported="true" />
