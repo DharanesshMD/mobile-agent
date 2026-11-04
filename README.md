@@ -99,7 +99,27 @@ SHA-256, then **Open in the app** pairs it. The app has a history screen (tasks 
 **Disconnect and revoke**, and a notification while it works. Build the app file once with `bash scripts/build_apk.sh`. The USB route (`adb reverse`, nothing exposed) is in
 [docs/real-phone-test.md](docs/real-phone-test.md).
 
-## Quick start
+## Run it locally and test it
+
+Pick one way to run it. Both serve the same app and the same web page.
+
+### A. Docker (nothing to install but Docker)
+
+```bash
+git clone https://github.com/DharanesshMD/mobile-agent.git
+cd mobile-agent
+docker compose up -d --build            # builds the image and starts the app (first build takes a few minutes)
+docker compose logs mobile-agent        # prints the link: http://localhost:8000/#token=...
+```
+
+Open that link. A **Setup** window opens by itself and walks you through the rest, with nothing to edit:
+1. **Model API key**: paste your Meta Model API key from [dev.meta.ai](https://dev.meta.ai). It is checked and saved in the data volume.
+2. **Wi-Fi address** (only needed to pair a real phone): type this computer's address.
+3. **A phone**: for the Android emulator, run `bash scripts/host-emulator.sh` in a terminal on this computer (it installs the emulator the first time, which needs Java, then starts it; the app finds it by itself within seconds). Or press **Connect a phone** to pair a real Android phone.
+
+Chat, memory, routines, the vault and A2A work with only the key. Details, ports, backups and what runs inside Docker: [docs/docker.md](docs/docker.md). Stop it with `docker compose down` (add `-v` to also delete its data).
+
+### B. Native (Python)
 
 You need Python 3.11+, [uv](https://docs.astral.sh/uv/), and a Meta Model API key from [dev.meta.ai](https://dev.meta.ai).
 
@@ -107,12 +127,11 @@ You need Python 3.11+, [uv](https://docs.astral.sh/uv/), and a Meta Model API ke
 git clone https://github.com/DharanesshMD/mobile-agent.git
 cd mobile-agent
 uv sync
-cp .env.example .env            # then put your key in META_API_KEY
-uv run python -m unittest discover -s tests     # no phone or key needed (about 80 s)
-uv run python -m agent.service  # http://127.0.0.1:8000
+cp .env.example .env                    # then put your key in META_API_KEY
+uv run python -m agent.service          # http://127.0.0.1:8000
 ```
 
-Open http://127.0.0.1:8000 for the chat. Chat, memory, pictures, routines and the vault do not depend on a phone; tasks that operate a phone need one of:
+Tasks that operate a phone need one of:
 
 | Phone | Setup |
 |---|---|
@@ -120,7 +139,19 @@ Open http://127.0.0.1:8000 for the chat. Chat, memory, pictures, routines and th
 | Phone 2 | `bash scripts/virtual-android/setup.sh` once, then [docs/virtual-android.md](docs/virtual-android.md) |
 | Connected phones | [docs/real-phone-test.md](docs/real-phone-test.md) (the Mobile Agent app: scan a code or install from this computer) |
 
-No Python or Android tools on your machine? Run it in Docker: `docker compose up -d --build` ([docs/docker.md](docs/docker.md); the Setup window shows the one command that starts the emulator on your computer and Docker finds it; BlueStacks and Phone 2 stay on the host).
+### Test it
+
+1. **Automated tests** (no phone and no key needed, about 3 minutes, 872 tests):
+   ```bash
+   uv run python -m unittest discover -s tests
+   ```
+   The same suite runs inside the Docker image: `docker build --target test -t mobile-agent:test . && docker run --rm --entrypoint python mobile-agent:test -m unittest discover -s tests`. One test (`test_available_needs_lima_and_the_vm`) needs Lima installed on the host, so it fails inside the image; the other 855 pass.
+2. **Is it up?** `curl http://127.0.0.1:8000/api/health` returns `{"ok":true,...}`. In Docker the API needs the token: `curl -H "Authorization: Bearer $(docker compose exec -T mobile-agent cat data/.app_token)" http://127.0.0.1:8000/api/bots`.
+3. **Without a phone**: open the page and ask "what can you do?". Chat, memory, pictures and routines work with only the key.
+4. **With a phone** (the emulator or a connected phone), try these in the chat:
+   - `Open Settings and tell me which Android version this phone runs`: it opens Settings, scrolls and answers (about 3 steps).
+   - `Text 5551234 that I am running ten minutes late`: it writes the text and **stops with an approval card**. Press **Decline** and nothing is sent.
+5. **Without a phone at all**: play a recorded session in the browser, no keys needed: [docs/replay.md](docs/replay.md).
 
 One-off task from the terminal, with a phone attached: `uv run python -m agent "Open Settings and tell me the battery percentage"`.
 `scripts/reset_fresh.py` restores a clean first-run state; `scripts/security_sweep.py` checks the repo before it is made public.
@@ -131,7 +162,7 @@ From [docs/qa-run-2026-10-31.md](docs/qa-run-2026-10-31.md) and [docs/virtual-an
 
 | What | Result |
 |---|---|
-| Unit and integration tests | over 400, all passing when this was written; run them with the command in Quick start |
+| Unit and integration tests | 872, all passing; run them with the command under "Test it" |
 | Live QA run, real models, through the UI | 10 of 12 scenarios pass (6 only after fixes made during the run), 1 partial (the Mobile Agent app on Phone), 1 measured only |
 | Phone step on Phone | median 4.3 s, p90 6.4 s (61 steps); model time about 2.9 s of it |
 | First chat reply | 1.3 to 3.8 s |
