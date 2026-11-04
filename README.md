@@ -4,8 +4,8 @@
 
 Built for the Meta Global AI Developer Hackathon (Indie Developer track, 27 Oct to 4 Nov 2026). All code in this repository is new work from the event. MIT licensed.
 
-- Demo video (3 min): [VIDEO_URL](VIDEO_URL)
-- Replay it in your browser, no phone and no keys needed: [REPLAY_URL](REPLAY_URL)
+- Demo video (3 min): [https://youtu.be/psFdJ-Ajhr4](https://youtu.be/psFdJ-Ajhr4)
+- Replay a session in a browser, no phone and no keys needed: [docs/replay.md](docs/replay.md) (the session that ships in the repo is a synthetic demo, marked as such)
 
 ## What it does
 
